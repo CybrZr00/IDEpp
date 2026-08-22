@@ -2,13 +2,17 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:avalonDock="https://github.com/Dirkster99/AvalonDock"
+        xmlns:controls="clr-namespace:AvalonDock.Controls;assembly=AvalonDock"
         xmlns:themes="clr-namespace:AvalonDock.Themes;assembly=AvalonDock.Themes.VS2013"
         xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes"
         xmlns:local="clr-namespace:IdePlusPlus.Shell"
+        xmlns:editor="clr-namespace:IdePlusPlus.Editor;assembly=IdePlusPlus.Editor"
         Title="IDE++"
         Height="800"
         Width="1280"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        AllowDrop="True"
+        Drop="MainWindow_OnDrop">
 
     <Window.Resources>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
@@ -31,13 +35,56 @@
                        Margin="16"
                        FontSize="16" />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type editor:DocumentViewModel}">
+            <editor:TextEditorHost />
+        </DataTemplate>
     </Window.Resources>
 
     <Grid>
-        <avalonDock:DockingManager x:Name="DockManager">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Menu Grid.Row="0">
+            <MenuItem Header="_File">
+                <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" />
+                <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
+                <MenuItem Header="_Save" Command="{Binding SaveCommand}" />
+                <MenuItem Header="Save _As..." Command="{Binding SaveAsCommand}" />
+                <Separator />
+                <MenuItem Header="Recent Files" ItemsSource="{Binding RecentFiles}">
+                    <MenuItem.ItemContainerStyle>
+                        <Style TargetType="MenuItem">
+                            <Setter Property="Header" Value="{Binding}" />
+                            <Setter Property="Command" Value="{Binding DataContext.OpenRecentFileCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                            <Setter Property="CommandParameter" Value="{Binding}" />
+                        </Style>
+                    </MenuItem.ItemContainerStyle>
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="E_xit" Click="ExitMenuItem_OnClick" />
+            </MenuItem>
+        </Menu>
+
+        <avalonDock:DockingManager x:Name="DockManager"
+                                    Grid.Row="1"
+                                    DocumentsSource="{Binding OpenDocuments}"
+                                    ActiveContent="{Binding ActiveDocument, Mode=TwoWay}"
+                                    DocumentClosing="DockManager_OnDocumentClosing"
+                                    DocumentClosed="DockManager_OnDocumentClosed">
             <avalonDock:DockingManager.Theme>
                 <themes:Vs2013LightTheme />
             </avalonDock:DockingManager.Theme>
+
+            <avalonDock:DockingManager.LayoutItemContainerStyle>
+                <Style TargetType="{x:Type controls:LayoutItem}">
+                    <Setter Property="Title" Value="{Binding Model.Title}" />
+                    <Setter Property="ContentId" Value="{Binding Model.ContentId}" />
+                    <Setter Property="ToolTip" Value="{Binding Model.FilePath}" />
+                    <Setter Property="CanClose" Value="True" />
+                </Style>
+            </avalonDock:DockingManager.LayoutItemContainerStyle>
 
             <avalonDock:LayoutRoot>
                 <avalonDock:LayoutPanel Orientation="Horizontal">

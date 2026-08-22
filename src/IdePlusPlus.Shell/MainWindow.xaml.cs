@@ -1,6 +1,8 @@
 using System.IO;
 using System.Windows;
+using AvalonDock;
 using AvalonDock.Serializer.Xml;
+using IdePlusPlus.Editor;
 using IdePlusPlus.Shell.ToolPanes;
 
 namespace IdePlusPlus.Shell;
@@ -78,5 +80,54 @@ public partial class MainWindow : Window
 
         var serializer = new XmlLayoutSerializer(DockManager);
         serializer.Serialize(LayoutFilePath);
+    }
+
+    private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();
+
+    private void MainWindow_OnDrop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths)
+        {
+            return;
+        }
+
+        var viewModel = (MainWindowViewModel)DataContext;
+        foreach (var path in paths.Where(File.Exists))
+        {
+            viewModel.OpenPath(path);
+        }
+    }
+
+    private void DockManager_OnDocumentClosing(object? sender, DocumentClosingEventArgs e)
+    {
+        if (e.Document.Content is not DocumentViewModel document || !document.IsDirty)
+        {
+            return;
+        }
+
+        var result = MessageBox.Show(
+            this,
+            $"Save changes to {document.Title.TrimEnd('*')}?",
+            "IDE++",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning);
+
+        switch (result)
+        {
+            case MessageBoxResult.Cancel:
+                e.Cancel = true;
+                break;
+            case MessageBoxResult.Yes:
+                ((MainWindowViewModel)DataContext).SaveDocument(document);
+                break;
+        }
+    }
+
+    private void DockManager_OnDocumentClosed(object? sender, DocumentClosedEventArgs e)
+    {
+        if (e.Document.Content is DocumentViewModel document)
+        {
+            ((MainWindowViewModel)DataContext).CloseDocument(document);
+        }
     }
 }

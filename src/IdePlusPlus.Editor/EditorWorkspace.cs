@@ -1,0 +1,111 @@
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Text.Json;
+
+namespace IdePlusPlus.Editor;
+
+public sealed class EditorWorkspace
+{
+    private const int MaxRecentFiles = 10;
+
+    private static readonly string RecentFilesPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "IdePlusPlus",
+        "recent-files.json");
+
+    private int _untitledCount;
+
+    public EditorWorkspace()
+    {
+        RecentFiles = new ObservableCollection<string>(LoadRecentFiles());
+    }
+
+    public ObservableCollection<DocumentViewModel> OpenDocuments { get; } = [];
+
+    public ObservableCollection<string> RecentFiles { get; }
+
+    public DocumentViewModel NewDocument()
+    {
+        _untitledCount++;
+        var document = DocumentViewModel.ForNewFile($"Untitled{_untitledCount}");
+        OpenDocuments.Add(document);
+        return document;
+    }
+
+    public DocumentViewModel Open(string filePath)
+    {
+        var existing = OpenDocuments.FirstOrDefault(d =>
+            string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            TouchRecentFile(filePath);
+            return existing;
+        }
+
+        var document = DocumentViewModel.ForExistingFile(filePath);
+        OpenDocuments.Add(document);
+        TouchRecentFile(filePath);
+        return document;
+    }
+
+    public void Save(DocumentViewModel document)
+    {
+        if (document.FilePath is null)
+        {
+            throw new InvalidOperationException($"{nameof(Save)} requires a file path; call {nameof(SaveAs)} for a new document.");
+        }
+
+        File.WriteAllText(document.FilePath, document.TextDocument.Text);
+        document.IsDirty = false;
+        TouchRecentFile(document.FilePath);
+    }
+
+    public void SaveAs(DocumentViewModel document, string filePath)
+    {
+        document.AttachToFile(filePath);
+        Save(document);
+    }
+
+    public void Close(DocumentViewModel document)
+    {
+        OpenDocuments.Remove(document);
+    }
+
+    private void TouchRecentFile(string filePath)
+    {
+        RecentFiles.Remove(filePath);
+        RecentFiles.Insert(0, filePath);
+        while (RecentFiles.Count > MaxRecentFiles)
+        {
+            RecentFiles.RemoveAt(RecentFiles.Count - 1);
+        }
+
+        SaveRecentFiles();
+    }
+
+    private static List<string> LoadRecentFiles()
+    {
+        try
+        {
+            if (!File.Exists(RecentFilesPath))
+            {
+                return [];
+            }
+
+            var json = File.ReadAllText(RecentFilesPath);
+            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+        }
+        catch (Exception)
+        {
+            // Corrupt/unreadable MRU file from a previous version — start with an empty list.
+            return [];
+        }
+    }
+
+    private void SaveRecentFiles()
+    {
+        var directory = Path.GetDirectoryName(RecentFilesPath)!;
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(RecentFilesPath, JsonSerializer.Serialize(RecentFiles));
+    }
+}

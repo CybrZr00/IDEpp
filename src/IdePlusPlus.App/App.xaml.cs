@@ -1,4 +1,5 @@
 using System.Windows;
+using IdePlusPlus.Editor;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,7 @@ public partial class App : Application
         services.AddSingleton<OutputPaneViewModel>();
         services.AddSingleton<CopilotChatPaneViewModel>();
         services.AddSingleton<WelcomeDocumentViewModel>();
+        services.AddSingleton<EditorWorkspace>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }
