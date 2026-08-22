@@ -10,6 +10,7 @@
     <PackageReference Include="Dirkster.AvalonDock.Serializer.Xml" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="MdXaml" />
   </ItemGroup>
 
   <ItemGroup>
