@@ -27,7 +27,10 @@
 
     <Window.Resources>
         <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
-            <TextBlock Text="{Binding Name}">
+            <!-- Foreground must be set explicitly here, not just on the TreeView - the default
+                 themed TreeViewItem template hardcodes its own (light-theme) text color via
+                 SystemColors, which otherwise wins over the TreeView's inherited Foreground. -->
+            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource WindowForegroundBrush}">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
                         <Style.Triggers>
