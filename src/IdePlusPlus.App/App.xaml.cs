@@ -4,6 +4,8 @@ using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.Copilot.Embeddings;
+using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
@@ -64,11 +66,15 @@ public partial class App : Application
         services.AddSingleton<DebugLocationIndicator>();
         services.AddSingleton<DebugSession>();
         services.AddSingleton<SecureSettingsStore>();
+        services.AddSingleton<AppSettingsStore>();
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());
         services.AddSingleton<DeepSeekFimClient>();
         services.AddSingleton<EditApplicationService>();
+        services.AddSingleton<ProjectMemoryStore>();
+        services.AddSingleton<LmStudioEmbeddingClient>();
+        services.AddSingleton<CodebaseIndexService>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

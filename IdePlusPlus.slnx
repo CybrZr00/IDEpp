@@ -5,6 +5,8 @@
     <Project Path="src/IdePlusPlus.Copilot.Core/IdePlusPlus.Copilot.Core.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.DeepSeek/IdePlusPlus.Copilot.DeepSeek.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Diff/IdePlusPlus.Copilot.Diff.csproj" />
+    <Project Path="src/IdePlusPlus.Copilot.Embeddings/IdePlusPlus.Copilot.Embeddings.csproj" />
+    <Project Path="src/IdePlusPlus.Copilot.Memory/IdePlusPlus.Copilot.Memory.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.OpenRouter/IdePlusPlus.Copilot.OpenRouter.csproj" />
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />
     <Project Path="src/IdePlusPlus.Editor/IdePlusPlus.Editor.csproj" />
@@ -15,6 +17,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/IdePlusPlus.Copilot.Diff.Tests/IdePlusPlus.Copilot.Diff.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
   </Folder>

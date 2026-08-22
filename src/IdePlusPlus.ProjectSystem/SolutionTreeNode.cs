@@ -38,4 +38,17 @@ public sealed class SolutionTreeNode(string name, string? fullPath, SolutionTree
 
         return current;
     }
+
+    /// <summary>This node and every descendant, depth-first.</summary>
+    public IEnumerable<SolutionTreeNode> Flatten()
+    {
+        yield return this;
+        foreach (var child in Children)
+        {
+            foreach (var descendant in child.Flatten())
+            {
+                yield return descendant;
+            }
+        }
+    }
 }

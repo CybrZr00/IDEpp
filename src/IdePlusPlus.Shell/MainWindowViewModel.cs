@@ -164,6 +164,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = dialog.FileName;
             CopilotChat.SetSolutionDirectory(Path.GetDirectoryName(dialog.FileName));
+            CopilotChat.SetIndexableFiles(root.Flatten()
+                .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
+                .Select(n => n.FullPath!)
+                .ToList());
             _runnableProjectPath = root.Children.FirstOrDefault(c => c.Kind == SolutionTreeNodeKind.Project)?.FullPath;
             RunCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");

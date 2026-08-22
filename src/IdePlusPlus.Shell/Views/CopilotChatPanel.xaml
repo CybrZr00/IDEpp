@@ -83,6 +83,8 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -100,7 +102,23 @@
             <Button Content="Save" Click="SaveDeepSeekApiKeyButton_OnClick" Margin="4,0,0,0" Padding="6,0" />
         </StackPanel>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="4,0,4,4">
+        <StackPanel Grid.Row="2" Margin="4,0,4,4">
+            <TextBlock Text="LM Studio (codebase search):" FontSize="11" Margin="0,0,0,2" />
+            <StackPanel Orientation="Horizontal">
+                <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}"
+                         Width="110"
+                         FontSize="11"
+                         ToolTip="Base URL" />
+                <TextBox Text="{Binding LmStudioModel, UpdateSourceTrigger=PropertyChanged}"
+                         Width="90"
+                         FontSize="11"
+                         Margin="4,0,0,0"
+                         ToolTip="Embedding model name, e.g. text-embedding-nomic-embed-text-v1.5" />
+                <Button Content="Save" Command="{Binding SaveLmStudioSettingsCommand}" Margin="4,0,0,0" Padding="6,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="4,0,4,4">
             <ComboBox ItemsSource="{Binding AvailableModels}"
                       Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
                       IsEditable="True"
@@ -112,17 +130,33 @@
                       FontSize="11" />
         </StackPanel>
 
-        <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="4,0,4,4">
+            <CheckBox Content="Use codebase search"
+                      IsChecked="{Binding UseCodebaseSearch}"
+                      VerticalAlignment="Center"
+                      FontSize="11" />
+            <Button Content="Index Codebase" Command="{Binding IndexCodebaseCommand}" Margin="8,0,0,0" Padding="6,0" />
+            <Button Content="Save Memory" Command="{Binding SaveMemoryCommand}" Margin="4,0,0,0" Padding="6,0" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="4"
+                   Text="{Binding IndexStatus}"
+                   Margin="4,24,4,0"
+                   Foreground="Gray"
+                   FontSize="10"
+                   TextWrapping="Wrap" />
+
+        <ScrollViewer Grid.Row="5" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
             <ItemsControl ItemsSource="{Binding Messages}" />
         </ScrollViewer>
 
-        <TextBlock Grid.Row="4"
+        <TextBlock Grid.Row="6"
                    Text="{Binding StatusMessage}"
                    Margin="4,0"
                    Foreground="Gray"
                    FontSize="11" />
 
-        <Grid Grid.Row="5" Margin="4">
+        <Grid Grid.Row="7" Margin="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
