@@ -13,6 +13,7 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+using Serilog;
 
 namespace IdePlusPlus.Shell.ToolPanes;
 
@@ -160,6 +161,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     [ObservableProperty]
     private bool isStreaming;
+
+    /// <summary>What the assistant is doing right now (e.g. "Thinking...", "Calling read_file...") -
+    /// shown next to an activity indicator so a long-running turn doesn't look identical to a stuck
+    /// one. Null whenever IsStreaming is false.</summary>
+    [ObservableProperty]
+    private string? currentActivity;
 
     [ObservableProperty]
     private bool isIndexing;
@@ -342,6 +349,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private async Task RunAssistantTurnsAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
     {
         IsStreaming = true;
+        CurrentActivity = "Thinking...";
         _streamCancellation = new CancellationTokenSource();
         try
         {
@@ -360,13 +368,19 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     foreach (var call in turn.Calls)
                     {
                         var callViewModel = new McpToolCallViewModel(call.Name!);
-                        _dispatcher.Invoke(() => Messages.Add(callViewModel));
+                        _dispatcher.Invoke(() =>
+                        {
+                            CurrentActivity = $"Calling {call.Name}...";
+                            Messages.Add(callViewModel);
+                        });
 
                         var (isError, text) = await ExecuteToolAsync(call, _streamCancellation.Token);
                         _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
 
                         history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
                     }
+
+                    _dispatcher.Invoke(() => CurrentActivity = "Thinking...");
                 }
 
                 var action = AssistantTurnPolicy.Decide(
@@ -404,9 +418,25 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             _dispatcher.Invoke(() => assistantMessage.Append("\n\n[cancelled]"));
         }
+        catch (Exception ex)
+        {
+            // Uncaught here, this would otherwise propagate out of a fire-and-forget
+            // AsyncRelayCommand invocation (WPF's ICommand.Execute never awaits it) and become an
+            // unobserved task exception - logged only once the faulted Task happens to be garbage
+            // collected, which can be arbitrarily delayed relative to when the conversation actually
+            // stopped. Logging and surfacing it here immediately is what makes a real failure look
+            // different from the assistant simply finishing.
+            Log.Error(ex, "Assistant turn failed unexpectedly");
+            _dispatcher.Invoke(() =>
+            {
+                assistantMessage.Append($"\n\n[error: the assistant stopped unexpectedly - {ex.Message}]");
+                StatusMessage = "The assistant stopped due to an unexpected error - see the message above.";
+            });
+        }
         finally
         {
             IsStreaming = false;
+            CurrentActivity = null;
             _streamCancellation = null;
             PersistChatHistory();
         }
@@ -494,6 +524,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 {
                     case TextDelta delta:
                         assistantMessage.Append(delta.Text);
+                        break;
+
+                    case ReasoningDelta reasoning:
+                        assistantMessage.AppendReasoning(reasoning.Text);
                         break;
 
                     case ToolCallDelta toolCallDelta:

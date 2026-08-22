@@ -20,29 +20,48 @@
                         </Style.Triggers>
                     </Style>
                 </Border.Style>
-                <!-- MdXaml's built-in "SasabuneCompact" style derives every color (headings, code
-                     block/span background+foreground, table rules, etc.) from this control's own
-                     Foreground/Background via the mde:Alpha/mde:Brightness markup extensions - not
-                     from the OS theme - so it follows this app's own Dark/Light toggle correctly as
-                     long as those two properties are set to match the bubble around it. -->
-                <mdxam:MarkdownScrollViewer Markdown="{Binding Text}"
-                                            MarkdownStyleName="SasabuneCompact"
-                                            Foreground="{DynamicResource WindowForegroundBrush}"
-                                            BorderThickness="0"
-                                            Padding="0"
-                                            VerticalScrollBarVisibility="Disabled"
-                                            HorizontalScrollBarVisibility="Disabled">
-                    <mdxam:MarkdownScrollViewer.Style>
-                        <Style TargetType="mdxam:MarkdownScrollViewer">
-                            <Setter Property="Background" Value="{DynamicResource ChatBubbleAssistantBackgroundBrush}" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsUser}" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource ChatBubbleUserBackgroundBrush}" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </mdxam:MarkdownScrollViewer.Style>
-                </mdxam:MarkdownScrollViewer>
+                <StackPanel>
+                    <!-- The model's reasoning trace (only present when Effort is above None and the
+                         provider streams one) - collapsed by default since it's a working trace, not
+                         the answer itself, but there for anyone who wants to see why the assistant
+                         did what it did rather than just watching it appear to sit idle. -->
+                    <Expander Header="💭 Reasoning"
+                              IsExpanded="False"
+                              FontSize="11"
+                              Margin="0,0,0,4"
+                              Visibility="{Binding HasReasoning, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <TextBlock Text="{Binding ReasoningText}"
+                                   TextWrapping="Wrap"
+                                   FontStyle="Italic"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   Margin="4,4,0,0" />
+                    </Expander>
+
+                    <!-- MdXaml's built-in "SasabuneCompact" style derives every color (headings, code
+                         block/span background+foreground, table rules, etc.) from this control's own
+                         Foreground/Background via the mde:Alpha/mde:Brightness markup extensions - not
+                         from the OS theme - so it follows this app's own Dark/Light toggle correctly as
+                         long as those two properties are set to match the bubble around it. -->
+                    <mdxam:MarkdownScrollViewer Markdown="{Binding Text}"
+                                                MarkdownStyleName="SasabuneCompact"
+                                                Foreground="{DynamicResource WindowForegroundBrush}"
+                                                BorderThickness="0"
+                                                Padding="0"
+                                                VerticalScrollBarVisibility="Disabled"
+                                                HorizontalScrollBarVisibility="Disabled">
+                        <mdxam:MarkdownScrollViewer.Style>
+                            <Style TargetType="mdxam:MarkdownScrollViewer">
+                                <Setter Property="Background" Value="{DynamicResource ChatBubbleAssistantBackgroundBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsUser}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ChatBubbleUserBackgroundBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </mdxam:MarkdownScrollViewer.Style>
+                    </mdxam:MarkdownScrollViewer>
+                </StackPanel>
             </Border>
         </DataTemplate>
 
@@ -288,6 +307,17 @@
                        Margin="0,2,0,0"
                        TextWrapping="Wrap"
                        Visibility="{Binding IsAutoMode, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+
+            <!-- The one thing that actually answers "is it still working, or has it silently died?" -
+                 an indeterminate spinner plus what it's doing right now, visible for the whole
+                 duration of a turn (including a multi-iteration tool loop), not just the first
+                 response chunk. -->
+            <StackPanel Orientation="Horizontal"
+                        Margin="0,4,0,0"
+                        Visibility="{Binding IsStreaming, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,6,0" />
+                <TextBlock Text="{Binding CurrentActivity}" FontSize="11" VerticalAlignment="Center" />
+            </StackPanel>
         </StackPanel>
 
         <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">

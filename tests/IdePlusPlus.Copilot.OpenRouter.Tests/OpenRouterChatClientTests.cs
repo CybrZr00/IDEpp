@@ -42,6 +42,46 @@ public class OpenRouterChatClientTests
     }
 
     [Fact]
+    public async Task StreamChatAsync_ReasoningField_YieldsReasoningDeltaSeparateFromTextDelta()
+    {
+        const string sseBody = """
+            data: {"choices":[{"delta":{"reasoning":"Let me "}}]}
+
+            data: {"choices":[{"delta":{"reasoning":"think..."}}]}
+
+            data: {"choices":[{"delta":{"content":"The answer is 4."}}]}
+
+            data: [DONE]
+
+            """;
+
+        var client = new OpenRouterChatClient(new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, sseBody)), NewSettingsStoreWithApiKey());
+
+        var events = await CollectAsync(client);
+
+        events.OfType<ReasoningDelta>().Select(d => d.Text).ShouldBe(["Let me ", "think..."]);
+        events.OfType<TextDelta>().Select(d => d.Text).ShouldBe(["The answer is 4."]);
+    }
+
+    [Fact]
+    public async Task StreamChatAsync_ReasoningContentField_IsAlsoRecognized()
+    {
+        // DeepSeek's own (non-OpenRouter-normalized) API shape uses "reasoning_content" instead.
+        const string sseBody = """
+            data: {"choices":[{"delta":{"reasoning_content":"Thinking via the other field name"}}]}
+
+            data: [DONE]
+
+            """;
+
+        var client = new OpenRouterChatClient(new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, sseBody)), NewSettingsStoreWithApiKey());
+
+        var events = await CollectAsync(client);
+
+        events.OfType<ReasoningDelta>().Select(d => d.Text).ShouldBe(["Thinking via the other field name"]);
+    }
+
+    [Fact]
     public async Task StreamChatAsync_UsageChunk_YieldsUsageReceivedAlongsideDeltas()
     {
         const string sseBody = """

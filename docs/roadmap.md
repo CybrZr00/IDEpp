@@ -74,6 +74,21 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       `AssistantTurnPolicy.Decide` and given its own `IdePlusPlus.Shell.Tests` project (Shell had zero
       coverage until now) covering every combination of tool-calls/edit-proposals/plan-proposal/
       Auto-Mode state.
+- [x] Reasoning trace, activity indicator, and immediate error surfacing — requested after a live
+      session where the assistant stopped mid-task with no visible sign of why. Three changes:
+      (1) the OpenRouter-normalized `reasoning`/DeepSeek's `reasoning_content` SSE field is now parsed
+      into a `ReasoningDelta` and shown in a collapsed-by-default "💭 Reasoning" `Expander` on each
+      assistant bubble - the app already requests this via `ChatEffort` but never surfaced it;
+      (2) an indeterminate spinner plus a live `CurrentActivity` string ("Thinking...", "Calling
+      read_file...") is visible for the whole duration of a turn, including a multi-iteration tool
+      loop; (3) `RunAssistantTurnsAsync` now catches every exception, not just cancellation, logging
+      immediately via Serilog and appending a visible error to the chat rather than relying on
+      `TaskScheduler.UnobservedTaskException`, which only fires once a fire-and-forget
+      `AsyncRelayCommand`'s faulted Task happens to be garbage-collected - arbitrarily delayed
+      relative to when the conversation actually stopped, and exactly why the prior investigation
+      found a truncated final message but zero log output. Whether (3) is what actually happened
+      in the reported session is unconfirmed (no log file existed to check), but it closes a real
+      gap either way.
 - [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
       debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right and
       out of scope for this pass; left as-is below for future planning.

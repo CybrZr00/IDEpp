@@ -167,6 +167,15 @@ public static class OpenAiCompatibleChat
             yield return new TextDelta(content);
         }
 
+        // OpenRouter normalizes a reasoning-capable model's thinking trace into "reasoning";
+        // DeepSeek's own (non-OpenRouter) API instead calls it "reasoning_content". Checking both
+        // costs nothing for a provider that sends neither.
+        var reasoning = delta["reasoning"]?.GetValue<string>() ?? delta["reasoning_content"]?.GetValue<string>();
+        if (!string.IsNullOrEmpty(reasoning))
+        {
+            yield return new ReasoningDelta(reasoning);
+        }
+
         var toolCalls = delta["tool_calls"]?.AsArray();
         if (toolCalls is null)
         {

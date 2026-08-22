@@ -12,5 +12,15 @@ public sealed partial class ChatMessageViewModel(ChatRole role) : ObservableObje
     [ObservableProperty]
     private string text = "";
 
+    /// <summary>The model's reasoning/thinking trace for this message, if the provider streamed
+    /// one - shown separately from Text in the UI, never persisted or replayed into request history.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasReasoning))]
+    private string reasoningText = "";
+
+    public bool HasReasoning => ReasoningText.Length > 0;
+
     public void Append(string delta) => Text += delta;
+
+    public void AppendReasoning(string delta) => ReasoningText += delta;
 }
