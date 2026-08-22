@@ -34,6 +34,21 @@
                        FontSize="11"
                        Margin="0,0,0,16" />
 
+            <TextBlock Text="System Prompt" FontWeight="Bold" Margin="0,0,0,8" />
+            <TextBlock Text="Custom instructions prepended to every conversation (e.g. coding-style rules). Leave blank for none."
+                       FontSize="11"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8" />
+            <TextBox Text="{Binding SystemPrompt, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MinHeight="60"
+                     MaxHeight="140"
+                     VerticalScrollBarVisibility="Auto"
+                     Margin="0,0,0,8" />
+            <Button Content="Save System Prompt" Command="{Binding SaveSystemPromptCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
+
             <TextBlock Text="LM Studio" FontWeight="Bold" Margin="0,0,0,8" />
             <TextBlock Text="Used for codebase search embeddings, and as a chat provider alternative to OpenRouter (pick it from the provider dropdown in Copilot Chat)."
                        FontSize="11"

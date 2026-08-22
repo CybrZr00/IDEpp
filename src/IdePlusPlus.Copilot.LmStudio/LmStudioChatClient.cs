@@ -98,6 +98,7 @@ public sealed class LmStudioChatClient : IChatClient
         {
             model,
             stream = true,
+            stream_options = new { include_usage = true },
             messages = messages.Select(OpenAiCompatibleChat.ToRequestMessage),
             tools = tools is { Count: > 0 } ? tools.Select(OpenAiCompatibleChat.ToToolSchema) : null,
             reasoning = OpenAiCompatibleChat.ToReasoningParameter(effort),

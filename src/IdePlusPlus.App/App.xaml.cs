@@ -162,6 +162,7 @@ public partial class App : Application
         services.AddSingleton<DeepSeekFimClient>();
         services.AddSingleton<EditApplicationService>();
         services.AddSingleton<ProjectMemoryStore>();
+        services.AddSingleton<ChatHistoryStore>();
         services.AddSingleton<LmStudioEmbeddingClient>();
         services.AddSingleton<CodebaseIndexService>();
         services.AddSingleton<GitService>();

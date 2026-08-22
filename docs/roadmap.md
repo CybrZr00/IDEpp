@@ -26,20 +26,30 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       pub/sub bridge mirroring the existing `EditorServices` pattern), Save All/Close All (routed through
       the existing dirty-document confirmation, not bypassing it), solution-aware drag-and-drop, a
       minimal About dialog, and filename-with-full-path-tooltip Recent Files/Solutions menus.
-- [ ] Copilot-ecosystem depth (chat history persistence, system prompt customization, token usage,
-      multi-file edits, word-diff, MCP resources/project-local config) — not started; good next-session
-      target, each item is independently scoped above.
+- [x] Copilot-ecosystem depth — chat history now persists per-solution and reloads on reopen
+      (`ChatHistoryStore`), a user-editable system prompt lives in Settings, a conversation-length
+      warning nudges toward Save Memory before hitting a provider's context limit, MCP servers now
+      support project-local discovery (`.ideplusplus/copilot/mcp-servers.json`, overriding/adding to
+      the global list), token usage is tracked and shown per session (`stream_options.include_usage`),
+      and the diff viewer now highlights the specific word-level change within a modified line
+      (via `SideBySideDiffBuilder` + a word chunker, reused by both the AI edit-proposal diff and the
+      new Git diff view). Not done: multi-file `propose_edit` (atomicity across files is a real design
+      question, not just plumbing) and MCP resources/prompts support (tools-only remains as-is).
 - [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
       debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right and
       out of scope for this pass; left as-is below for future planning.
 
 **Verification performed**: every milestone above was verified with `dotnet build` (0 warnings/errors)
-and `dotnet test` (88 tests passing across 10 test projects, up from 7 projects/~60 tests at the start
-of this pass) after landing, plus a real launch of `IdePlusPlus.exe` to confirm no DI/XAML startup
-crash. This sandbox has no interactive desktop session, so the new UI (Git pane, Error List, Go to
-Line/About dialogs, menu additions) could not be visually screenshot-verified here - worth a quick
-look on a real machine before considering it fully done. Nothing was committed to git; all changes
-are in the working tree for review.
+and `dotnet test` (105 tests passing across 12 test projects, up from 7 projects/~60 tests at the
+start of this pass) after landing, plus a real launch of `IdePlusPlus.exe` after every milestone to
+confirm no DI/XAML startup crash. Testing this way caught two real bugs before they shipped: `git
+restore --staged` failing on a repo with no commits yet (surfaced by a real end-to-end git test, not
+a mock), and an unguarded empty-`choices`-array index that would have crashed every single chat
+stream once usage-reporting was turned on (surfaced by testing the exact chunk shape real APIs send,
+not just the happy path). This sandbox has no interactive desktop session, so the new UI (Git pane,
+Error List, Go to Line/About dialogs, menu additions, word-level diff highlighting) could not be
+visually screenshot-verified here - worth a look on a real machine before considering it fully done.
+Committed to git in two commits (one per major batch); nothing pushed.
 
 **Baseline**: IDE++ is a from-scratch Windows WPF IDE (AvalonDock + AvalonEdit + CommunityToolkit.Mvvm +
 Microsoft.Extensions.DependencyInjection + the MSBuild API + a hand-rolled DAP client over netcoredbg),

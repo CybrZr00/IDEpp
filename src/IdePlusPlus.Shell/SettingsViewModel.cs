@@ -6,6 +6,7 @@ using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.Shell.ToolPanes;
 
 namespace IdePlusPlus.Shell;
 
@@ -38,6 +39,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
         lmStudioBaseUrl = _appSettingsStore.Get(LmStudioEmbeddingClient.BaseUrlSettingName) ?? LmStudioEmbeddingClient.DefaultBaseUrl;
         lmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
+        systemPrompt = _appSettingsStore.Get(CopilotChatPaneViewModel.SystemPromptSettingKey) ?? "";
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -70,6 +72,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string lmStudioModel;
+
+    [ObservableProperty]
+    private string systemPrompt;
 
     [ObservableProperty]
     private string? statusMessage;
@@ -106,6 +111,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(LmStudioEmbeddingClient.BaseUrlSettingName, LmStudioBaseUrl.Trim());
         _appSettingsStore.Set(LmStudioEmbeddingClient.ModelSettingName, LmStudioModel.Trim());
         StatusMessage = "LM Studio settings saved.";
+    }
+
+    [RelayCommand]
+    private void SaveSystemPrompt()
+    {
+        _appSettingsStore.Set(CopilotChatPaneViewModel.SystemPromptSettingKey, SystemPrompt);
+        StatusMessage = "System prompt saved.";
     }
 
     [RelayCommand]

@@ -29,8 +29,19 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const string AutoModeSettingKey = "ChatAutoMode";
     private const string PlanModeSettingKey = "ChatPlanMode";
 
+    /// <summary>Public so SettingsViewModel can read/write the same key - re-read fresh on every
+    /// turn (see PrependContextAsync) rather than cached, the same "no refresh plumbing needed"
+    /// pattern SettingsViewModel's own doc comment describes for the OpenRouter/DeepSeek/LM Studio
+    /// settings it also owns.</summary>
+    public const string SystemPromptSettingKey = "ChatSystemPrompt";
+
     private const int CodebaseSearchTopK = 5;
     private const int MaxToolLoopIterations = 8;
+
+    // A rough, tokenizer-free heuristic (not an exact token count) purely to warn before a request
+    // is likely to hit a provider's context limit - 4 chars/token is the commonly-cited rule of
+    // thumb for English text, and erring toward warning too early costs nothing.
+    private const int LongConversationCharThreshold = 4 * 100_000;
 
     // Manual mode's 8-iteration cap was implicitly backstopped by every propose_edit needing a
     // human click to proceed - Auto Mode removes that checkpoint, so a purely tool-call-driven
@@ -43,6 +54,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly AppSettingsStore _appSettingsStore;
     private readonly EditApplicationService _editApplicationService;
     private readonly ProjectMemoryStore _projectMemoryStore;
+    private readonly ChatHistoryStore _chatHistoryStore;
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly McpServerManager _mcpServerManager;
     private readonly Dispatcher _dispatcher;
@@ -57,6 +69,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         AppSettingsStore appSettingsStore,
         EditApplicationService editApplicationService,
         ProjectMemoryStore projectMemoryStore,
+        ChatHistoryStore chatHistoryStore,
         CodebaseIndexService codebaseIndexService,
         McpServerManager mcpServerManager)
         : base(PaneContentId, "Copilot Chat")
@@ -66,6 +79,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
         _projectMemoryStore = projectMemoryStore;
+        _chatHistoryStore = chatHistoryStore;
         _codebaseIndexService = codebaseIndexService;
         _mcpServerManager = mcpServerManager;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
@@ -151,6 +165,21 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     [ObservableProperty]
     private string? statusMessage;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TokenUsageText))]
+    private int totalPromptTokens;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TokenUsageText))]
+    private int totalCompletionTokens;
+
+    /// <summary>Cumulative for this pane's lifetime, summed across every request made (not just the
+    /// latest turn) - since each request re-sends the full conversation, this reflects total tokens
+    /// actually billed this session, which is the more useful number for a cost indicator.</summary>
+    public string TokenUsageText => TotalPromptTokens + TotalCompletionTokens > 0
+        ? $"Tokens: {TotalPromptTokens:N0} in / {TotalCompletionTokens:N0} out"
+        : "";
+
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
     public void SetSolutionDirectory(string? directory)
@@ -162,10 +191,37 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             IndexStatus = _codebaseIndexService.IsIndexed
                 ? $"Loaded index: {_codebaseIndexService.IndexedChunkCount} chunks."
                 : null;
+
+            Messages.Clear();
+            foreach (var stored in _chatHistoryStore.Load(directory))
+            {
+                if (Enum.TryParse<ChatRole>(stored.Role, out var role))
+                {
+                    Messages.Add(new ChatMessageViewModel(role) { Text = stored.Text });
+                }
+            }
         }
 
         SaveMemoryCommand.NotifyCanExecuteChanged();
         IndexCodebaseCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Auto-saved after every assistant turn so the conversation survives an app restart -
+    /// only the plain chat transcript, not edit/plan proposals or MCP tool-call cards, matching what
+    /// SendAsync itself replays back into the model's history on the next turn.</summary>
+    private void PersistChatHistory()
+    {
+        if (_solutionDirectory is null)
+        {
+            return;
+        }
+
+        var stored = Messages
+            .OfType<ChatMessageViewModel>()
+            .Select(m => new StoredChatMessage(m.Role.ToString(), m.Text))
+            .ToList();
+
+        _chatHistoryStore.Save(_solutionDirectory, stored);
     }
 
     public void SetIndexableFiles(IReadOnlyList<string> filePaths)
@@ -195,6 +251,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         await PrependContextAsync(history, userText);
         history.Add(new ChatMessage(ChatRole.User, userText));
 
+        if (history.Sum(m => m.Content.Length) > LongConversationCharThreshold)
+        {
+            StatusMessage = "This conversation is getting long and may hit the model's context limit soon - " +
+                             "consider using Save Memory and starting a fresh conversation.";
+        }
+
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
 
@@ -203,6 +265,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private async Task PrependContextAsync(List<ChatMessage> history, string userText)
     {
+        if (_appSettingsStore.Get(SystemPromptSettingKey) is { Length: > 0 } systemPrompt)
+        {
+            history.Insert(0, new ChatMessage(ChatRole.System, systemPrompt));
+        }
+
         if (IsPlanMode)
         {
             history.Insert(0, new ChatMessage(
@@ -290,6 +357,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             IsStreaming = false;
             _streamCancellation = null;
+            PersistChatHistory();
         }
     }
 
@@ -346,6 +414,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                     case StreamError error:
                         assistantMessage.Append($"\n\n[error: {error.Message}]");
+                        break;
+
+                    case UsageReceived usage:
+                        TotalPromptTokens += usage.PromptTokens;
+                        TotalCompletionTokens += usage.CompletionTokens;
                         break;
                 }
             });

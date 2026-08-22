@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Build;
+using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.ProjectSystem;
@@ -24,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly RunService _runService;
     private readonly DebugSession _debugSession;
     private readonly ThemeService _themeService;
+    private readonly McpServerManager _mcpServerManager;
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
@@ -45,7 +47,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         BuildService buildService,
         RunService runService,
         DebugSession debugSession,
-        ThemeService themeService)
+        ThemeService themeService,
+        McpServerManager mcpServerManager)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
@@ -60,6 +63,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _runService = runService;
         _debugSession = debugSession;
         _themeService = themeService;
+        _mcpServerManager = mcpServerManager;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         isDarkTheme = _themeService.IsDark;
@@ -320,6 +324,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var solutionDirectory = Path.GetDirectoryName(solutionPath);
             CopilotChat.SetSolutionDirectory(solutionDirectory);
             _ = SourceControl.SetRepositoryDirectoryAsync(solutionDirectory);
+
+            // Picks up a project-local .ideplusplus/copilot/mcp-servers.json, if the solution has one.
+            _mcpServerManager.SetSolutionDirectory(solutionDirectory);
+            _ = _mcpServerManager.ReconnectAllAsync();
             CopilotChat.SetIndexableFiles(root.Flatten()
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)

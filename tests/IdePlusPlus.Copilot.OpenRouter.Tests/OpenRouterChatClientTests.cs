@@ -42,6 +42,28 @@ public class OpenRouterChatClientTests
     }
 
     [Fact]
+    public async Task StreamChatAsync_UsageChunk_YieldsUsageReceivedAlongsideDeltas()
+    {
+        const string sseBody = """
+            data: {"choices":[{"delta":{"content":"Hi"}}]}
+
+            data: {"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7}}
+
+            data: [DONE]
+
+            """;
+
+        var client = new OpenRouterChatClient(new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, sseBody)), NewSettingsStoreWithApiKey());
+
+        var events = await CollectAsync(client);
+
+        events.OfType<TextDelta>().Select(d => d.Text).ShouldBe(["Hi"]);
+        var usage = events.OfType<UsageReceived>().ShouldHaveSingleItem();
+        usage.PromptTokens.ShouldBe(42);
+        usage.CompletionTokens.ShouldBe(7);
+    }
+
+    [Fact]
     public async Task StreamChatAsync_SkipsMalformedChunksWithoutAbortingTheStream()
     {
         const string sseBody = """

@@ -10,6 +10,10 @@
     <SolidColorBrush x:Key="ChatBubbleUserBackgroundBrush" Color="#2C4A63" />
     <SolidColorBrush x:Key="DiffAddedBackgroundBrush" Color="#1E3A1E" />
     <SolidColorBrush x:Key="DiffRemovedBackgroundBrush" Color="#4A1E1E" />
+    <!-- Word-level "this specific run changed" marker within a modified line - a distinct amber
+         accent reads clearly layered on top of either the added (green) or removed (red) line
+         background above, so one brush covers both contexts. -->
+    <SolidColorBrush x:Key="DiffHighlightBackgroundBrush" Color="#8A6D1F" />
     <SolidColorBrush x:Key="EditProposalBackgroundBrush" Color="#2D2D30" />
     <SolidColorBrush x:Key="EditProposalBorderBrush" Color="#454545" />
     <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#3C3C3C" />

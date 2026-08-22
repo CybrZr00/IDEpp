@@ -17,6 +17,7 @@ public sealed class McpServerManager
     private readonly McpServerConfigStore _configStore;
     private readonly List<McpServerConnection> _connections = [];
     private readonly object _connectionsLock = new();
+    private string? _solutionDirectory;
 
     public McpServerManager(McpServerConfigStore configStore)
     {
@@ -27,6 +28,11 @@ public sealed class McpServerManager
 
     /// <summary>Raised (on a background thread) after a reconnect finishes, so the UI can refresh tool availability.</summary>
     public event Action? Changed;
+
+    /// <summary>Enables project-local MCP config discovery - a `.ideplusplus/copilot/mcp-servers.json`
+    /// in the solution directory, checked into source control, adding to or overriding (by server
+    /// name) the global user-level list on the next ReconnectAllAsync.</summary>
+    public void SetSolutionDirectory(string? solutionDirectory) => _solutionDirectory = solutionDirectory;
 
     public IReadOnlyList<(string Name, bool IsConnected, string? Error, int ToolCount)> ServerStatuses
     {
@@ -55,7 +61,7 @@ public sealed class McpServerManager
             await connection.DisposeAsync();
         }
 
-        var configs = _configStore.Load();
+        var configs = LoadMergedConfigs();
         var connected = await Task.WhenAll(configs.Select(ConnectOneAsync));
 
         lock (_connectionsLock)
@@ -64,6 +70,19 @@ public sealed class McpServerManager
         }
 
         Changed?.Invoke();
+    }
+
+    private IReadOnlyList<McpServerConfig> LoadMergedConfigs()
+    {
+        var configs = _configStore.Load();
+        if (_solutionDirectory is null)
+        {
+            return configs;
+        }
+
+        var projectConfigPath = Path.Combine(_solutionDirectory, ".ideplusplus", "copilot", "mcp-servers.json");
+        var projectConfigs = new McpServerConfigStore(projectConfigPath).Load();
+        return projectConfigs.Count == 0 ? configs : McpConfigMerger.Merge(configs, projectConfigs);
     }
 
     private async Task<McpServerConnection> ConnectOneAsync(McpServerConfig config)

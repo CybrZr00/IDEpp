@@ -13,4 +13,8 @@ public sealed record ToolCallDelta(int Index, string? Id, string? FunctionName, 
 
 public sealed record StreamCompleted : ChatStreamEvent;
 
+/// <summary>Emitted once, typically on the final chunk, when the provider includes a usage block
+/// (OpenAI-compatible APIs do this when the request sets stream_options.include_usage).</summary>
+public sealed record UsageReceived(int PromptTokens, int CompletionTokens) : ChatStreamEvent;
+
 public sealed record StreamError(string Message) : ChatStreamEvent;

@@ -130,10 +130,10 @@ public static class OpenAiCompatibleChat
 
     private static IEnumerable<ChatStreamEvent> ParseChunkEvents(string json)
     {
-        JsonNode? delta;
+        JsonNode? root;
         try
         {
-            delta = JsonNode.Parse(json)?["choices"]?[0]?["delta"];
+            root = JsonNode.Parse(json);
         }
         catch (Exception)
         {
@@ -141,6 +141,21 @@ public static class OpenAiCompatibleChat
             yield break;
         }
 
+        // The usage-bearing chunk (when stream_options.include_usage is set) typically carries an
+        // empty choices array, so this is checked independently of - not instead of - the delta
+        // parsing below.
+        if (root?["usage"] is { } usage)
+        {
+            yield return new UsageReceived(
+                usage["prompt_tokens"]?.GetValue<int>() ?? 0,
+                usage["completion_tokens"]?.GetValue<int>() ?? 0);
+        }
+
+        // The usage-bearing chunk (see above) carries an empty choices array - JsonArray's indexer
+        // throws ArgumentOutOfRangeException rather than returning null for an out-of-bounds index,
+        // so this must check Count before indexing rather than relying on ?[0] alone.
+        var choices = root?["choices"]?.AsArray();
+        var delta = choices is { Count: > 0 } ? choices[0]?["delta"] : null;
         if (delta is null)
         {
             yield break;

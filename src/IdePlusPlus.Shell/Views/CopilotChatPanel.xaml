@@ -61,10 +61,40 @@
                         </Style.Triggers>
                     </Style>
                 </Border.Style>
-                <TextBlock FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap">
-                    <Run Text="{Binding Kind, Mode=OneWay, Converter={x:Static toolPanes:DiffLinePrefixConverter.Instance}}" FontWeight="Bold" />
-                    <Run Text="{Binding Text, Mode=OneWay}" />
-                </TextBlock>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Kind, Mode=OneWay, Converter={x:Static toolPanes:DiffLinePrefixConverter.Instance}}"
+                               FontWeight="Bold"
+                               FontFamily="Consolas"
+                               FontSize="11" />
+                    <TextBlock Text="{Binding Text, Mode=OneWay}"
+                               FontFamily="Consolas"
+                               FontSize="11"
+                               Visibility="{Binding HasSegments, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
+                    <ItemsControl ItemsSource="{Binding Segments}"
+                                  Visibility="{Binding HasSegments, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type diff:DiffTextSegment}">
+                                <TextBlock Text="{Binding Text, Mode=OneWay}" FontFamily="Consolas" FontSize="11">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource DiffHighlightBackgroundBrush}" />
+                                                    <Setter Property="FontWeight" Value="Bold" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
             </Border>
         </DataTemplate>
 
@@ -264,11 +294,23 @@
             <ItemsControl ItemsSource="{Binding Messages}" />
         </ScrollViewer>
 
-        <TextBlock Grid.Row="4"
-                   Text="{Binding StatusMessage}"
-                   Margin="4,0"
-                   Foreground="{DynamicResource MutedForegroundBrush}"
-                   FontSize="11" />
+        <Grid Grid.Row="4" Margin="4,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0"
+                       Text="{Binding StatusMessage}"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       FontSize="11" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding TokenUsageText}"
+                       Margin="8,0,0,0"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       FontSize="10"
+                       ToolTip="Cumulative tokens billed this session (every request re-sends the full conversation)" />
+        </Grid>
 
         <Grid Grid.Row="5" Margin="4">
             <Grid.ColumnDefinitions>
