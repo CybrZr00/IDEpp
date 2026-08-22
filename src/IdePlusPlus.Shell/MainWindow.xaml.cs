@@ -87,6 +87,9 @@ public partial class MainWindow : Window
         Loaded += (_, _) => RestoreWindowBounds();
         Closing += (_, _) => SaveLayout();
         Closing += (_, _) => SaveWindowBounds();
+        // Closing mid-stream abandons RunAssistantTurnsAsync before its finally runs, so capture
+        // whatever the conversation has reached rather than losing it.
+        Closing += (_, _) => viewModel.CopilotChat.PersistChatHistory();
         Closing += (_, _) => viewModel.StopDebuggingCommand.Execute(null); // best effort; avoids orphaning netcoredbg
     }
 

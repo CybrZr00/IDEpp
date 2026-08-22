@@ -55,6 +55,20 @@ public sealed class ChatHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void Save_CalledRepeatedlyMidConversation_LeavesTheLatestSnapshotReadable()
+    {
+        // The pane now checkpoints eagerly (per user message, per tool-loop iteration) rather than
+        // only at the end of a turn, so a partially-complete conversation has to reload cleanly.
+        _store.Save(_solutionDirectory, [new StoredChatMessage("User", "question")]);
+        _store.Save(_solutionDirectory, [new StoredChatMessage("User", "question"), new StoredChatMessage("Assistant", "partial ans")]);
+
+        var loaded = _store.Load(_solutionDirectory);
+
+        loaded.Count.ShouldBe(2);
+        loaded[1].Text.ShouldBe("partial ans");
+    }
+
+    [Fact]
     public void Load_CorruptFile_ReturnsEmptyRatherThanThrowing()
     {
         Directory.CreateDirectory(ProjectMemoryStore.MemoryDirectory(_solutionDirectory));

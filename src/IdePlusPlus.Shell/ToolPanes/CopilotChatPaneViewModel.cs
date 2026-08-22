@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -57,6 +58,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly ChatHistoryStore _chatHistoryStore;
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly McpServerManager _mcpServerManager;
+    private readonly WorkspaceFileReader _workspaceFileReader = new();
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
     private string? _solutionDirectory;
@@ -206,10 +208,20 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         IndexCodebaseCommand.NotifyCanExecuteChanged();
     }
 
-    /// <summary>Auto-saved after every assistant turn so the conversation survives an app restart -
-    /// only the plain chat transcript, not edit/plan proposals or MCP tool-call cards, matching what
-    /// SendAsync itself replays back into the model's history on the next turn.</summary>
-    private void PersistChatHistory()
+    /// <summary>
+    /// Persists the plain chat transcript (not edit/plan proposals or tool-call cards, matching what
+    /// SendAsync itself replays back into the model on the next turn).
+    ///
+    /// Called eagerly - as soon as the user's message is added, and again after each tool-loop
+    /// iteration - rather than only once the whole turn finishes. A long agentic turn can run for
+    /// minutes, and saving only at the end meant a crash, a kill, or closing the app mid-turn lost
+    /// the entire conversation, which is precisely what this is supposed to prevent. Writes are
+    /// per-message/per-iteration, never per-token, so this stays cheap.
+    ///
+    /// Blank messages are skipped so the empty assistant placeholder that exists while a response is
+    /// still streaming doesn't come back as a blank bubble on reload.
+    /// </summary>
+    public void PersistChatHistory()
     {
         if (_solutionDirectory is null)
         {
@@ -218,6 +230,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         var stored = Messages
             .OfType<ChatMessageViewModel>()
+            .Where(m => !string.IsNullOrWhiteSpace(m.Text))
             .Select(m => new StoredChatMessage(m.Role.ToString(), m.Text))
             .ToList();
 
@@ -241,6 +254,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         var userMessage = new ChatMessageViewModel(ChatRole.User) { Text = userText };
         Messages.Add(userMessage);
+
+        // Before the (potentially very long) network call, so the question itself survives even if
+        // the response never arrives.
+        PersistChatHistory();
 
         var history = Messages
             .OfType<ChatMessageViewModel>()
@@ -274,9 +291,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             history.Insert(0, new ChatMessage(
                 ChatRole.System,
-                "Plan Mode is active: investigate first (read files, search, use read-only tools), then call " +
-                "propose_plan exactly once with your full implementation plan. Do not attempt any file edits - " +
-                "propose_edit is unavailable until the user approves your plan."));
+                "Plan Mode is active. Investigate the code first using read_file, list_files and search_codebase, " +
+                "then call propose_plan exactly once with your implementation plan. Investigate the solution with " +
+                "those tools only - do not use browser automation or documentation tools to explore the user's own " +
+                "code. You cannot edit files in Plan Mode; propose_edit becomes available only once the user " +
+                "approves your plan."));
         }
 
         if (_solutionDirectory is not null)
@@ -309,10 +328,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     /// <summary>
-    /// Streams the assistant's response, and - unlike propose_edit, which is terminal until the
-    /// user accepts/rejects it - automatically executes any MCP tool calls and feeds their results
-    /// back for the model to continue, looping (bounded by MaxToolLoopIterations) until a turn
-    /// produces no further MCP tool calls.
+    /// Streams the assistant's response, automatically executing any tool calls (workspace
+    /// read-only tools and MCP tools alike) and feeding their results back for the model to
+    /// continue, looping until a turn produces no further tool calls.
+    ///
+    /// A propose_edit/propose_plan call ends the loop immediately: a proposal is terminal until the
+    /// user accepts or rejects it. Without that check, a proposal emitted in the same turn as a
+    /// tool call would be dropped from history entirely (only executed tool calls are recorded),
+    /// leaving the model unable to see it had already proposed - which pushes it to propose again
+    /// and keep calling tools.
     /// </summary>
     private async Task RunAssistantTurnsAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
     {
@@ -323,8 +347,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             var maxIterations = IsAutoMode ? AutoModeMaxToolLoopIterations : MaxToolLoopIterations;
             for (var iteration = 0; iteration < maxIterations; iteration++)
             {
-                var pendingMcpCalls = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
-                if (pendingMcpCalls.Count == 0)
+                var turn = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
+                if (turn.ProducedProposal || turn.Calls.Count == 0)
                 {
                     break;
                 }
@@ -332,18 +356,22 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 history.Add(new ChatMessage(
                     ChatRole.Assistant,
                     assistantMessage.Text,
-                    ToolCalls: pendingMcpCalls.Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString())).ToList()));
+                    ToolCalls: turn.Calls.Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString())).ToList()));
 
-                foreach (var call in pendingMcpCalls)
+                foreach (var call in turn.Calls)
                 {
                     var callViewModel = new McpToolCallViewModel(call.Name!);
                     _dispatcher.Invoke(() => Messages.Add(callViewModel));
 
-                    var result = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), _streamCancellation.Token);
-                    _dispatcher.Invoke(() => callViewModel.Complete(result.IsError, result.Text));
+                    var (isError, text) = await ExecuteToolAsync(call, _streamCancellation.Token);
+                    _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
 
-                    history.Add(new ChatMessage(ChatRole.Tool, result.Text, ToolCallId: call.EffectiveId));
+                    history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
                 }
+
+                // The assistant text and tool results from this iteration are now final - checkpoint
+                // them before starting the next one, which may run for a long time.
+                _dispatcher.Invoke(PersistChatHistory);
 
                 assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
                 _dispatcher.Invoke(() => Messages.Add(assistantMessage));
@@ -361,7 +389,65 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
-    private async Task<List<PendingMcpCall>> StreamOneTurnAsync(
+    /// <summary>Routes a tool call to the local read-only workspace tools or out to an MCP server.</summary>
+    private async Task<(bool IsError, string Text)> ExecuteToolAsync(PendingMcpCall call, CancellationToken cancellationToken)
+    {
+        if (!WorkspaceTools.IsWorkspaceTool(call.Name!))
+        {
+            var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), cancellationToken);
+            return (mcpResult.IsError, mcpResult.Text);
+        }
+
+        JsonNode? arguments;
+        try
+        {
+            var argumentsJson = call.Arguments.ToString();
+            arguments = string.IsNullOrWhiteSpace(argumentsJson) ? null : JsonNode.Parse(argumentsJson);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return (true, $"Malformed arguments JSON for '{call.Name}'.");
+        }
+
+        switch (call.Name)
+        {
+            case WorkspaceTools.ReadFileToolName:
+                var file = arguments?["file"]?.GetValue<string>();
+                return file is null
+                    ? (true, "read_file requires a 'file' argument.")
+                    : (false, _workspaceFileReader.ReadFile(_solutionDirectory, file));
+
+            case WorkspaceTools.ListFilesToolName:
+                var directory = arguments?["directory"]?.GetValue<string>();
+                var recursive = arguments?["recursive"]?.GetValue<bool>() ?? false;
+                return (false, _workspaceFileReader.ListFiles(_solutionDirectory, directory, recursive));
+
+            case WorkspaceTools.SearchCodebaseToolName:
+                var query = arguments?["query"]?.GetValue<string>();
+                if (query is null)
+                {
+                    return (true, "search_codebase requires a 'query' argument.");
+                }
+
+                if (!_codebaseIndexService.IsIndexed)
+                {
+                    return (true, "The codebase isn't indexed yet - use read_file/list_files instead, " +
+                                  "or ask the user to click 'Index Codebase' in the Copilot Chat pane.");
+                }
+
+                var hits = await _codebaseIndexService.SearchAsync(query, CodebaseSearchTopK, cancellationToken);
+                return hits.Count == 0
+                    ? (false, "No matches found.")
+                    : (false, string.Join("\n\n", hits.Select(c => $"// {c.FilePath}:{c.StartLine}-{c.EndLine}\n{c.Text}")));
+
+            default:
+                return (true, $"Unknown workspace tool '{call.Name}'.");
+        }
+    }
+
+    private sealed record TurnResult(List<PendingMcpCall> Calls, bool ProducedProposal);
+
+    private async Task<TurnResult> StreamOneTurnAsync(
         List<ChatMessage> history, ChatMessageViewModel assistantMessage, CancellationToken cancellationToken)
     {
         var proposalParser = new EditProposalParser();
@@ -372,6 +458,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var routeByIndex = new Dictionary<int, ToolCallRoute>();
 
         var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
+        tools.AddRange(WorkspaceTools.All);
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
 
         IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
@@ -424,7 +511,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             });
         }
 
-        return mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList();
+        var producedProposal = proposalsByToolCallId.Count > 0 || planProposalsByToolCallId.Count > 0;
+        return new TurnResult(mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList(), producedProposal);
     }
 
     private static void AccumulateMcpCall(ToolCallDelta delta, Dictionary<int, PendingMcpCall> calls)

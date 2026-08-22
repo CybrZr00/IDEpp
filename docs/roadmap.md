@@ -47,6 +47,20 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       always showed the literal string "Untitled" regardless of the actual untitled name passed in
       (e.g. "Untitled2"), even though `ContentId` used it correctly, so multiple new files were
       indistinguishable in their tab titles.
+- [x] Read-only workspace tools (`read_file`, `list_files`, `search_codebase`) — added in response to a
+      real Plan Mode failure found in live use: the Plan Mode prompt instructed the model to
+      "read files, search, use read-only tools", but IDE++ exposed **no file-access tool at all** (file
+      context only ever arrived as pre-injected system messages). A capable model obediently reached for
+      the only exploration-shaped tools it had — the user's Playwright MCP server — and browsed in
+      circles until the tool-iteration cap. Fixed by actually providing the tools, correcting the prompt
+      to name them and steer off browser/docs tools for first-party code, and ending the turn when a
+      proposal is produced (previously a `propose_plan` emitted in the same turn as a tool call was
+      dropped from history entirely, so the model couldn't see it had already proposed). `read_file`
+      enforces solution-root containment, since the *model* chooses the path.
+- [x] Eager chat-history flush — history previously persisted only when a whole assistant turn
+      finished, so a crash, kill, or app close during a long agentic turn lost the entire conversation,
+      defeating the feature's purpose. Now checkpoints on each user message, after each tool-loop
+      iteration, and on window close (per-message/per-iteration, never per-token).
 - [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
       debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right and
       out of scope for this pass; left as-is below for future planning.
