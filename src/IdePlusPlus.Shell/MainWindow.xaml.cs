@@ -5,6 +5,7 @@ using System.Windows.Input;
 using AvalonDock;
 using AvalonDock.Serializer.Xml;
 using AvalonDock.Themes;
+using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
@@ -23,15 +24,21 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, object> _contentById;
     private readonly SecureSettingsStore _secureSettingsStore;
     private readonly AppSettingsStore _appSettingsStore;
+    private readonly McpServerManager _mcpServerManager;
+    private readonly McpServerConfigStore _mcpServerConfigStore;
 
     public MainWindow(
         MainWindowViewModel viewModel,
         ThemeService themeService,
         SecureSettingsStore secureSettingsStore,
-        AppSettingsStore appSettingsStore)
+        AppSettingsStore appSettingsStore,
+        McpServerManager mcpServerManager,
+        McpServerConfigStore mcpServerConfigStore)
     {
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
+        _mcpServerManager = mcpServerManager;
+        _mcpServerConfigStore = mcpServerConfigStore;
 
         DataContext = viewModel;
         InitializeComponent();
@@ -188,7 +195,7 @@ public partial class MainWindow : Window
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore);
+        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore);
         var window = new SettingsWindow(settingsViewModel) { Owner = this };
         window.ShowDialog();
     }

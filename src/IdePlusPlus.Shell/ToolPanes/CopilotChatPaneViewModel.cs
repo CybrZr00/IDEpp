@@ -1,12 +1,17 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
+using IdePlusPlus.Copilot.LmStudio;
+using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.Memory;
+using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.Shell.ToolPanes;
 
@@ -14,12 +19,23 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 {
     public const string PaneContentId = "CopilotChat";
 
-    private const int CodebaseSearchTopK = 5;
+    private const string ProviderOpenRouter = "OpenRouter";
+    private const string ProviderLmStudio = "LM Studio";
 
-    private readonly IChatClient _chatClient;
+    private const string ProviderSettingKey = "ChatProvider";
+    private const string OpenRouterModelSettingKey = "OpenRouterChatModel";
+    private const string LmStudioModelSettingKey = "LmStudioChatModel";
+
+    private const int CodebaseSearchTopK = 5;
+    private const int MaxToolLoopIterations = 8;
+
+    private readonly OpenRouterChatClient _openRouterClient;
+    private readonly LmStudioChatClient _lmStudioClient;
+    private readonly AppSettingsStore _appSettingsStore;
     private readonly EditApplicationService _editApplicationService;
     private readonly ProjectMemoryStore _projectMemoryStore;
     private readonly CodebaseIndexService _codebaseIndexService;
+    private readonly McpServerManager _mcpServerManager;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
     private string? _solutionDirectory;
@@ -27,17 +43,26 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private CancellationTokenSource? _streamCancellation;
 
     public CopilotChatPaneViewModel(
-        IChatClient chatClient,
+        OpenRouterChatClient openRouterClient,
+        LmStudioChatClient lmStudioClient,
+        AppSettingsStore appSettingsStore,
         EditApplicationService editApplicationService,
         ProjectMemoryStore projectMemoryStore,
-        CodebaseIndexService codebaseIndexService)
+        CodebaseIndexService codebaseIndexService,
+        McpServerManager mcpServerManager)
         : base(PaneContentId, "Copilot Chat")
     {
-        _chatClient = chatClient;
+        _openRouterClient = openRouterClient;
+        _lmStudioClient = lmStudioClient;
+        _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
         _projectMemoryStore = projectMemoryStore;
         _codebaseIndexService = codebaseIndexService;
+        _mcpServerManager = mcpServerManager;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
+
+        selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
+        selectedModel = ModelSettingFor(selectedProvider) ?? DefaultModelFor(selectedProvider);
     }
 
     public ObservableCollection<ObservableObject> Messages { get; } = [];
@@ -50,8 +75,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "google/gemini-3-pro",
     ];
 
+    public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio];
+
     [ObservableProperty]
-    private string selectedModel = "anthropic/claude-sonnet-4.5";
+    private string selectedProvider;
+
+    [ObservableProperty]
+    private string selectedModel;
 
     [ObservableProperty]
     private string inputText = "";
@@ -121,7 +151,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
 
-        await StreamAssistantResponseAsync(history, assistantMessage);
+        await RunAssistantTurnsAsync(history, assistantMessage);
     }
 
     private async Task PrependContextAsync(List<ChatMessage> history, string userText)
@@ -155,46 +185,138 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
-    private async Task StreamAssistantResponseAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
+    /// <summary>
+    /// Streams the assistant's response, and - unlike propose_edit, which is terminal until the
+    /// user accepts/rejects it - automatically executes any MCP tool calls and feeds their results
+    /// back for the model to continue, looping (bounded by MaxToolLoopIterations) until a turn
+    /// produces no further MCP tool calls.
+    /// </summary>
+    private async Task RunAssistantTurnsAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
     {
-        var proposalParser = new EditProposalParser();
-        var proposalsByToolCallId = new Dictionary<string, EditProposalViewModel>();
-
         IsStreaming = true;
         _streamCancellation = new CancellationTokenSource();
         try
         {
-            await foreach (var streamEvent in _chatClient.StreamChatAsync(
-                               history, SelectedModel, [ProposeEditTool.Definition], _streamCancellation.Token))
+            for (var iteration = 0; iteration < MaxToolLoopIterations; iteration++)
             {
-                _dispatcher.Invoke(() =>
+                var pendingMcpCalls = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
+                if (pendingMcpCalls.Count == 0)
                 {
-                    switch (streamEvent)
-                    {
-                        case TextDelta delta:
-                            assistantMessage.Append(delta.Text);
-                            break;
+                    break;
+                }
 
-                        case ToolCallDelta toolCallDelta:
-                            HandleToolCallDelta(toolCallDelta, proposalParser, proposalsByToolCallId);
-                            break;
+                history.Add(new ChatMessage(
+                    ChatRole.Assistant,
+                    assistantMessage.Text,
+                    ToolCalls: pendingMcpCalls.Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString())).ToList()));
 
-                        case StreamError error:
-                            assistantMessage.Append($"\n\n[error: {error.Message}]");
-                            break;
-                    }
-                });
+                foreach (var call in pendingMcpCalls)
+                {
+                    var callViewModel = new McpToolCallViewModel(call.Name!);
+                    _dispatcher.Invoke(() => Messages.Add(callViewModel));
+
+                    var result = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), _streamCancellation.Token);
+                    _dispatcher.Invoke(() => callViewModel.Complete(result.IsError, result.Text));
+
+                    history.Add(new ChatMessage(ChatRole.Tool, result.Text, ToolCallId: call.EffectiveId));
+                }
+
+                assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
+                _dispatcher.Invoke(() => Messages.Add(assistantMessage));
             }
         }
         catch (OperationCanceledException)
         {
-            assistantMessage.Append("\n\n[cancelled]");
+            _dispatcher.Invoke(() => assistantMessage.Append("\n\n[cancelled]"));
         }
         finally
         {
             IsStreaming = false;
             _streamCancellation = null;
         }
+    }
+
+    private async Task<List<PendingMcpCall>> StreamOneTurnAsync(
+        List<ChatMessage> history, ChatMessageViewModel assistantMessage, CancellationToken cancellationToken)
+    {
+        var proposalParser = new EditProposalParser();
+        var proposalsByToolCallId = new Dictionary<string, EditProposalViewModel>();
+        var mcpCallsByIndex = new Dictionary<int, PendingMcpCall>();
+        var routeIsProposeEdit = new Dictionary<int, bool>();
+
+        var tools = new List<ToolDefinition> { ProposeEditTool.Definition };
+        tools.AddRange(_mcpServerManager.GetToolDefinitions());
+
+        IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+
+        await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, cancellationToken))
+        {
+            _dispatcher.Invoke(() =>
+            {
+                switch (streamEvent)
+                {
+                    case TextDelta delta:
+                        assistantMessage.Append(delta.Text);
+                        break;
+
+                    case ToolCallDelta toolCallDelta:
+                        if (toolCallDelta.FunctionName is not null)
+                        {
+                            routeIsProposeEdit[toolCallDelta.Index] = toolCallDelta.FunctionName == ProposeEditTool.ToolName;
+                        }
+
+                        if (routeIsProposeEdit.GetValueOrDefault(toolCallDelta.Index))
+                        {
+                            HandleToolCallDelta(toolCallDelta, proposalParser, proposalsByToolCallId);
+                        }
+                        else
+                        {
+                            AccumulateMcpCall(toolCallDelta, mcpCallsByIndex);
+                        }
+
+                        break;
+
+                    case StreamError error:
+                        assistantMessage.Append($"\n\n[error: {error.Message}]");
+                        break;
+                }
+            });
+        }
+
+        return mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList();
+    }
+
+    private static void AccumulateMcpCall(ToolCallDelta delta, Dictionary<int, PendingMcpCall> calls)
+    {
+        if (!calls.TryGetValue(delta.Index, out var call))
+        {
+            call = new PendingMcpCall(delta.Index);
+            calls[delta.Index] = call;
+        }
+
+        if (delta.Id is not null)
+        {
+            call.Id = delta.Id;
+        }
+
+        if (delta.FunctionName is not null)
+        {
+            call.Name = delta.FunctionName;
+        }
+
+        if (delta.ArgumentsFragment is not null)
+        {
+            call.Arguments.Append(delta.ArgumentsFragment);
+        }
+    }
+
+    private sealed class PendingMcpCall(int index)
+    {
+        public string? Id;
+        public string? Name;
+        public readonly StringBuilder Arguments = new();
+
+        public string EffectiveId => Id ?? $"call-{index}";
     }
 
     private void HandleToolCallDelta(
@@ -266,7 +388,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
 
-        await StreamAssistantResponseAsync(history, assistantMessage);
+        await RunAssistantTurnsAsync(history, assistantMessage);
     }
 
     private bool CanIndexCodebase() => _solutionDirectory is not null && !IsIndexing && _indexableFiles.Count > 0;
@@ -291,6 +413,20 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             IsIndexing = false;
         }
     }
+
+    private string? ModelSettingFor(string provider) =>
+        _appSettingsStore.Get(provider == ProviderLmStudio ? LmStudioModelSettingKey : OpenRouterModelSettingKey);
+
+    private static string DefaultModelFor(string provider) => provider == ProviderLmStudio ? "" : "anthropic/claude-sonnet-4.5";
+
+    partial void OnSelectedProviderChanged(string value)
+    {
+        _appSettingsStore.Set(ProviderSettingKey, value);
+        SelectedModel = ModelSettingFor(value) ?? DefaultModelFor(value);
+    }
+
+    partial void OnSelectedModelChanged(string value) =>
+        _appSettingsStore.Set(SelectedProvider == ProviderLmStudio ? LmStudioModelSettingKey : OpenRouterModelSettingKey, value);
 
     partial void OnIsStreamingChanged(bool value)
     {

@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
-using System.Text.Json.Nodes;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Infrastructure;
 
@@ -46,95 +45,10 @@ public sealed class OpenRouterChatClient : IChatClient
         var stream = await httpResponse.Content.ReadAsStreamAsync(cancellationToken);
         await using (stream.ConfigureAwait(false))
         {
-            using var reader = new StreamReader(stream);
-
-            while (true)
+            await foreach (var streamEvent in OpenAiCompatibleChat.ReadSseStreamAsync(stream, cancellationToken))
             {
-                string? line = null;
-                string? readError = null;
-                try
-                {
-                    line = await reader.ReadLineAsync(cancellationToken);
-                }
-                catch (IOException ex)
-                {
-                    readError = ex.Message;
-                }
-
-                if (readError is not null)
-                {
-                    yield return new StreamError($"Stream error: {readError}");
-                    yield break;
-                }
-
-                if (line is null)
-                {
-                    yield break;
-                }
-
-                // Blank lines separate SSE events; lines starting with ':' are comments/keepalive pings.
-                if (line.Length == 0 || line[0] == ':' || !line.StartsWith("data:", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var data = line["data:".Length..].Trim();
-                if (data == "[DONE]")
-                {
-                    yield return new StreamCompleted();
-                    yield break;
-                }
-
-                foreach (var chunkEvent in ParseChunkEvents(data))
-                {
-                    yield return chunkEvent;
-                }
+                yield return streamEvent;
             }
-        }
-    }
-
-    private static IEnumerable<ChatStreamEvent> ParseChunkEvents(string json)
-    {
-        JsonNode? delta;
-        try
-        {
-            delta = JsonNode.Parse(json)?["choices"]?[0]?["delta"];
-        }
-        catch (Exception)
-        {
-            // Malformed or unexpected chunk shape - skip it rather than aborting the whole stream.
-            yield break;
-        }
-
-        if (delta is null)
-        {
-            yield break;
-        }
-
-        var content = delta["content"]?.GetValue<string>();
-        if (!string.IsNullOrEmpty(content))
-        {
-            yield return new TextDelta(content);
-        }
-
-        var toolCalls = delta["tool_calls"]?.AsArray();
-        if (toolCalls is null)
-        {
-            yield break;
-        }
-
-        foreach (var toolCall in toolCalls)
-        {
-            if (toolCall is null)
-            {
-                continue;
-            }
-
-            var index = toolCall["index"]?.GetValue<int>() ?? 0;
-            var id = toolCall["id"]?.GetValue<string>();
-            var functionName = toolCall["function"]?["name"]?.GetValue<string>();
-            var argumentsFragment = toolCall["function"]?["arguments"]?.GetValue<string>();
-            yield return new ToolCallDelta(index, id, functionName, argumentsFragment);
         }
     }
 
@@ -151,8 +65,8 @@ public sealed class OpenRouterChatClient : IChatClient
         {
             model,
             stream = true,
-            messages = messages.Select(m => new { role = RoleName(m.Role), content = m.Content }),
-            tools = tools is { Count: > 0 } ? tools.Select(ToOpenAiToolSchema) : null,
+            messages = messages.Select(OpenAiCompatibleChat.ToRequestMessage),
+            tools = tools is { Count: > 0 } ? tools.Select(OpenAiCompatibleChat.ToToolSchema) : null,
         });
 
         try
@@ -172,23 +86,4 @@ public sealed class OpenRouterChatClient : IChatClient
             return (null, $"Request failed: {ex.Message}");
         }
     }
-
-    private static object ToOpenAiToolSchema(ToolDefinition tool) => new
-    {
-        type = "function",
-        function = new
-        {
-            name = tool.Name,
-            description = tool.Description,
-            parameters = tool.ParametersSchema,
-        },
-    };
-
-    private static string RoleName(ChatRole role) => role switch
-    {
-        ChatRole.System => "system",
-        ChatRole.User => "user",
-        ChatRole.Assistant => "assistant",
-        _ => "user",
-    };
 }

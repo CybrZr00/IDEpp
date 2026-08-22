@@ -1,10 +1,11 @@
 using System.Net.Http;
 using System.Windows;
 using IdePlusPlus.Build;
-using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
+using IdePlusPlus.Copilot.LmStudio;
+using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Debug;
@@ -51,6 +52,15 @@ public partial class App : Application
         // before Show(), so a plugin-registered command is present in the menu from the first frame.
         _serviceProvider.GetRequiredService<PluginLoader>().LoadPlugins();
 
+        // MCP servers (npx-launched ones especially) can take a while to come up - connect in the
+        // background rather than blocking startup; GetToolDefinitions() just returns fewer tools
+        // until they're ready.
+        var output = _serviceProvider.GetRequiredService<OutputPaneViewModel>();
+        var dispatcher = Dispatcher;
+        var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
+        mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        _ = mcpServerManager.ReconnectAllAsync();
+
         mainWindow.Show();
     }
 
@@ -82,7 +92,9 @@ public partial class App : Application
         services.AddSingleton<PluginLoader>();
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();
-        services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());
+        services.AddSingleton<LmStudioChatClient>();
+        services.AddSingleton<McpServerConfigStore>();
+        services.AddSingleton<McpServerManager>();
         services.AddSingleton<DeepSeekFimClient>();
         services.AddSingleton<EditApplicationService>();
         services.AddSingleton<ProjectMemoryStore>();
