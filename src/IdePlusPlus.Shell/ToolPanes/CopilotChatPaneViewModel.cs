@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
@@ -32,6 +33,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         var savedKey = _settingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName);
         HasApiKey = !string.IsNullOrWhiteSpace(savedKey);
+
+        var savedDeepSeekKey = _settingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName);
+        HasDeepSeekApiKey = !string.IsNullOrWhiteSpace(savedDeepSeekKey);
     }
 
     public ObservableCollection<ObservableObject> Messages { get; } = [];
@@ -57,6 +61,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private bool hasApiKey;
 
     [ObservableProperty]
+    private bool hasDeepSeekApiKey;
+
+    [ObservableProperty]
     private bool isStreaming;
 
     [ObservableProperty]
@@ -76,6 +83,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _settingsStore.SetSecret(OpenRouterChatClient.ApiKeySettingName, plaintextKey.Trim());
         HasApiKey = true;
         StatusMessage = "API key saved.";
+    }
+
+    public void SaveDeepSeekApiKey(string plaintextKey)
+    {
+        if (string.IsNullOrWhiteSpace(plaintextKey))
+        {
+            return;
+        }
+
+        _settingsStore.SetSecret(DeepSeekFimClient.ApiKeySettingName, plaintextKey.Trim());
+        HasDeepSeekApiKey = true;
+        StatusMessage = "DeepSeek API key saved.";
     }
 
     private bool CanSend() => !IsStreaming && !string.IsNullOrWhiteSpace(InputText);

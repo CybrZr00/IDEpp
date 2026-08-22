@@ -3,6 +3,7 @@
     <Project Path="src/IdePlusPlus.App/IdePlusPlus.App.csproj" />
     <Project Path="src/IdePlusPlus.Build/IdePlusPlus.Build.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Core/IdePlusPlus.Copilot.Core.csproj" />
+    <Project Path="src/IdePlusPlus.Copilot.DeepSeek/IdePlusPlus.Copilot.DeepSeek.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Diff/IdePlusPlus.Copilot.Diff.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.OpenRouter/IdePlusPlus.Copilot.OpenRouter.csproj" />
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />

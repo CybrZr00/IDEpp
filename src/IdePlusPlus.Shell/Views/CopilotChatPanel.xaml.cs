@@ -39,6 +39,12 @@ public partial class CopilotChatPanel : UserControl
         ApiKeyBox.Clear();
     }
 
+    private void SaveDeepSeekApiKeyButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _boundViewModel?.SaveDeepSeekApiKey(DeepSeekApiKeyBox.Password);
+        DeepSeekApiKeyBox.Clear();
+    }
+
     private void InputTextBox_OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))

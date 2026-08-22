@@ -82,6 +82,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -94,6 +95,12 @@
         </StackPanel>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,4,4">
+            <TextBlock Text="DeepSeek key (inline completion):" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11" />
+            <PasswordBox x:Name="DeepSeekApiKeyBox" Width="100" />
+            <Button Content="Save" Click="SaveDeepSeekApiKeyButton_OnClick" Margin="4,0,0,0" Padding="6,0" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="4,0,4,4">
             <ComboBox ItemsSource="{Binding AvailableModels}"
                       Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
                       IsEditable="True"
@@ -105,17 +112,17 @@
                       FontSize="11" />
         </StackPanel>
 
-        <ScrollViewer Grid.Row="2" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
             <ItemsControl ItemsSource="{Binding Messages}" />
         </ScrollViewer>
 
-        <TextBlock Grid.Row="3"
+        <TextBlock Grid.Row="4"
                    Text="{Binding StatusMessage}"
                    Margin="4,0"
                    Foreground="Gray"
                    FontSize="11" />
 
-        <Grid Grid.Row="4" Margin="4">
+        <Grid Grid.Row="5" Margin="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />

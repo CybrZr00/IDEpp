@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Windows;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Debug;
@@ -36,6 +37,7 @@ public partial class App : Application
         // EditorServices locator instead. Must be set before the first document tab renders.
         EditorServices.BreakpointManager = _serviceProvider.GetRequiredService<BreakpointManager>();
         EditorServices.DebugLocation = _serviceProvider.GetRequiredService<DebugLocationIndicator>();
+        EditorServices.CompletionProvider = _serviceProvider.GetRequiredService<DeepSeekFimClient>();
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
@@ -65,6 +67,7 @@ public partial class App : Application
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());
+        services.AddSingleton<DeepSeekFimClient>();
         services.AddSingleton<EditApplicationService>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();

@@ -21,6 +21,7 @@
     <ProjectReference Include="..\IdePlusPlus.Copilot.OpenRouter\IdePlusPlus.Copilot.OpenRouter.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Copilot.Diff\IdePlusPlus.Copilot.Diff.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Copilot.DeepSeek\IdePlusPlus.Copilot.DeepSeek.csproj" />
   </ItemGroup>
 
 </Project>

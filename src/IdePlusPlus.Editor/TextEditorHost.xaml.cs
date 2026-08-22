@@ -1,5 +1,6 @@
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Rendering;
@@ -10,12 +11,18 @@ namespace IdePlusPlus.Editor;
 
 public partial class TextEditorHost : UserControl
 {
+    private const int MaxPrefixChars = 4000;
+    private const int MaxSuffixChars = 1000;
+
     private readonly BraceFoldingStrategy _braceFoldingStrategy = new();
     private readonly XmlFoldingStrategy _xmlFoldingStrategy = new();
     private readonly BreakpointMargin _breakpointMargin = new(EditorServices.BreakpointManager);
     private readonly CurrentLineBackgroundRenderer _currentLineRenderer = new();
+    private readonly GhostTextGenerator _ghostTextGenerator = new();
+    private readonly DispatcherTimer _completionDebounceTimer;
     private FoldingManager? _foldingManager;
     private DocumentViewModel? _boundDocument;
+    private CancellationTokenSource? _completionCancellation;
 
     public TextEditorHost()
     {
@@ -24,16 +31,17 @@ public partial class TextEditorHost : UserControl
 
         Editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
         Editor.TextArea.TextView.BackgroundRenderers.Add(_currentLineRenderer);
+        Editor.TextArea.TextView.ElementGenerators.Add(_ghostTextGenerator);
         EditorServices.DebugLocation.Changed += OnDebugLocationChanged;
 
-        Editor.TextArea.PreviewKeyDown += (_, e) =>
+        _completionDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _completionDebounceTimer.Tick += async (_, _) =>
         {
-            if (e.Key == Key.F9 && _boundDocument?.FilePath is { } filePath)
-            {
-                EditorServices.BreakpointManager.Toggle(filePath, Editor.TextArea.Caret.Line);
-                e.Handled = true;
-            }
+            _completionDebounceTimer.Stop();
+            await RequestCompletionAsync();
         };
+
+        Editor.TextArea.PreviewKeyDown += OnEditorPreviewKeyDown;
 
         DataContextChanged += (_, _) => Rebind();
         Unloaded += (_, _) => EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
@@ -52,6 +60,9 @@ public partial class TextEditorHost : UserControl
             _foldingManager = null;
         }
 
+        ClearGhostText();
+        _completionDebounceTimer.Stop();
+
         _boundDocument = DataContext as DocumentViewModel;
         _breakpointMargin.FilePath = _boundDocument?.FilePath;
 
@@ -68,13 +79,21 @@ public partial class TextEditorHost : UserControl
         {
             _foldingManager = FoldingManager.Install(Editor.TextArea);
             UpdateFoldings();
-            _boundDocument.TextDocument.TextChanged += OnTextChanged;
         }
+
+        _boundDocument.TextDocument.TextChanged += OnTextChanged;
 
         UpdateCurrentLineHighlight();
     }
 
-    private void OnTextChanged(object? sender, EventArgs e) => UpdateFoldings();
+    private void OnTextChanged(object? sender, EventArgs e)
+    {
+        UpdateFoldings();
+
+        ClearGhostText();
+        _completionDebounceTimer.Stop();
+        _completionDebounceTimer.Start();
+    }
 
     private void UpdateFoldings()
     {
@@ -104,5 +123,100 @@ public partial class TextEditorHost : UserControl
 
         _currentLineRenderer.CurrentLine = isCurrentFile ? debugLocation.Line : null;
         Editor.TextArea.TextView.InvalidateLayer(_currentLineRenderer.Layer);
+    }
+
+    private async Task RequestCompletionAsync()
+    {
+        var provider = EditorServices.CompletionProvider;
+        if (provider is null || _boundDocument is null || Editor.Document is null)
+        {
+            return;
+        }
+
+        _completionCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _completionCancellation = cancellation;
+
+        var caretOffset = Editor.CaretOffset;
+        var fullText = Editor.Document.Text;
+        var prefix = fullText[..caretOffset];
+        var suffix = fullText[caretOffset..];
+
+        if (prefix.Length > MaxPrefixChars)
+        {
+            prefix = prefix[^MaxPrefixChars..];
+        }
+
+        if (suffix.Length > MaxSuffixChars)
+        {
+            suffix = suffix[..MaxSuffixChars];
+        }
+
+        string? completion;
+        try
+        {
+            completion = await provider.GetCompletionAsync(prefix, suffix, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        // A newer keystroke superseded this request, or the caret has since moved - stale, discard.
+        if (cancellation.IsCancellationRequested || string.IsNullOrEmpty(completion) || Editor.CaretOffset != caretOffset)
+        {
+            return;
+        }
+
+        _ghostTextGenerator.SuggestionText = completion;
+        _ghostTextGenerator.SuggestionOffset = caretOffset;
+        Editor.TextArea.TextView.Redraw();
+    }
+
+    private void OnEditorPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.F9 && _boundDocument?.FilePath is { } filePath)
+        {
+            EditorServices.BreakpointManager.Toggle(filePath, Editor.TextArea.Caret.Line);
+            e.Handled = true;
+            return;
+        }
+
+        if (!_ghostTextGenerator.HasSuggestion)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Tab)
+        {
+            AcceptGhostTextSuggestion();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            ClearGhostText();
+            e.Handled = true;
+        }
+    }
+
+    private void AcceptGhostTextSuggestion()
+    {
+        var text = _ghostTextGenerator.SuggestionText!;
+        var offset = _ghostTextGenerator.SuggestionOffset;
+        _ghostTextGenerator.Clear();
+
+        Editor.Document.Insert(offset, text);
+        Editor.CaretOffset = offset + text.Length;
+    }
+
+    private void ClearGhostText()
+    {
+        if (!_ghostTextGenerator.HasSuggestion)
+        {
+            return;
+        }
+
+        _ghostTextGenerator.Clear();
+        Editor.TextArea.TextView.Redraw();
     }
 }
