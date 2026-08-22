@@ -17,6 +17,7 @@ public sealed class BreakpointMargin : AbstractMargin
     {
         _breakpointManager = breakpointManager;
         _breakpointManager.Changed += InvalidateVisual;
+        EditorTheme.Changed += InvalidateVisual;
     }
 
     public string? FilePath { get; set; }
@@ -42,7 +43,7 @@ public sealed class BreakpointMargin : AbstractMargin
 
     protected override void OnRender(DrawingContext drawingContext)
     {
-        drawingContext.DrawRectangle(Brushes.WhiteSmoke, null, new Rect(0, 0, RenderSize.Width, RenderSize.Height));
+        drawingContext.DrawRectangle(EditorTheme.BreakpointMarginBackground, null, new Rect(0, 0, RenderSize.Width, RenderSize.Height));
 
         var textView = TextView;
         if (textView is null || FilePath is null || !textView.VisualLinesValid)
@@ -60,7 +61,7 @@ public sealed class BreakpointMargin : AbstractMargin
             var visualTop = textView.GetVisualTopByDocumentLine(line) - textView.VerticalOffset;
             var height = textView.GetVisualLine(line)?.Height ?? textView.DefaultLineHeight;
             var center = new Point(RenderSize.Width / 2, visualTop + (height / 2));
-            drawingContext.DrawEllipse(Brushes.Firebrick, null, center, Diameter / 2, Diameter / 2);
+            drawingContext.DrawEllipse(EditorTheme.BreakpointDot, null, center, Diameter / 2, Diameter / 2);
         }
     }
 

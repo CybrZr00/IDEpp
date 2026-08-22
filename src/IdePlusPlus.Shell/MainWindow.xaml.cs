@@ -4,9 +4,12 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using AvalonDock;
 using AvalonDock.Serializer.Xml;
+using AvalonDock.Themes;
 using IdePlusPlus.Editor;
+using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Shell.ToolPanes;
+using IdePlusPlus.Shell.Views;
 
 namespace IdePlusPlus.Shell;
 
@@ -18,9 +21,18 @@ public partial class MainWindow : Window
         "layout.xml");
 
     private readonly Dictionary<string, object> _contentById;
+    private readonly SecureSettingsStore _secureSettingsStore;
+    private readonly AppSettingsStore _appSettingsStore;
 
-    public MainWindow(MainWindowViewModel viewModel)
+    public MainWindow(
+        MainWindowViewModel viewModel,
+        ThemeService themeService,
+        SecureSettingsStore secureSettingsStore,
+        AppSettingsStore appSettingsStore)
     {
+        _secureSettingsStore = secureSettingsStore;
+        _appSettingsStore = appSettingsStore;
+
         DataContext = viewModel;
         InitializeComponent();
 
@@ -44,10 +56,16 @@ public partial class MainWindow : Window
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
+        ApplyDockingTheme(themeService.IsDark);
+        themeService.Changed += () => ApplyDockingTheme(themeService.IsDark);
+
         Loaded += (_, _) => RestoreLayout();
         Closing += (_, _) => SaveLayout();
         Closing += (_, _) => viewModel.StopDebuggingCommand.Execute(null); // best effort; avoids orphaning netcoredbg
     }
+
+    private void ApplyDockingTheme(bool dark) =>
+        DockManager.Theme = dark ? new Vs2013DarkTheme() : new Vs2013LightTheme();
 
     private void RestoreLayout()
     {
@@ -148,4 +166,11 @@ public partial class MainWindow : Window
     }
 
     private void OutputTextBox_OnTextChanged(object sender, TextChangedEventArgs e) => ((TextBox)sender).ScrollToEnd();
+
+    private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore);
+        var window = new SettingsWindow(settingsViewModel) { Owner = this };
+        window.ShowDialog();
+    }
 }

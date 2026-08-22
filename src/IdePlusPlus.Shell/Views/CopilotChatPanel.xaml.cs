@@ -1,5 +1,4 @@
 using System.Collections.Specialized;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using IdePlusPlus.Shell.ToolPanes;
@@ -32,18 +31,6 @@ public partial class CopilotChatPanel : UserControl
 
     private void OnMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         MessagesScrollViewer.ScrollToBottom();
-
-    private void SaveApiKeyButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        _boundViewModel?.SaveApiKey(ApiKeyBox.Password);
-        ApiKeyBox.Clear();
-    }
-
-    private void SaveDeepSeekApiKeyButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        _boundViewModel?.SaveDeepSeekApiKey(DeepSeekApiKeyBox.Password);
-        DeepSeekApiKeyBox.Clear();
-    }
 
     private void InputTextBox_OnKeyDown(object sender, KeyEventArgs e)
     {

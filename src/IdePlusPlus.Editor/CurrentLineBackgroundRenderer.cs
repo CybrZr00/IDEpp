@@ -5,8 +5,6 @@ namespace IdePlusPlus.Editor;
 
 public sealed class CurrentLineBackgroundRenderer : IBackgroundRenderer
 {
-    private static readonly Brush HighlightBrush = new SolidColorBrush(Color.FromArgb(90, 255, 215, 0));
-
     public int? CurrentLine { get; set; }
 
     public KnownLayer Layer => KnownLayer.Selection;
@@ -25,7 +23,7 @@ public sealed class CurrentLineBackgroundRenderer : IBackgroundRenderer
         var geometry = builder.CreateGeometry();
         if (geometry is not null)
         {
-            drawingContext.DrawGeometry(HighlightBrush, null, geometry);
+            drawingContext.DrawGeometry(EditorTheme.CurrentLineHighlight, null, geometry);
         }
     }
 }

@@ -44,7 +44,7 @@ public sealed class GhostTextGenerator : VisualLineElementGenerator
         {
             if (TextRunProperties is not null)
             {
-                TextRunProperties.SetForegroundBrush(Brushes.Gray);
+                TextRunProperties.SetForegroundBrush(EditorTheme.GhostTextForeground);
                 var baseTypeface = TextRunProperties.Typeface;
                 TextRunProperties.SetTypeface(new Typeface(
                     baseTypeface.FontFamily, FontStyles.Italic, baseTypeface.Weight, baseTypeface.Stretch));

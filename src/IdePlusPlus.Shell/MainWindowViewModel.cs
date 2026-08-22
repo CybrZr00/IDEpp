@@ -23,6 +23,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly BuildService _buildService;
     private readonly RunService _runService;
     private readonly DebugSession _debugSession;
+    private readonly ThemeService _themeService;
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
@@ -37,7 +38,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         EditorWorkspace editorWorkspace,
         BuildService buildService,
         RunService runService,
-        DebugSession debugSession)
+        DebugSession debugSession,
+        ThemeService themeService)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
@@ -49,10 +51,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _buildService = buildService;
         _runService = runService;
         _debugSession = debugSession;
+        _themeService = themeService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
+
+        isDarkTheme = _themeService.IsDark;
+        _themeService.Changed += () => _dispatcher.Invoke(() => IsDarkTheme = _themeService.IsDark);
 
         _debugSession.StateChanged += () => _dispatcher.Invoke(OnDebugStateChanged);
         _debugSession.OutputReceived += line => _dispatcher.Invoke(() => Output.AppendLine(line.TrimEnd('\r', '\n')));
+
+        EditorServices.CaretPosition.Changed += () => _dispatcher.Invoke(() =>
+            CursorPositionText = $"Ln {EditorServices.CaretPosition.Line}, Col {EditorServices.CaretPosition.Column}");
     }
 
     public SolutionExplorerPaneViewModel SolutionExplorer { get; }
@@ -82,6 +91,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopCommand))]
     private bool isRunning;
+
+    [ObservableProperty]
+    private bool isDarkTheme;
+
+    [ObservableProperty]
+    private string cursorPositionText = "Ln 1, Col 1";
+
+    public string StatusBarText
+    {
+        get
+        {
+            if (IsStoppedAtBreakpoint)
+            {
+                return "Stopped at breakpoint";
+            }
+
+            if (IsDebugging)
+            {
+                return "Debugging";
+            }
+
+            return IsRunning ? "Running" : "Ready";
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleTheme() => _themeService.Toggle();
 
     [RelayCommand]
     private void NewDocument() => ActiveDocument = _editorWorkspace.NewDocument();
@@ -220,6 +256,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(IsRunning))]
     private void Stop() => _runService.Stop();
 
+    partial void OnIsRunningChanged(bool value) => OnPropertyChanged(nameof(StatusBarText));
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartDebuggingCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopDebuggingCommand))]
@@ -240,6 +278,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         IsDebugging = _debugSession.IsActive;
         IsStoppedAtBreakpoint = _debugSession.IsStopped;
+        OnPropertyChanged(nameof(StatusBarText));
 
         if (IsStoppedAtBreakpoint)
         {

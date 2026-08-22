@@ -3,13 +3,10 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Core;
-using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.Memory;
-using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
-using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.Shell.ToolPanes;
 
@@ -20,8 +17,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const int CodebaseSearchTopK = 5;
 
     private readonly IChatClient _chatClient;
-    private readonly SecureSettingsStore _settingsStore;
-    private readonly AppSettingsStore _appSettingsStore;
     private readonly EditApplicationService _editApplicationService;
     private readonly ProjectMemoryStore _projectMemoryStore;
     private readonly CodebaseIndexService _codebaseIndexService;
@@ -33,26 +28,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public CopilotChatPaneViewModel(
         IChatClient chatClient,
-        SecureSettingsStore settingsStore,
-        AppSettingsStore appSettingsStore,
         EditApplicationService editApplicationService,
         ProjectMemoryStore projectMemoryStore,
         CodebaseIndexService codebaseIndexService)
         : base(PaneContentId, "Copilot Chat")
     {
         _chatClient = chatClient;
-        _settingsStore = settingsStore;
-        _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
         _projectMemoryStore = projectMemoryStore;
         _codebaseIndexService = codebaseIndexService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
-
-        HasApiKey = !string.IsNullOrWhiteSpace(_settingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName));
-        HasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_settingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
-
-        LmStudioBaseUrl = _appSettingsStore.Get(LmStudioEmbeddingClient.BaseUrlSettingName) ?? LmStudioEmbeddingClient.DefaultBaseUrl;
-        LmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
     }
 
     public ObservableCollection<ObservableObject> Messages { get; } = [];
@@ -76,18 +61,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     [ObservableProperty]
     private bool useCodebaseSearch;
-
-    [ObservableProperty]
-    private bool hasApiKey;
-
-    [ObservableProperty]
-    private bool hasDeepSeekApiKey;
-
-    [ObservableProperty]
-    private string lmStudioBaseUrl;
-
-    [ObservableProperty]
-    private string lmStudioModel;
 
     [ObservableProperty]
     private string? indexStatus;
@@ -122,38 +95,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         _indexableFiles = filePaths;
         IndexCodebaseCommand.NotifyCanExecuteChanged();
-    }
-
-    public void SaveApiKey(string plaintextKey)
-    {
-        if (string.IsNullOrWhiteSpace(plaintextKey))
-        {
-            return;
-        }
-
-        _settingsStore.SetSecret(OpenRouterChatClient.ApiKeySettingName, plaintextKey.Trim());
-        HasApiKey = true;
-        StatusMessage = "API key saved.";
-    }
-
-    public void SaveDeepSeekApiKey(string plaintextKey)
-    {
-        if (string.IsNullOrWhiteSpace(plaintextKey))
-        {
-            return;
-        }
-
-        _settingsStore.SetSecret(DeepSeekFimClient.ApiKeySettingName, plaintextKey.Trim());
-        HasDeepSeekApiKey = true;
-        StatusMessage = "DeepSeek API key saved.";
-    }
-
-    [RelayCommand]
-    private void SaveLmStudioSettings()
-    {
-        _appSettingsStore.Set(LmStudioEmbeddingClient.BaseUrlSettingName, LmStudioBaseUrl.Trim());
-        _appSettingsStore.Set(LmStudioEmbeddingClient.ModelSettingName, LmStudioModel.Trim());
-        StatusMessage = "LM Studio settings saved.";
     }
 
     private bool CanSend() => !IsStreaming && !string.IsNullOrWhiteSpace(InputText);

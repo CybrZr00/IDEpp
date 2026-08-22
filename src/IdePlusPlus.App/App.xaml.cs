@@ -35,11 +35,15 @@ public partial class App : Application
         _serviceProvider = services.BuildServiceProvider();
 
         // TextEditorHost is constructed by WPF via an implicit DataTemplate (a parameterless
-        // constructor), not DI, so it reaches these two app-wide singletons through the static
+        // constructor), not DI, so it reaches these app-wide singletons through the static
         // EditorServices locator instead. Must be set before the first document tab renders.
         EditorServices.BreakpointManager = _serviceProvider.GetRequiredService<BreakpointManager>();
         EditorServices.DebugLocation = _serviceProvider.GetRequiredService<DebugLocationIndicator>();
+        EditorServices.CaretPosition = _serviceProvider.GetRequiredService<CaretPositionIndicator>();
         EditorServices.CompletionProvider = _serviceProvider.GetRequiredService<DeepSeekFimClient>();
+
+        // Applies the saved theme before the first window renders, to avoid a light-then-dark flash.
+        _serviceProvider.GetRequiredService<ThemeService>().Initialize();
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
@@ -64,9 +68,11 @@ public partial class App : Application
         services.AddSingleton<RunService>();
         services.AddSingleton<BreakpointManager>();
         services.AddSingleton<DebugLocationIndicator>();
+        services.AddSingleton<CaretPositionIndicator>();
         services.AddSingleton<DebugSession>();
         services.AddSingleton<SecureSettingsStore>();
         services.AddSingleton<AppSettingsStore>();
+        services.AddSingleton<ThemeService>();
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());

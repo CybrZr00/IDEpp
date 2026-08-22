@@ -31,11 +31,15 @@
         </HierarchicalDataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
             <TreeView ItemsSource="{Binding RootNodes}"
+                      Background="{DynamicResource PanelBackgroundBrush}"
+                      Foreground="{DynamicResource WindowForegroundBrush}"
                       BorderThickness="0"
                       MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick" />
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
             <TextBox Text="{Binding Text, Mode=OneWay}"
+                     Background="{DynamicResource PanelBackgroundBrush}"
+                     Foreground="{DynamicResource WindowForegroundBrush}"
                      IsReadOnly="True"
                      BorderThickness="0"
                      FontFamily="Consolas"
@@ -56,7 +60,11 @@
             <editor:TextEditorHost />
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CallStackPaneViewModel}">
-            <ListBox ItemsSource="{Binding Frames}" BorderThickness="0" FontFamily="Consolas">
+            <ListBox ItemsSource="{Binding Frames}"
+                     Background="{DynamicResource PanelBackgroundBrush}"
+                     Foreground="{DynamicResource WindowForegroundBrush}"
+                     BorderThickness="0"
+                     FontFamily="Consolas">
                 <ListBox.ItemTemplate>
                     <DataTemplate DataType="{x:Type debug:StackFrameInfo}">
                         <TextBlock>
@@ -71,7 +79,11 @@
             </ListBox>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:LocalsPaneViewModel}">
-            <ListBox ItemsSource="{Binding Variables}" BorderThickness="0" FontFamily="Consolas">
+            <ListBox ItemsSource="{Binding Variables}"
+                     Background="{DynamicResource PanelBackgroundBrush}"
+                     Foreground="{DynamicResource WindowForegroundBrush}"
+                     BorderThickness="0"
+                     FontFamily="Consolas">
                 <ListBox.ItemTemplate>
                     <DataTemplate DataType="{x:Type debug:VariableInfo}">
                         <TextBlock>
@@ -79,7 +91,7 @@
                             <Run Text=" = " />
                             <Run Text="{Binding Value, Mode=OneWay}" />
                             <Run Text=" : " />
-                            <Run Text="{Binding Type, Mode=OneWay}" Foreground="Gray" />
+                            <Run Text="{Binding Type, Mode=OneWay}" Foreground="{DynamicResource MutedForegroundBrush}" />
                         </TextBlock>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -87,13 +99,17 @@
         </DataTemplate>
     </Window.Resources>
 
-    <Grid>
+    <Grid Background="{DynamicResource WindowBackgroundBrush}"
+          TextElement.Foreground="{DynamicResource WindowForegroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Menu Grid.Row="0">
+        <Menu Grid.Row="0"
+              Background="{DynamicResource WindowBackgroundBrush}"
+              Foreground="{DynamicResource WindowForegroundBrush}">
             <MenuItem Header="_File">
                 <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" />
                 <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
@@ -127,6 +143,12 @@
                 <MenuItem Header="Step _Over" InputGestureText="F10" Command="{Binding StepOverCommand}" />
                 <MenuItem Header="Step _Into" InputGestureText="F11" Command="{Binding StepIntoCommand}" />
                 <MenuItem Header="Step Ou_t" InputGestureText="Shift+F11" Command="{Binding StepOutCommand}" />
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="_Dark Mode" IsCheckable="True" IsChecked="{Binding IsDarkTheme, Mode=OneWay}" Command="{Binding ToggleThemeCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="_Settings..." Click="SettingsMenuItem_OnClick" />
             </MenuItem>
         </Menu>
 
@@ -193,5 +215,19 @@
                 </avalonDock:LayoutPanel>
             </avalonDock:LayoutRoot>
         </avalonDock:DockingManager>
+
+        <StatusBar Grid.Row="2"
+                   Background="{DynamicResource WindowBackgroundBrush}"
+                   Foreground="{DynamicResource WindowForegroundBrush}">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusBarText}" />
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding ActiveDocument.SyntaxHighlighting.Name}" Margin="0,0,16,0" />
+                    <TextBlock Text="{Binding CursorPositionText}" />
+                </StackPanel>
+            </StatusBarItem>
+        </StatusBar>
     </Grid>
 </Window>

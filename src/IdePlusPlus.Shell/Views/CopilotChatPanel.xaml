@@ -9,11 +9,11 @@
             <Border Margin="4" Padding="6" CornerRadius="4" MaxWidth="260">
                 <Border.Style>
                     <Style TargetType="Border">
-                        <Setter Property="Background" Value="#F0F0F0" />
+                        <Setter Property="Background" Value="{DynamicResource ChatBubbleAssistantBackgroundBrush}" />
                         <Setter Property="HorizontalAlignment" Value="Left" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsUser}" Value="True">
-                                <Setter Property="Background" Value="#DCEEFF" />
+                                <Setter Property="Background" Value="{DynamicResource ChatBubbleUserBackgroundBrush}" />
                                 <Setter Property="HorizontalAlignment" Value="Right" />
                             </DataTrigger>
                         </Style.Triggers>
@@ -30,10 +30,10 @@
                         <Setter Property="Background" Value="Transparent" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding Kind}" Value="Added">
-                                <Setter Property="Background" Value="#DFF5DF" />
+                                <Setter Property="Background" Value="{DynamicResource DiffAddedBackgroundBrush}" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding Kind}" Value="Removed">
-                                <Setter Property="Background" Value="#FADADA" />
+                                <Setter Property="Background" Value="{DynamicResource DiffRemovedBackgroundBrush}" />
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
@@ -46,7 +46,13 @@
         </DataTemplate>
 
         <DataTemplate DataType="{x:Type toolPanes:EditProposalViewModel}">
-            <Border Margin="4" Padding="8" CornerRadius="4" Background="#FAFAFA" BorderBrush="#DDDDDD" BorderThickness="1" MaxWidth="320">
+            <Border Margin="4"
+                    Padding="8"
+                    CornerRadius="4"
+                    Background="{DynamicResource EditProposalBackgroundBrush}"
+                    BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                    BorderThickness="1"
+                    MaxWidth="320">
                 <StackPanel>
                     <TextBlock Text="{Binding FilePath}" FontWeight="Bold" TextWrapping="Wrap" />
 
@@ -71,7 +77,7 @@
                     <TextBlock Text="{Binding DecisionText}"
                                Margin="0,6,0,0"
                                FontStyle="Italic"
-                               Foreground="Gray"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
                                Visibility="{Binding IsDecided, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
                 </StackPanel>
             </Border>
@@ -82,43 +88,12 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="4">
-            <TextBlock Text="OpenRouter key:" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11" />
-            <PasswordBox x:Name="ApiKeyBox" Width="140" />
-            <Button Content="Save" Click="SaveApiKeyButton_OnClick" Margin="4,0,0,0" Padding="6,0" />
-        </StackPanel>
-
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,4,4">
-            <TextBlock Text="DeepSeek key (inline completion):" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11" />
-            <PasswordBox x:Name="DeepSeekApiKeyBox" Width="100" />
-            <Button Content="Save" Click="SaveDeepSeekApiKeyButton_OnClick" Margin="4,0,0,0" Padding="6,0" />
-        </StackPanel>
-
-        <StackPanel Grid.Row="2" Margin="4,0,4,4">
-            <TextBlock Text="LM Studio (codebase search):" FontSize="11" Margin="0,0,0,2" />
-            <StackPanel Orientation="Horizontal">
-                <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}"
-                         Width="110"
-                         FontSize="11"
-                         ToolTip="Base URL" />
-                <TextBox Text="{Binding LmStudioModel, UpdateSourceTrigger=PropertyChanged}"
-                         Width="90"
-                         FontSize="11"
-                         Margin="4,0,0,0"
-                         ToolTip="Embedding model name, e.g. text-embedding-nomic-embed-text-v1.5" />
-                <Button Content="Save" Command="{Binding SaveLmStudioSettingsCommand}" Margin="4,0,0,0" Padding="6,0" />
-            </StackPanel>
-        </StackPanel>
-
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="4,0,4,4">
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="4,4,4,4">
             <ComboBox ItemsSource="{Binding AvailableModels}"
                       Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
                       IsEditable="True"
@@ -130,33 +105,33 @@
                       FontSize="11" />
         </StackPanel>
 
-        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="4,0,4,4">
-            <CheckBox Content="Use codebase search"
-                      IsChecked="{Binding UseCodebaseSearch}"
-                      VerticalAlignment="Center"
-                      FontSize="11" />
-            <Button Content="Index Codebase" Command="{Binding IndexCodebaseCommand}" Margin="8,0,0,0" Padding="6,0" />
-            <Button Content="Save Memory" Command="{Binding SaveMemoryCommand}" Margin="4,0,0,0" Padding="6,0" />
+        <StackPanel Grid.Row="1" Margin="4,0,4,4">
+            <StackPanel Orientation="Horizontal">
+                <CheckBox Content="Use codebase search"
+                          IsChecked="{Binding UseCodebaseSearch}"
+                          VerticalAlignment="Center"
+                          FontSize="11" />
+                <Button Content="Index Codebase" Command="{Binding IndexCodebaseCommand}" Margin="8,0,0,0" Padding="6,0" />
+                <Button Content="Save Memory" Command="{Binding SaveMemoryCommand}" Margin="4,0,0,0" Padding="6,0" />
+            </StackPanel>
+            <TextBlock Text="{Binding IndexStatus}"
+                       Margin="0,2,0,0"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       FontSize="10"
+                       TextWrapping="Wrap" />
         </StackPanel>
 
-        <TextBlock Grid.Row="4"
-                   Text="{Binding IndexStatus}"
-                   Margin="4,24,4,0"
-                   Foreground="Gray"
-                   FontSize="10"
-                   TextWrapping="Wrap" />
-
-        <ScrollViewer Grid.Row="5" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="2" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
             <ItemsControl ItemsSource="{Binding Messages}" />
         </ScrollViewer>
 
-        <TextBlock Grid.Row="6"
+        <TextBlock Grid.Row="3"
                    Text="{Binding StatusMessage}"
                    Margin="4,0"
-                   Foreground="Gray"
+                   Foreground="{DynamicResource MutedForegroundBrush}"
                    FontSize="11" />
 
-        <Grid Grid.Row="7" Margin="4">
+        <Grid Grid.Row="4" Margin="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />

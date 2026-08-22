@@ -31,7 +31,7 @@ public sealed class OpenRouterChatClient : IChatClient
         var apiKey = _settingsStore.GetSecret(ApiKeySettingName);
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            yield return new StreamError("No OpenRouter API key set. Enter one above and click Save.");
+            yield return new StreamError("No OpenRouter API key set. Add one via Tools > Settings.");
             yield break;
         }
 

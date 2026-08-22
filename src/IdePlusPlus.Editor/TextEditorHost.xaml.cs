@@ -42,10 +42,37 @@ public partial class TextEditorHost : UserControl
         };
 
         Editor.TextArea.PreviewKeyDown += OnEditorPreviewKeyDown;
+        Editor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
+        Editor.GotKeyboardFocus += (_, _) => PublishCaretPosition();
+
+        ApplyEditorTheme();
+        EditorTheme.Changed += ApplyEditorTheme;
 
         DataContextChanged += (_, _) => Rebind();
-        Unloaded += (_, _) => EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
+        Unloaded += (_, _) =>
+        {
+            EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
+            EditorTheme.Changed -= ApplyEditorTheme;
+        };
     }
+
+    private void ApplyEditorTheme()
+    {
+        Editor.Background = EditorTheme.Background;
+        Editor.Foreground = EditorTheme.Foreground;
+        Editor.TextArea.TextView.InvalidateLayer(_currentLineRenderer.Layer);
+    }
+
+    private void OnCaretPositionChanged(object? sender, EventArgs e)
+    {
+        if (Editor.TextArea.IsKeyboardFocusWithin)
+        {
+            PublishCaretPosition();
+        }
+    }
+
+    private void PublishCaretPosition() =>
+        EditorServices.CaretPosition.Update(Editor.TextArea.Caret.Line, Editor.TextArea.Caret.Column);
 
     private void Rebind()
     {
@@ -84,6 +111,10 @@ public partial class TextEditorHost : UserControl
         _boundDocument.TextDocument.TextChanged += OnTextChanged;
 
         UpdateCurrentLineHighlight();
+        if (Editor.TextArea.IsKeyboardFocusWithin)
+        {
+            PublishCaretPosition();
+        }
     }
 
     private void OnTextChanged(object? sender, EventArgs e)
@@ -107,7 +138,7 @@ public partial class TextEditorHost : UserControl
         {
             _xmlFoldingStrategy.UpdateFoldings(_foldingManager, _boundDocument.TextDocument);
         }
-        else if (highlightingName is "C#" or "Json")
+        else if (highlightingName is "C#" or "Json" or "JavaScript" or "C++" or "Java" or "CSS" or "PHP" or "PowerShell")
         {
             _braceFoldingStrategy.UpdateFoldings(_foldingManager, _boundDocument.TextDocument);
         }
