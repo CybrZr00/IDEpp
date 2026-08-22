@@ -18,6 +18,9 @@
     <ProjectReference Include="..\IdePlusPlus.Build\IdePlusPlus.Build.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Run\IdePlusPlus.Run.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Debug\IdePlusPlus.Debug.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Copilot.Core\IdePlusPlus.Copilot.Core.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Copilot.OpenRouter\IdePlusPlus.Copilot.OpenRouter.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

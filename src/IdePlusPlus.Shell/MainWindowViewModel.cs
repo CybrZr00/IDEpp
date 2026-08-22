@@ -144,6 +144,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         SaveCommand.NotifyCanExecuteChanged();
         SaveAsCommand.NotifyCanExecuteChanged();
+        CopilotChat.SetActiveDocument(value);
     }
 
     [RelayCommand]

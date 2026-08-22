@@ -1,0 +1,78 @@
+<UserControl x:Class="IdePlusPlus.Shell.Views.CopilotChatPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes">
+
+    <UserControl.Resources>
+        <DataTemplate DataType="{x:Type toolPanes:ChatMessageViewModel}">
+            <Border Margin="4" Padding="6" CornerRadius="4" MaxWidth="260">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="#F0F0F0" />
+                        <Setter Property="HorizontalAlignment" Value="Left" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsUser}" Value="True">
+                                <Setter Property="Background" Value="#DCEEFF" />
+                                <Setter Property="HorizontalAlignment" Value="Right" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="4">
+            <TextBlock Text="OpenRouter key:" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11" />
+            <PasswordBox x:Name="ApiKeyBox" Width="140" />
+            <Button Content="Save" Click="SaveApiKeyButton_OnClick" Margin="4,0,0,0" Padding="6,0" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,4,4">
+            <ComboBox ItemsSource="{Binding AvailableModels}"
+                      Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
+                      IsEditable="True"
+                      Width="200" />
+            <CheckBox Content="Include current file"
+                      IsChecked="{Binding IncludeCurrentFileContext}"
+                      Margin="8,0,0,0"
+                      VerticalAlignment="Center"
+                      FontSize="11" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="2" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Messages}" />
+        </ScrollViewer>
+
+        <TextBlock Grid.Row="3"
+                   Text="{Binding StatusMessage}"
+                   Margin="4,0"
+                   Foreground="Gray"
+                   FontSize="11" />
+
+        <Grid Grid.Row="4" Margin="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0"
+                     Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MaxHeight="80"
+                     VerticalScrollBarVisibility="Auto"
+                     PreviewKeyDown="InputTextBox_OnKeyDown" />
+            <Button Grid.Column="1" Content="Send" Command="{Binding SendCommand}" Margin="4,0,0,0" Padding="10,0" />
+        </Grid>
+    </Grid>
+</UserControl>

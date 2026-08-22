@@ -1,7 +1,11 @@
+using System.Net.Http;
 using System.Windows;
 using IdePlusPlus.Build;
+using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
+using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell;
@@ -56,6 +60,10 @@ public partial class App : Application
         services.AddSingleton<BreakpointManager>();
         services.AddSingleton<DebugLocationIndicator>();
         services.AddSingleton<DebugSession>();
+        services.AddSingleton<SecureSettingsStore>();
+        services.AddSingleton<HttpClient>();
+        services.AddSingleton<OpenRouterChatClient>();
+        services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

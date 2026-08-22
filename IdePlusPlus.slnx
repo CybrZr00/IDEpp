@@ -2,13 +2,17 @@
   <Folder Name="/src/">
     <Project Path="src/IdePlusPlus.App/IdePlusPlus.App.csproj" />
     <Project Path="src/IdePlusPlus.Build/IdePlusPlus.Build.csproj" />
+    <Project Path="src/IdePlusPlus.Copilot.Core/IdePlusPlus.Copilot.Core.csproj" />
+    <Project Path="src/IdePlusPlus.Copilot.OpenRouter/IdePlusPlus.Copilot.OpenRouter.csproj" />
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />
     <Project Path="src/IdePlusPlus.Editor/IdePlusPlus.Editor.csproj" />
+    <Project Path="src/IdePlusPlus.Infrastructure/IdePlusPlus.Infrastructure.csproj" />
     <Project Path="src/IdePlusPlus.ProjectSystem/IdePlusPlus.ProjectSystem.csproj" />
     <Project Path="src/IdePlusPlus.Run/IdePlusPlus.Run.csproj" />
     <Project Path="src/IdePlusPlus.Shell/IdePlusPlus.Shell.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
   </Folder>
 </Solution>

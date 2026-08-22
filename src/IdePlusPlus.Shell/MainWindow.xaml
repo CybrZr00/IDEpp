@@ -9,6 +9,7 @@
         xmlns:editor="clr-namespace:IdePlusPlus.Editor;assembly=IdePlusPlus.Editor"
         xmlns:projectSystem="clr-namespace:IdePlusPlus.ProjectSystem;assembly=IdePlusPlus.ProjectSystem"
         xmlns:debug="clr-namespace:IdePlusPlus.Debug;assembly=IdePlusPlus.Debug"
+        xmlns:views="clr-namespace:IdePlusPlus.Shell.Views"
         Title="IDE++"
         Height="800"
         Width="1280"
@@ -44,9 +45,7 @@
                      TextChanged="OutputTextBox_OnTextChanged" />
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
-            <TextBlock Text="Copilot chat panel — OpenRouter integration lands in a later milestone."
-                       Margin="8"
-                       TextWrapping="Wrap" />
+            <views:CopilotChatPanel />
         </DataTemplate>
         <DataTemplate DataType="{x:Type local:WelcomeDocumentViewModel}">
             <TextBlock Text="{Binding Message}"
