@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Build;
+using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Run;
@@ -13,9 +15,14 @@ namespace IdePlusPlus.Shell;
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    private static readonly string NetcoredbgPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "IdePlusPlus", "tools", "netcoredbg", "netcoredbg", "netcoredbg.exe");
+
     private readonly EditorWorkspace _editorWorkspace;
     private readonly BuildService _buildService;
     private readonly RunService _runService;
+    private readonly DebugSession _debugSession;
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
@@ -25,18 +32,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OutputPaneViewModel output,
         CopilotChatPaneViewModel copilotChat,
         WelcomeDocumentViewModel welcome,
+        CallStackPaneViewModel callStack,
+        LocalsPaneViewModel locals,
         EditorWorkspace editorWorkspace,
         BuildService buildService,
-        RunService runService)
+        RunService runService,
+        DebugSession debugSession)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
         CopilotChat = copilotChat;
         Welcome = welcome;
+        CallStack = callStack;
+        Locals = locals;
         _editorWorkspace = editorWorkspace;
         _buildService = buildService;
         _runService = runService;
+        _debugSession = debugSession;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
+
+        _debugSession.StateChanged += () => _dispatcher.Invoke(OnDebugStateChanged);
+        _debugSession.OutputReceived += line => _dispatcher.Invoke(() => Output.AppendLine(line.TrimEnd('\r', '\n')));
     }
 
     public SolutionExplorerPaneViewModel SolutionExplorer { get; }
@@ -46,6 +62,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public CopilotChatPaneViewModel CopilotChat { get; }
 
     public WelcomeDocumentViewModel Welcome { get; }
+
+    public CallStackPaneViewModel CallStack { get; }
+
+    public LocalsPaneViewModel Locals { get; }
 
     public ObservableCollection<DocumentViewModel> OpenDocuments => _editorWorkspace.OpenDocuments;
 
@@ -109,7 +129,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         var dialog = new SaveFileDialog
         {
-            FileName = document.FilePath is null ? "Untitled" : System.IO.Path.GetFileName(document.FilePath),
+            FileName = document.FilePath is null ? "Untitled" : Path.GetFileName(document.FilePath),
         };
 
         if (dialog.ShowDialog() == true)
@@ -193,4 +213,120 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [RelayCommand(CanExecute = nameof(IsRunning))]
     private void Stop() => _runService.Stop();
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartDebuggingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StopDebuggingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ContinueDebuggingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StepOverCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StepIntoCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StepOutCommand))]
+    private bool isDebugging;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ContinueDebuggingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StepOverCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StepIntoCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StepOutCommand))]
+    private bool isStoppedAtBreakpoint;
+
+    private void OnDebugStateChanged()
+    {
+        IsDebugging = _debugSession.IsActive;
+        IsStoppedAtBreakpoint = _debugSession.IsStopped;
+
+        if (IsStoppedAtBreakpoint)
+        {
+            _ = RefreshCallStackAndLocalsAsync();
+        }
+        else
+        {
+            CallStack.Frames.Clear();
+            Locals.Variables.Clear();
+        }
+    }
+
+    private async Task RefreshCallStackAndLocalsAsync()
+    {
+        var frames = await _debugSession.GetStackTraceAsync();
+        CallStack.Frames.Clear();
+        foreach (var frame in frames)
+        {
+            CallStack.Frames.Add(frame);
+        }
+
+        Locals.Variables.Clear();
+        if (frames.Count > 0)
+        {
+            var variables = await _debugSession.GetLocalsAsync(frames[0].Id);
+            foreach (var variable in variables)
+            {
+                Locals.Variables.Add(variable);
+            }
+        }
+    }
+
+    private bool CanStartDebugging() => _runnableProjectPath is not null && !IsDebugging;
+
+    [RelayCommand(CanExecute = nameof(CanStartDebugging))]
+    private async Task StartDebuggingAsync()
+    {
+        Output.Clear();
+        Output.AppendLine("Building for debug...");
+        var dllPath = await ResolveOutputDllAsync(_runnableProjectPath!);
+        if (dllPath is null)
+        {
+            Output.AppendLine("Build failed; cannot start debugging.");
+            return;
+        }
+
+        Output.AppendLine($"Starting debugger: {dllPath}");
+        try
+        {
+            await _debugSession.StartAsync(NetcoredbgPath, dllPath, Path.GetDirectoryName(_runnableProjectPath)!);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Failed to start debugging: {ex.Message}");
+        }
+    }
+
+    private async Task<string?> ResolveOutputDllAsync(string projectPath)
+    {
+        var exitCode = await _buildService.BuildAsync(
+            projectPath,
+            line => _dispatcher.Invoke(() => Output.AppendLine(line)));
+        if (exitCode != 0)
+        {
+            return null;
+        }
+
+        var projectDirectory = Path.GetDirectoryName(projectPath)!;
+        var projectName = Path.GetFileNameWithoutExtension(projectPath);
+        var binDirectory = Path.Combine(projectDirectory, "bin", "Debug");
+        if (!Directory.Exists(binDirectory))
+        {
+            return null;
+        }
+
+        return Directory
+            .GetFiles(binDirectory, $"{projectName}.dll", SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsDebugging))]
+    private Task StopDebuggingAsync() => _debugSession.StopAsync();
+
+    [RelayCommand(CanExecute = nameof(IsStoppedAtBreakpoint))]
+    private Task ContinueDebuggingAsync() => _debugSession.ContinueAsync();
+
+    [RelayCommand(CanExecute = nameof(IsStoppedAtBreakpoint))]
+    private Task StepOverAsync() => _debugSession.StepOverAsync();
+
+    [RelayCommand(CanExecute = nameof(IsStoppedAtBreakpoint))]
+    private Task StepIntoAsync() => _debugSession.StepIntoAsync();
+
+    [RelayCommand(CanExecute = nameof(IsStoppedAtBreakpoint))]
+    private Task StepOutAsync() => _debugSession.StepOutAsync();
 }

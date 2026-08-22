@@ -29,6 +29,8 @@ public partial class MainWindow : Window
         // window's DataTemplates (keyed by view model type) render each one.
         SolutionExplorerAnchorable.Content = viewModel.SolutionExplorer;
         OutputAnchorable.Content = viewModel.Output;
+        CallStackAnchorable.Content = viewModel.CallStack;
+        LocalsAnchorable.Content = viewModel.Locals;
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
         WelcomeDocument.Content = viewModel.Welcome;
 
@@ -36,12 +38,15 @@ public partial class MainWindow : Window
         {
             [SolutionExplorerPaneViewModel.PaneContentId] = viewModel.SolutionExplorer,
             [OutputPaneViewModel.PaneContentId] = viewModel.Output,
+            [CallStackPaneViewModel.PaneContentId] = viewModel.CallStack,
+            [LocalsPaneViewModel.PaneContentId] = viewModel.Locals,
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
         Loaded += (_, _) => RestoreLayout();
         Closing += (_, _) => SaveLayout();
+        Closing += (_, _) => viewModel.StopDebuggingCommand.Execute(null); // best effort; avoids orphaning netcoredbg
     }
 
     private void RestoreLayout()

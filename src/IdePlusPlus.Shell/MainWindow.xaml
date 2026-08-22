@@ -8,12 +8,21 @@
         xmlns:local="clr-namespace:IdePlusPlus.Shell"
         xmlns:editor="clr-namespace:IdePlusPlus.Editor;assembly=IdePlusPlus.Editor"
         xmlns:projectSystem="clr-namespace:IdePlusPlus.ProjectSystem;assembly=IdePlusPlus.ProjectSystem"
+        xmlns:debug="clr-namespace:IdePlusPlus.Debug;assembly=IdePlusPlus.Debug"
         Title="IDE++"
         Height="800"
         Width="1280"
         WindowStartupLocation="CenterScreen"
         AllowDrop="True"
         Drop="MainWindow_OnDrop">
+
+    <Window.InputBindings>
+        <KeyBinding Key="F5" Command="{Binding StartDebuggingCommand}" />
+        <KeyBinding Key="F5" Modifiers="Control" Command="{Binding ContinueDebuggingCommand}" />
+        <KeyBinding Key="F10" Command="{Binding StepOverCommand}" />
+        <KeyBinding Key="F11" Command="{Binding StepIntoCommand}" />
+        <KeyBinding Key="F11" Modifiers="Shift" Command="{Binding StepOutCommand}" />
+    </Window.InputBindings>
 
     <Window.Resources>
         <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
@@ -46,6 +55,36 @@
         </DataTemplate>
         <DataTemplate DataType="{x:Type editor:DocumentViewModel}">
             <editor:TextEditorHost />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:CallStackPaneViewModel}">
+            <ListBox ItemsSource="{Binding Frames}" BorderThickness="0" FontFamily="Consolas">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type debug:StackFrameInfo}">
+                        <TextBlock>
+                            <Run Text="{Binding Name, Mode=OneWay}" />
+                            <Run Text=" — " />
+                            <Run Text="{Binding FilePath, Mode=OneWay}" />
+                            <Run Text=":" />
+                            <Run Text="{Binding Line, Mode=OneWay}" />
+                        </TextBlock>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:LocalsPaneViewModel}">
+            <ListBox ItemsSource="{Binding Variables}" BorderThickness="0" FontFamily="Consolas">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type debug:VariableInfo}">
+                        <TextBlock>
+                            <Run Text="{Binding Name, Mode=OneWay}" FontWeight="Bold" />
+                            <Run Text=" = " />
+                            <Run Text="{Binding Value, Mode=OneWay}" />
+                            <Run Text=" : " />
+                            <Run Text="{Binding Type, Mode=OneWay}" Foreground="Gray" />
+                        </TextBlock>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
         </DataTemplate>
     </Window.Resources>
 
@@ -80,6 +119,15 @@
                 <Separator />
                 <MenuItem Header="_Run" Command="{Binding RunCommand}" />
                 <MenuItem Header="_Stop" Command="{Binding StopCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Debug">
+                <MenuItem Header="Start De_bugging" InputGestureText="F5" Command="{Binding StartDebuggingCommand}" />
+                <MenuItem Header="Sto_p Debugging" Command="{Binding StopDebuggingCommand}" />
+                <Separator />
+                <MenuItem Header="_Continue" InputGestureText="Ctrl+F5" Command="{Binding ContinueDebuggingCommand}" />
+                <MenuItem Header="Step _Over" InputGestureText="F10" Command="{Binding StepOverCommand}" />
+                <MenuItem Header="Step _Into" InputGestureText="F11" Command="{Binding StepIntoCommand}" />
+                <MenuItem Header="Step Ou_t" InputGestureText="Shift+F11" Command="{Binding StepOutCommand}" />
             </MenuItem>
         </Menu>
 
@@ -124,6 +172,14 @@
                             <avalonDock:LayoutAnchorable x:Name="OutputAnchorable"
                                                           ContentId="{x:Static toolPanes:OutputPaneViewModel.PaneContentId}"
                                                           Title="Output"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="CallStackAnchorable"
+                                                          ContentId="{x:Static toolPanes:CallStackPaneViewModel.PaneContentId}"
+                                                          Title="Call Stack"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="LocalsAnchorable"
+                                                          ContentId="{x:Static toolPanes:LocalsPaneViewModel.PaneContentId}"
+                                                          Title="Locals"
                                                           CanClose="False" />
                         </avalonDock:LayoutAnchorablePane>
                     </avalonDock:LayoutPanel>

@@ -1,5 +1,6 @@
 using System.Windows;
 using IdePlusPlus.Build;
+using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Run;
@@ -25,6 +26,12 @@ public partial class App : Application
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
 
+        // TextEditorHost is constructed by WPF via an implicit DataTemplate (a parameterless
+        // constructor), not DI, so it reaches these two app-wide singletons through the static
+        // EditorServices locator instead. Must be set before the first document tab renders.
+        EditorServices.BreakpointManager = _serviceProvider.GetRequiredService<BreakpointManager>();
+        EditorServices.DebugLocation = _serviceProvider.GetRequiredService<DebugLocationIndicator>();
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
     }
@@ -40,10 +47,15 @@ public partial class App : Application
         services.AddSingleton<SolutionExplorerPaneViewModel>();
         services.AddSingleton<OutputPaneViewModel>();
         services.AddSingleton<CopilotChatPaneViewModel>();
+        services.AddSingleton<CallStackPaneViewModel>();
+        services.AddSingleton<LocalsPaneViewModel>();
         services.AddSingleton<WelcomeDocumentViewModel>();
         services.AddSingleton<EditorWorkspace>();
         services.AddSingleton<BuildService>();
         services.AddSingleton<RunService>();
+        services.AddSingleton<BreakpointManager>();
+        services.AddSingleton<DebugLocationIndicator>();
+        services.AddSingleton<DebugSession>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

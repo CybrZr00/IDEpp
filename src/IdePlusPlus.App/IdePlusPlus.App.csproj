@@ -16,6 +16,7 @@
     <ProjectReference Include="..\IdePlusPlus.ProjectSystem\IdePlusPlus.ProjectSystem.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Build\IdePlusPlus.Build.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Run\IdePlusPlus.Run.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Debug\IdePlusPlus.Debug.csproj" />
   </ItemGroup>
 
 </Project>

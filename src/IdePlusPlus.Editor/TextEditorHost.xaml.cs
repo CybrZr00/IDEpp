@@ -1,6 +1,8 @@
 using System.Windows.Controls;
+using System.Windows.Input;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
+using ICSharpCode.AvalonEdit.Rendering;
 using ICSharpCode.AvalonEdit.Search;
 using IdePlusPlus.Editor.Folding;
 
@@ -10,6 +12,8 @@ public partial class TextEditorHost : UserControl
 {
     private readonly BraceFoldingStrategy _braceFoldingStrategy = new();
     private readonly XmlFoldingStrategy _xmlFoldingStrategy = new();
+    private readonly BreakpointMargin _breakpointMargin = new(EditorServices.BreakpointManager);
+    private readonly CurrentLineBackgroundRenderer _currentLineRenderer = new();
     private FoldingManager? _foldingManager;
     private DocumentViewModel? _boundDocument;
 
@@ -17,7 +21,22 @@ public partial class TextEditorHost : UserControl
     {
         InitializeComponent();
         SearchPanel.Install(Editor);
+
+        Editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
+        Editor.TextArea.TextView.BackgroundRenderers.Add(_currentLineRenderer);
+        EditorServices.DebugLocation.Changed += OnDebugLocationChanged;
+
+        Editor.TextArea.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.F9 && _boundDocument?.FilePath is { } filePath)
+            {
+                EditorServices.BreakpointManager.Toggle(filePath, Editor.TextArea.Caret.Line);
+                e.Handled = true;
+            }
+        };
+
         DataContextChanged += (_, _) => Rebind();
+        Unloaded += (_, _) => EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
     }
 
     private void Rebind()
@@ -34,6 +53,8 @@ public partial class TextEditorHost : UserControl
         }
 
         _boundDocument = DataContext as DocumentViewModel;
+        _breakpointMargin.FilePath = _boundDocument?.FilePath;
+
         if (_boundDocument is null)
         {
             Editor.Document = null;
@@ -49,6 +70,8 @@ public partial class TextEditorHost : UserControl
             UpdateFoldings();
             _boundDocument.TextDocument.TextChanged += OnTextChanged;
         }
+
+        UpdateCurrentLineHighlight();
     }
 
     private void OnTextChanged(object? sender, EventArgs e) => UpdateFoldings();
@@ -69,5 +92,17 @@ public partial class TextEditorHost : UserControl
         {
             _braceFoldingStrategy.UpdateFoldings(_foldingManager, _boundDocument.TextDocument);
         }
+    }
+
+    private void OnDebugLocationChanged() => UpdateCurrentLineHighlight();
+
+    private void UpdateCurrentLineHighlight()
+    {
+        var debugLocation = EditorServices.DebugLocation;
+        var isCurrentFile = _boundDocument?.FilePath is not null
+            && string.Equals(_boundDocument.FilePath, debugLocation.FilePath, StringComparison.OrdinalIgnoreCase);
+
+        _currentLineRenderer.CurrentLine = isCurrentFile ? debugLocation.Line : null;
+        Editor.TextArea.TextView.InvalidateLayer(_currentLineRenderer.Layer);
     }
 }
