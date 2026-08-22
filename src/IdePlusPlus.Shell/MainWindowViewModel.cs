@@ -27,6 +27,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
+    private LaunchProfile? _currentLaunchProfile;
+    private bool _debugBrowserLaunched;
 
     public MainWindowViewModel(
         SolutionExplorerPaneViewModel solutionExplorer,
@@ -58,7 +60,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _themeService.Changed += () => _dispatcher.Invoke(() => IsDarkTheme = _themeService.IsDark);
 
         _debugSession.StateChanged += () => _dispatcher.Invoke(OnDebugStateChanged);
-        _debugSession.OutputReceived += line => _dispatcher.Invoke(() => Output.AppendLine(line.TrimEnd('\r', '\n')));
+        _debugSession.OutputReceived += line => _dispatcher.Invoke(() =>
+        {
+            var trimmed = line.TrimEnd('\r', '\n');
+            Output.AppendLine(trimmed);
+
+            if (!_debugBrowserLaunched && _currentLaunchProfile is { LaunchBrowser: true }
+                && KestrelUrlDetector.TryExtractListeningUrl(trimmed) is { } url)
+            {
+                _debugBrowserLaunched = true;
+                BrowserLauncher.Open(url);
+            }
+        });
 
         EditorServices.CaretPosition.Changed += () => _dispatcher.Invoke(() =>
             CursorPositionText = $"Ln {EditorServices.CaretPosition.Line}, Col {EditorServices.CaretPosition.Column}");
@@ -330,10 +343,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        _currentLaunchProfile = LaunchSettingsLoader.Load(_runnableProjectPath!);
+        _debugBrowserLaunched = false;
+
         Output.AppendLine($"Starting debugger: {dllPath}");
         try
         {
-            await _debugSession.StartAsync(NetcoredbgPath, dllPath, Path.GetDirectoryName(_runnableProjectPath)!);
+            await _debugSession.StartAsync(
+                NetcoredbgPath,
+                dllPath,
+                Path.GetDirectoryName(_runnableProjectPath)!,
+                _currentLaunchProfile?.EnvironmentVariables);
         }
         catch (Exception ex)
         {

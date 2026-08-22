@@ -21,5 +21,6 @@
     <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Run.Tests/IdePlusPlus.Run.Tests.csproj" />
   </Folder>
 </Solution>

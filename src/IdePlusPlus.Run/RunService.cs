@@ -28,8 +28,28 @@ public sealed class RunService
         startInfo.ArgumentList.Add("--project");
         startInfo.ArgumentList.Add(projectPath);
 
+        // `dotnet run` already resolves launchSettings.json's env vars/URLs itself - the only thing
+        // missing versus Visual Studio's F5 is opening a browser, so that's all this adds.
+        var launchProfile = LaunchSettingsLoader.Load(projectPath);
+        var browserLaunched = false;
+
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not { } line)
+            {
+                return;
+            }
+
+            onOutputLine(line);
+
+            if (!browserLaunched && launchProfile is { LaunchBrowser: true }
+                && KestrelUrlDetector.TryExtractListeningUrl(line) is { } url)
+            {
+                browserLaunched = true;
+                BrowserLauncher.Open(url);
+            }
+        };
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
         process.Exited += (_, _) =>
         {

@@ -30,7 +30,11 @@ public sealed class DebugSession
 
     public bool IsStopped { get; private set; }
 
-    public async Task StartAsync(string debugAdapterExecutablePath, string programPath, string workingDirectory)
+    public async Task StartAsync(
+        string debugAdapterExecutablePath,
+        string programPath,
+        string workingDirectory,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         if (!File.Exists(debugAdapterExecutablePath))
         {
@@ -75,6 +79,7 @@ public sealed class DebugSession
             program = programPath,
             cwd = workingDirectory,
             stopAtEntry = false,
+            env = environmentVariables ?? new Dictionary<string, string>(),
         });
 
         await client.SendRequestAsync("configurationDone");
