@@ -7,6 +7,8 @@ using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
+using IdePlusPlus.Infrastructure;
+using IdePlusPlus.NuGet;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell.ToolPanes;
@@ -16,6 +18,11 @@ namespace IdePlusPlus.Shell;
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    /// <summary>Public so SettingsViewModel can read/write the same key - mirrors how
+    /// CopilotChatPaneViewModel.SystemPromptSettingKey is shared with SettingsViewModel. Defaults to
+    /// on when unset (see the inverted TryParse idiom in LoadSolutionAsync).</summary>
+    public const string RestoreOnSolutionLoadSettingKey = "RestoreNuGetOnSolutionLoad";
+
     private static readonly string NetcoredbgPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "IdePlusPlus", "tools", "netcoredbg", "netcoredbg", "netcoredbg.exe");
@@ -26,6 +33,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly DebugSession _debugSession;
     private readonly ThemeService _themeService;
     private readonly McpServerManager _mcpServerManager;
+    private readonly NuGetService _nuGetService;
+    private readonly AppSettingsStore _appSettingsStore;
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
@@ -40,6 +49,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ErrorListPaneViewModel errorList,
         CopilotChatPaneViewModel copilotChat,
         SourceControlPaneViewModel sourceControl,
+        NuGetPaneViewModel nuGet,
         WelcomeDocumentViewModel welcome,
         CallStackPaneViewModel callStack,
         LocalsPaneViewModel locals,
@@ -48,13 +58,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RunService runService,
         DebugSession debugSession,
         ThemeService themeService,
-        McpServerManager mcpServerManager)
+        McpServerManager mcpServerManager,
+        NuGetService nuGetService,
+        AppSettingsStore appSettingsStore)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
         ErrorList = errorList;
         CopilotChat = copilotChat;
         SourceControl = sourceControl;
+        NuGet = nuGet;
         Welcome = welcome;
         CallStack = callStack;
         Locals = locals;
@@ -64,6 +77,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _debugSession = debugSession;
         _themeService = themeService;
         _mcpServerManager = mcpServerManager;
+        _nuGetService = nuGetService;
+        _appSettingsStore = appSettingsStore;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         isDarkTheme = _themeService.IsDark;
@@ -104,6 +119,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public CopilotChatPaneViewModel CopilotChat { get; }
 
     public SourceControlPaneViewModel SourceControl { get; }
+
+    public NuGetPaneViewModel NuGet { get; }
 
     public WelcomeDocumentViewModel Welcome { get; }
 
@@ -365,10 +382,32 @@ public sealed partial class MainWindowViewModel : ObservableObject
             RunCommand.NotifyCanExecuteChanged();
             StartDebuggingCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");
+
+            // Default-on: only skipped if the user has explicitly turned it off in Settings.
+            var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
+            if (restoreOnLoad)
+            {
+                _ = NuGetRestoreOnLoadAsync(solutionPath);
+            }
         }
         catch (Exception ex)
         {
             Output.AppendLine($"Failed to load solution: {ex.Message}");
+        }
+    }
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync - a restore failure or exception here must
+    /// never break solution loading, just get logged to Output.</summary>
+    private async Task NuGetRestoreOnLoadAsync(string solutionPath)
+    {
+        try
+        {
+            var (success, output) = await _nuGetService.RestoreAsync(solutionPath, line => _dispatcher.Invoke(() => Output.AppendLine(line)));
+            Output.AppendLine(success ? "NuGet restore completed." : "NuGet restore failed.");
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"NuGet restore failed: {ex.Message}");
         }
     }
 
@@ -397,6 +436,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Output.AppendLine($"Startup project set to {node.Name}.");
     }
+
+    /// <summary>Called from the Solution Explorer Project node's "Manage NuGet Packages..." context
+    /// menu item. There's no existing pattern anywhere in this codebase for programmatically
+    /// activating/focusing an AvalonDock anchorable (ErrorList/SourceControl don't do it either) - so
+    /// this is MVP-scoped to just populating the pane; the user clicks its tab manually.</summary>
+    public void OpenNuGetPane(SolutionTreeNode node) => _ = NuGet.SetProjectAsync(node);
 
     public void OpenTreeNode(SolutionTreeNode node)
     {

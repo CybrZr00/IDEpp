@@ -16,6 +16,7 @@ using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Run;
+using IdePlusPlus.NuGet;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
@@ -167,6 +168,9 @@ public partial class App : Application
         services.AddSingleton<CodebaseIndexService>();
         services.AddSingleton<GitService>();
         services.AddSingleton<SourceControlPaneViewModel>();
+        services.AddSingleton<NuGetService>();
+        services.AddSingleton<NuGetSearchClient>();
+        services.AddSingleton<NuGetPaneViewModel>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

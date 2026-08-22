@@ -255,6 +255,9 @@
         <DataTemplate DataType="{x:Type toolPanes:SourceControlPaneViewModel}">
             <views:SourceControlPanel />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:NuGetPaneViewModel}">
+            <views:NuGetPanel />
+        </DataTemplate>
         <DataTemplate DataType="{x:Type local:WelcomeDocumentViewModel}">
             <TextBlock Text="{Binding Message}"
                        Margin="16"
@@ -433,6 +436,10 @@
                         <avalonDock:LayoutAnchorable x:Name="SourceControlAnchorable"
                                                       ContentId="{x:Static toolPanes:SourceControlPaneViewModel.PaneContentId}"
                                                       Title="Git"
+                                                      CanClose="False" />
+                        <avalonDock:LayoutAnchorable x:Name="NuGetAnchorable"
+                                                      ContentId="{x:Static toolPanes:NuGetPaneViewModel.PaneContentId}"
+                                                      Title="NuGet"
                                                       CanClose="False" />
                     </avalonDock:LayoutAnchorablePane>
 

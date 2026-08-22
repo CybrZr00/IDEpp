@@ -43,6 +43,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         lmStudioBaseUrl = _appSettingsStore.Get(LmStudioEmbeddingClient.BaseUrlSettingName) ?? LmStudioEmbeddingClient.DefaultBaseUrl;
         lmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
         systemPrompt = _appSettingsStore.Get(CopilotChatPaneViewModel.SystemPromptSettingKey) ?? "";
+        restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -81,6 +82,13 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string? statusMessage;
+
+    /// <summary>Defaults to on when unset - mirrors the inverted bool.TryParse idiom used wherever a
+    /// setting should default true (see MainWindowViewModel.LoadSolutionAsync, which consumes this
+    /// same key). Saved immediately on change, the same way CopilotChatPaneViewModel's checkbox-style
+    /// bool settings (IsAutoMode/IsPlanMode) save themselves rather than needing a separate button.</summary>
+    [ObservableProperty]
+    private bool restoreNuGetOnSolutionLoad;
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -139,6 +147,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.SystemPromptSettingKey, SystemPrompt);
         StatusMessage = "System prompt saved.";
     }
+
+    partial void OnRestoreNuGetOnSolutionLoadChanged(bool value) =>
+        _appSettingsStore.Set(MainWindowViewModel.RestoreOnSolutionLoadSettingKey, value.ToString());
 
     [RelayCommand]
     private void AddMcpServer() => McpServers.Add(new McpServerRowViewModel());

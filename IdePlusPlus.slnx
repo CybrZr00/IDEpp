@@ -13,6 +13,7 @@
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />
     <Project Path="src/IdePlusPlus.Editor/IdePlusPlus.Editor.csproj" />
     <Project Path="src/IdePlusPlus.Infrastructure/IdePlusPlus.Infrastructure.csproj" />
+    <Project Path="src/IdePlusPlus.NuGet/IdePlusPlus.NuGet.csproj" />
     <Project Path="src/IdePlusPlus.PluginContracts/IdePlusPlus.PluginContracts.csproj" />
     <Project Path="src/IdePlusPlus.ProjectSystem/IdePlusPlus.ProjectSystem.csproj" />
     <Project Path="src/IdePlusPlus.Run/IdePlusPlus.Run.csproj" />
@@ -29,6 +30,7 @@
     <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Infrastructure.Tests/IdePlusPlus.Infrastructure.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.NuGet.Tests/IdePlusPlus.NuGet.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Run.Tests/IdePlusPlus.Run.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Shell.Tests/IdePlusPlus.Shell.Tests.csproj" />

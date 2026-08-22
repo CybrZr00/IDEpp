@@ -61,6 +61,7 @@ public partial class MainWindow : Window
         // window's DataTemplates (keyed by view model type) render each one.
         SolutionExplorerAnchorable.Content = viewModel.SolutionExplorer;
         SourceControlAnchorable.Content = viewModel.SourceControl;
+        NuGetAnchorable.Content = viewModel.NuGet;
         OutputAnchorable.Content = viewModel.Output;
         ErrorListAnchorable.Content = viewModel.ErrorList;
         CallStackAnchorable.Content = viewModel.CallStack;
@@ -72,6 +73,7 @@ public partial class MainWindow : Window
         {
             [SolutionExplorerPaneViewModel.PaneContentId] = viewModel.SolutionExplorer,
             [SourceControlPaneViewModel.PaneContentId] = viewModel.SourceControl,
+            [NuGetPaneViewModel.PaneContentId] = viewModel.NuGet,
             [OutputPaneViewModel.PaneContentId] = viewModel.Output,
             [ErrorListPaneViewModel.PaneContentId] = viewModel.ErrorList,
             [CallStackPaneViewModel.PaneContentId] = viewModel.CallStack,
@@ -287,8 +289,12 @@ public partial class MainWindow : Window
         var menuItem = new MenuItem { Header = "Set as Startup Project" };
         menuItem.Click += (_, _) => viewModel.SetStartupProject(node);
 
+        var nuGetMenuItem = new MenuItem { Header = "Manage NuGet Packages..." };
+        nuGetMenuItem.Click += (_, _) => viewModel.OpenNuGetPane(node);
+
         var contextMenu = new ContextMenu { PlacementTarget = element };
         contextMenu.Items.Add(menuItem);
+        contextMenu.Items.Add(nuGetMenuItem);
         contextMenu.IsOpen = true;
     }
 

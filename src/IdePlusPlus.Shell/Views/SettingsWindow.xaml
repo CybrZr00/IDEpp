@@ -67,6 +67,11 @@
 
             <Button Content="Save LM Studio Settings" Command="{Binding SaveLmStudioSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" />
 
+            <TextBlock Text="NuGet" FontWeight="Bold" Margin="0,0,0,8" />
+            <CheckBox Content="Restore NuGet packages on solution load"
+                      IsChecked="{Binding RestoreNuGetOnSolutionLoad}"
+                      Margin="0,0,0,16" />
+
             <TextBlock Text="MCP Servers" FontWeight="Bold" Margin="0,16,0,4" />
             <TextBlock Text="Tools (Playwright, Context7, etc.) the assistant can call during chat. Launched locally as configured here - most need Node.js/npx installed."
                        FontSize="11"

@@ -90,8 +90,31 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       in the reported session is unconfirmed (no log file existed to check), but it closes a real
       gap either way.
 - [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
-      debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right and
-      out of scope for this pass; left as-is below for future planning.
+      debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right.
+      Grounded, file-level designs for all five (produced by a 5-way parallel codebase survey plus a
+      cross-check synthesis for conflicts/shared-infra/hidden dependencies) now live in
+      [bigger-bets-designs.md](bigger-bets-designs.md). Implementation order, per the synthesis
+      (tractability and value-per-risk first, riskiest/most novel last; no feature's MVP hard-blocks
+      on another's): **1. NuGet package management → 2. Multi-project debug/attach →
+      3. Test Explorer → 4. Roslyn IntelliSense/diagnostics → 5. Plugin API v2 + sandboxing.**
+      In progress, one feature at a time with full build/test/launch verification between each.
+  - [x] **1. NuGet package management** — new `IdePlusPlus.NuGet` project (`NuGetService` shells to
+        `dotnet.exe` for list/add/remove/restore, mirroring `GitService`'s `ArgumentList`-only
+        process-spawn pattern with `BuildService`-style streamed output for the slow operations;
+        `NuGetSearchClient` queries nuget.org's public v3 search API through the app's existing
+        shared `HttpClient` with an 8s timeout), a new docked NuGet tool pane (opened per-project via
+        a new "Manage NuGet Packages..." Solution Explorer context-menu item, alongside — not
+        replacing — "Set as Startup Project"), an Add Package dialog, and a default-on
+        "Restore NuGet packages on solution load" setting. Every mutation re-runs `dotnet list
+        package` from disk rather than trusting an optimistic in-memory update, since this repo's
+        Central Package Management setup means `dotnet add/remove` mutates the solution-wide
+        `Directory.Packages.props`, not just the target project's `.csproj`. New
+        `IdePlusPlus.NuGet.Tests` project (14 tests, real integration tests against `dotnet.exe` and
+        a scratch classlib project — not mocks, matching this repo's existing test philosophy) plus
+        unit tests for the search client's error/timeout handling via a fake `HttpMessageHandler`.
+        Verified: full-solution build (0 warnings/errors), full test suite (179 tests across 15
+        projects, all passing), and a real launch smoke test. No existing file's behavior changed
+        beyond the named integration points (`GitService`/`BuildService` untouched).
 
 **Verification performed**: every milestone above was verified with `dotnet build` (0 warnings/errors)
 and `dotnet test` (105 tests passing across 12 test projects, up from 7 projects/~60 tests at the
