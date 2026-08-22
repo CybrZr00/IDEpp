@@ -39,6 +39,11 @@ public sealed partial class EditProposalViewModel : ObservableObject
     [ObservableProperty]
     private string? decisionText;
 
+    /// <summary>True only once Accept() has actually written the change - false for Reject, and
+    /// false for a conflict (the file changed since this was proposed). Auto Mode uses this to
+    /// decide whether it's safe to let the model keep going past this proposal.</summary>
+    public bool WasApplied { get; private set; }
+
     public void UpdateStreaming(EditProposalEvent proposalEvent)
     {
         if (proposalEvent.FilePathPreview is { } filePathPreview)
@@ -70,8 +75,9 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private void Accept()
     {
         var result = _applicationService.Apply(_operation!, _fullPath!, _originalContentSnapshot!);
+        WasApplied = result == ApplyResult.Applied;
         IsDecided = true;
-        DecisionText = result == ApplyResult.Applied
+        DecisionText = WasApplied
             ? "Accepted"
             : "Couldn't apply - the file changed since this was proposed.";
     }

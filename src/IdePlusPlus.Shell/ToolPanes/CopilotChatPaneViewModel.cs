@@ -332,11 +332,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// read-only tools and MCP tools alike) and feeding their results back for the model to
     /// continue, looping until a turn produces no further tool calls.
     ///
-    /// A propose_edit/propose_plan call ends the loop immediately: a proposal is terminal until the
-    /// user accepts or rejects it. Without that check, a proposal emitted in the same turn as a
-    /// tool call would be dropped from history entirely (only executed tool calls are recorded),
-    /// leaving the model unable to see it had already proposed - which pushes it to propose again
-    /// and keep calling tools.
+    /// A propose_plan call always ends the loop - a plan needs an explicit human Approve click no
+    /// matter what. A propose_edit call ends the loop too, UNLESS Auto Mode is on and every edit
+    /// proposed in that turn actually applied, in which case a synthetic note is appended to
+    /// history (nothing else records that the edit happened - see below) and the loop continues, so
+    /// an auto-accepted edit doesn't just silently end the conversation. In manual mode a proposal
+    /// remains terminal until the user decides it, same as always.
     /// </summary>
     private async Task RunAssistantTurnsAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
     {
@@ -348,25 +349,47 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             for (var iteration = 0; iteration < maxIterations; iteration++)
             {
                 var turn = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
-                if (turn.ProducedProposal || turn.Calls.Count == 0)
+
+                if (turn.Calls.Count > 0)
+                {
+                    history.Add(new ChatMessage(
+                        ChatRole.Assistant,
+                        assistantMessage.Text,
+                        ToolCalls: turn.Calls.Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString())).ToList()));
+
+                    foreach (var call in turn.Calls)
+                    {
+                        var callViewModel = new McpToolCallViewModel(call.Name!);
+                        _dispatcher.Invoke(() => Messages.Add(callViewModel));
+
+                        var (isError, text) = await ExecuteToolAsync(call, _streamCancellation.Token);
+                        _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
+
+                        history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
+                    }
+                }
+
+                var action = AssistantTurnPolicy.Decide(
+                    toolCallCount: turn.Calls.Count,
+                    editProposalCount: turn.EditProposals.Count,
+                    allEditProposalsApplied: turn.EditProposals.Count > 0 && turn.EditProposals.All(p => p.WasApplied),
+                    producedPlanProposal: turn.ProducedPlanProposal,
+                    isAutoMode: IsAutoMode);
+
+                if (action == AssistantTurnAction.Stop)
                 {
                     break;
                 }
 
-                history.Add(new ChatMessage(
-                    ChatRole.Assistant,
-                    assistantMessage.Text,
-                    ToolCalls: turn.Calls.Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString())).ToList()));
-
-                foreach (var call in turn.Calls)
+                if (action == AssistantTurnAction.ContinueWithAppliedEditsNote)
                 {
-                    var callViewModel = new McpToolCallViewModel(call.Name!);
-                    _dispatcher.Invoke(() => Messages.Add(callViewModel));
-
-                    var (isError, text) = await ExecuteToolAsync(call, _streamCancellation.Token);
-                    _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
-
-                    history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
+                    // Nothing in `history` records the propose_edit call itself (it's rendered to
+                    // Messages, never replayed as a tool call/tool result) - without this, the model
+                    // has no way to know its edit actually landed, and no prompt to keep going.
+                    var summary = string.Join("\n", turn.EditProposals.Select(p => $"- Applied edit to {p.FilePath}."));
+                    history.Add(new ChatMessage(
+                        ChatRole.User,
+                        $"{summary}\n\nContinue with the rest of the task if there's more to do, or let the user know you're finished."));
                 }
 
                 // The assistant text and tool results from this iteration are now final - checkpoint
@@ -445,7 +468,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
-    private sealed record TurnResult(List<PendingMcpCall> Calls, bool ProducedProposal);
+    private sealed record TurnResult(List<PendingMcpCall> Calls, List<EditProposalViewModel> EditProposals, bool ProducedPlanProposal);
 
     private async Task<TurnResult> StreamOneTurnAsync(
         List<ChatMessage> history, ChatMessageViewModel assistantMessage, CancellationToken cancellationToken)
@@ -511,8 +534,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             });
         }
 
-        var producedProposal = proposalsByToolCallId.Count > 0 || planProposalsByToolCallId.Count > 0;
-        return new TurnResult(mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList(), producedProposal);
+        return new TurnResult(
+            mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList(),
+            proposalsByToolCallId.Values.Where(p => p.IsComplete).ToList(),
+            planProposalsByToolCallId.Count > 0);
     }
 
     private static void AccumulateMcpCall(ToolCallDelta delta, Dictionary<int, PendingMcpCall> calls)

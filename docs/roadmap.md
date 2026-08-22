@@ -61,6 +61,19 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       finished, so a crash, kill, or app close during a long agentic turn lost the entire conversation,
       defeating the feature's purpose. Now checkpoints on each user message, after each tool-loop
       iteration, and on window close (per-message/per-iteration, never per-token).
+- [x] Auto Mode "stuck after one edit" bug, found in live use immediately after the Plan Mode fix
+      above: raising `AutoModeMaxToolLoopIterations` to 30 had been inert for the common case,
+      because nothing ever made the loop *continue* past a proposal Auto Mode had already
+      auto-accepted - the "a proposal ends the turn" rule from the Plan Mode fix applied
+      unconditionally, so even a successfully-applied auto-accepted edit still stopped the
+      conversation cold, with no summary and no attempt at the rest of the task. Fixed by continuing
+      the loop (with a synthetic note, since nothing else records that the edit landed) exactly when
+      Auto Mode resolved every edit proposed in that turn - a plan proposal still always stops the
+      turn regardless of Auto Mode, and manual mode is unchanged. Given this exact control flow has
+      now caused two live bugs in one session, the decision itself was pulled out into a pure
+      `AssistantTurnPolicy.Decide` and given its own `IdePlusPlus.Shell.Tests` project (Shell had zero
+      coverage until now) covering every combination of tool-calls/edit-proposals/plan-proposal/
+      Auto-Mode state.
 - [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
       debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right and
       out of scope for this pass; left as-is below for future planning.

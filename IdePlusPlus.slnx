@@ -31,6 +31,7 @@
     <Project Path="tests/IdePlusPlus.Infrastructure.Tests/IdePlusPlus.Infrastructure.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Run.Tests/IdePlusPlus.Run.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Shell.Tests/IdePlusPlus.Shell.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.SourceControl.Tests/IdePlusPlus.SourceControl.Tests.csproj" />
   </Folder>
 </Solution>
