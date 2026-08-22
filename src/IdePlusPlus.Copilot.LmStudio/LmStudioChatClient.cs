@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Infrastructure;
 
@@ -48,6 +49,38 @@ public sealed class LmStudioChatClient : IChatClient
             {
                 yield return streamEvent;
             }
+        }
+    }
+
+    /// <summary>
+    /// Lists model ids the server currently knows about (GET /v1/models), so the chat panel can
+    /// offer a picker instead of the user having to remember/retype an exact model id. Returns an
+    /// empty list rather than throwing if the server is unreachable or the response is unexpected -
+    /// callers treat "no models" and "server down" the same way (fall back to manual entry).
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
+    {
+        var baseUrl = (_settingsStore.Get(BaseUrlSettingName) ?? DefaultBaseUrl).TrimEnd('/');
+
+        try
+        {
+            using var response = await _httpClient.GetAsync($"{baseUrl}/models", cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return [];
+            }
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var data = JsonNode.Parse(json)?["data"]?.AsArray() ?? [];
+            return data
+                .Select(m => m?["id"]?.GetValue<string>())
+                .Where(id => !string.IsNullOrEmpty(id))
+                .Select(id => id!)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            return [];
         }
     }
 

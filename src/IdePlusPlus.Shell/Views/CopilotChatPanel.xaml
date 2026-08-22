@@ -128,10 +128,21 @@
                 <ComboBox ItemsSource="{Binding AvailableModels}"
                           Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
                           IsEditable="True"
-                          Width="150"
+                          Width="120"
                           FontSize="11"
                           Margin="4,0,0,0" />
+                <Button Content="⟳"
+                        Command="{Binding RefreshLmStudioModelsCommand}"
+                        Visibility="{Binding IsLmStudioProvider, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
+                        ToolTip="Refresh model list from LM Studio"
+                        Width="24"
+                        Margin="4,0,0,0"
+                        Padding="0" />
             </StackPanel>
+            <TextBlock Text="Fetching models…"
+                       FontSize="10"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       Visibility="{Binding IsRefreshingModels, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
             <CheckBox Content="Include current file"
                       IsChecked="{Binding IncludeCurrentFileContext}"
                       Margin="0,4,0,0"

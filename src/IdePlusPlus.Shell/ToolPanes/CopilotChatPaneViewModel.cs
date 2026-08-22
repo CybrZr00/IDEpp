@@ -63,17 +63,28 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
         selectedModel = ModelSettingFor(selectedProvider) ?? DefaultModelFor(selectedProvider);
+
+        AvailableModels = new ObservableCollection<string>(
+            selectedProvider == ProviderLmStudio ? [] : OpenRouterModels);
+
+        if (selectedProvider == ProviderLmStudio)
+        {
+            _ = RefreshLmStudioModelsAsync();
+        }
     }
 
     public ObservableCollection<ObservableObject> Messages { get; } = [];
 
-    public ObservableCollection<string> AvailableModels { get; } =
+    private static readonly string[] OpenRouterModels =
     [
         "anthropic/claude-sonnet-4.5",
         "openai/gpt-5",
         "deepseek/deepseek-v4-pro",
         "google/gemini-3-pro",
     ];
+
+    /// <summary>The model picker's dropdown contents - the fixed OpenRouter list, or whatever LM Studio's /v1/models last reported.</summary>
+    public ObservableCollection<string> AvailableModels { get; }
 
     public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio];
 
@@ -82,6 +93,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     [ObservableProperty]
     private string selectedModel;
+
+    [ObservableProperty]
+    private bool isRefreshingModels;
+
+    public bool IsLmStudioProvider => SelectedProvider == ProviderLmStudio;
 
     [ObservableProperty]
     private string inputText = "";
@@ -419,10 +435,53 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private static string DefaultModelFor(string provider) => provider == ProviderLmStudio ? "" : "anthropic/claude-sonnet-4.5";
 
+    [RelayCommand]
+    private async Task RefreshLmStudioModelsAsync()
+    {
+        IsRefreshingModels = true;
+        try
+        {
+            var models = await _lmStudioClient.GetAvailableModelsAsync();
+
+            AvailableModels.Clear();
+            foreach (var model in models)
+            {
+                AvailableModels.Add(model);
+            }
+
+            if (models.Count == 0)
+            {
+                StatusMessage = "Couldn't reach LM Studio - check the base URL in Tools > Settings and that it's running.";
+            }
+            else if (string.IsNullOrWhiteSpace(SelectedModel) || !models.Contains(SelectedModel))
+            {
+                SelectedModel = models[0];
+            }
+        }
+        finally
+        {
+            IsRefreshingModels = false;
+        }
+    }
+
     partial void OnSelectedProviderChanged(string value)
     {
         _appSettingsStore.Set(ProviderSettingKey, value);
         SelectedModel = ModelSettingFor(value) ?? DefaultModelFor(value);
+        OnPropertyChanged(nameof(IsLmStudioProvider));
+
+        if (value == ProviderLmStudio)
+        {
+            _ = RefreshLmStudioModelsAsync();
+        }
+        else
+        {
+            AvailableModels.Clear();
+            foreach (var model in OpenRouterModels)
+            {
+                AvailableModels.Add(model);
+            }
+        }
     }
 
     partial void OnSelectedModelChanged(string value) =>
