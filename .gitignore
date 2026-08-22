@@ -1,0 +1,16 @@
+## .NET / Visual Studio
+bin/
+obj/
+*.user
+.vs/
+
+## Rider
+.idea/
+
+## IDE++ local state (per-project copilot memory, API keys, layout cache)
+.ideplusplus/
+*.log
+
+## OS
+Thumbs.db
+.DS_Store

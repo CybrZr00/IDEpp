@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IdePlusPlus.App/IdePlusPlus.App.csproj" />
+    <Project Path="src/IdePlusPlus.Shell/IdePlusPlus.Shell.csproj" />
+  </Folder>
+</Solution>
