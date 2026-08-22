@@ -11,6 +11,7 @@
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />
     <Project Path="src/IdePlusPlus.Editor/IdePlusPlus.Editor.csproj" />
     <Project Path="src/IdePlusPlus.Infrastructure/IdePlusPlus.Infrastructure.csproj" />
+    <Project Path="src/IdePlusPlus.PluginContracts/IdePlusPlus.PluginContracts.csproj" />
     <Project Path="src/IdePlusPlus.ProjectSystem/IdePlusPlus.ProjectSystem.csproj" />
     <Project Path="src/IdePlusPlus.Run/IdePlusPlus.Run.csproj" />
     <Project Path="src/IdePlusPlus.Shell/IdePlusPlus.Shell.csproj" />

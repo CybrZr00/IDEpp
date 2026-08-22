@@ -68,6 +68,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public OutputPaneViewModel Output { get; }
 
+    public ObservableCollection<PluginMenuCommand> PluginCommands { get; } = [];
+
+    public void AddPluginCommand(string header, Action execute) =>
+        _dispatcher.Invoke(() => PluginCommands.Add(new PluginMenuCommand(header, execute)));
+
     public CopilotChatPaneViewModel CopilotChat { get; }
 
     public WelcomeDocumentViewModel Welcome { get; }

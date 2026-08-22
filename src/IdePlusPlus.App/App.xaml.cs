@@ -46,6 +46,11 @@ public partial class App : Application
         _serviceProvider.GetRequiredService<ThemeService>().Initialize();
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
+
+        // After MainWindowViewModel exists (plugins can add Tools > Plugins commands to it) but
+        // before Show(), so a plugin-registered command is present in the menu from the first frame.
+        _serviceProvider.GetRequiredService<PluginLoader>().LoadPlugins();
+
         mainWindow.Show();
     }
 
@@ -73,6 +78,8 @@ public partial class App : Application
         services.AddSingleton<SecureSettingsStore>();
         services.AddSingleton<AppSettingsStore>();
         services.AddSingleton<ThemeService>();
+        services.AddSingleton<PluginHost>();
+        services.AddSingleton<PluginLoader>();
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());

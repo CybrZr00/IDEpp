@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A worked example of the IIdePlugin contract (see IdePlusPlus.PluginContracts), and the live
+    integration test for the plugin seam - built independently of IdePlusPlus.slnx (like
+    SampleConsoleApp), then its output DLL is copied into %LOCALAPPDATA%\IdePlusPlus\plugins for
+    IDE++ to discover at startup.
+  -->
+
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\IdePlusPlus.PluginContracts\IdePlusPlus.PluginContracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Ini.xshd">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

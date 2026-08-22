@@ -25,6 +25,7 @@
     <ProjectReference Include="..\IdePlusPlus.Copilot.DeepSeek\IdePlusPlus.Copilot.DeepSeek.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Copilot.Embeddings\IdePlusPlus.Copilot.Embeddings.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Copilot.Memory\IdePlusPlus.Copilot.Memory.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.PluginContracts\IdePlusPlus.PluginContracts.csproj" />
   </ItemGroup>
 
 </Project>

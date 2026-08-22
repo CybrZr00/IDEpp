@@ -149,6 +149,15 @@
             </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Settings..." Click="SettingsMenuItem_OnClick" />
+                <Separator />
+                <MenuItem Header="Plugins" ItemsSource="{Binding PluginCommands}">
+                    <MenuItem.ItemContainerStyle>
+                        <Style TargetType="MenuItem">
+                            <Setter Property="Header" Value="{Binding Header}" />
+                            <Setter Property="Command" Value="{Binding Command}" />
+                        </Style>
+                    </MenuItem.ItemContainerStyle>
+                </MenuItem>
             </MenuItem>
         </Menu>
 
