@@ -4,7 +4,6 @@
              xmlns:avalonEdit="http://icsharpcode.net/sharpdevelop/avalonedit">
     <avalonEdit:TextEditor x:Name="Editor"
                             FontFamily="Consolas"
-                            FontSize="13"
                             ShowLineNumbers="True"
                             HorizontalScrollBarVisibility="Auto"
                             VerticalScrollBarVisibility="Auto" />

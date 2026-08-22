@@ -7,6 +7,7 @@ using AvalonDock;
 using AvalonDock.Serializer.Xml;
 using AvalonDock.Themes;
 using IdePlusPlus.Build;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
     private readonly AppSettingsStore _appSettingsStore;
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
+    private readonly DeepSeekFimClient _deepSeekFimClient;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -42,12 +44,14 @@ public partial class MainWindow : Window
         SecureSettingsStore secureSettingsStore,
         AppSettingsStore appSettingsStore,
         McpServerManager mcpServerManager,
-        McpServerConfigStore mcpServerConfigStore)
+        McpServerConfigStore mcpServerConfigStore,
+        DeepSeekFimClient deepSeekFimClient)
     {
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
+        _deepSeekFimClient = deepSeekFimClient;
 
         DataContext = viewModel;
         InitializeComponent();
@@ -297,7 +301,7 @@ public partial class MainWindow : Window
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore);
+        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient);
         var window = new SettingsWindow(settingsViewModel) { Owner = this };
         window.ShowDialog();
     }

@@ -27,6 +27,7 @@
             <TextBlock Text="DeepSeek API key (inline completion):" Margin="0,0,0,2" />
             <DockPanel Margin="0,0,0,4">
                 <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveDeepSeekApiKeyButton_OnClick" />
+                <Button DockPanel.Dock="Right" Content="Test" Padding="10,2" Margin="6,0,0,0" Click="TestDeepSeekConnectionButton_OnClick" />
                 <PasswordBox x:Name="DeepSeekApiKeyBox" />
             </DockPanel>
             <TextBlock Text="{Binding DeepSeekApiKeyStatusText}"

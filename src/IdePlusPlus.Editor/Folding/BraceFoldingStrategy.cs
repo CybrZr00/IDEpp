@@ -12,12 +12,20 @@ public sealed class BraceFoldingStrategy
 {
     public void UpdateFoldings(FoldingManager manager, TextDocument document)
     {
-        var newFoldings = new List<NewFolding>();
+        var newFoldings = ComputeFoldRegions(document.Text).Select(r => new NewFolding(r.Start, r.End)).ToList();
+        manager.UpdateFoldings(newFoldings, -1);
+    }
+
+    /// <summary>The pure part of the strategy - offset pairs sorted by start offset, with no
+    /// dependency on AvalonEdit's FoldingManager, so it's directly unit-testable.</summary>
+    public static IReadOnlyList<(int Start, int End)> ComputeFoldRegions(string text)
+    {
+        var regions = new List<(int Start, int End)>();
         var startOffsets = new Stack<int>();
 
-        for (var offset = 0; offset < document.TextLength; offset++)
+        for (var offset = 0; offset < text.Length; offset++)
         {
-            var c = document.GetCharAt(offset);
+            var c = text[offset];
             if (c == '{')
             {
                 startOffsets.Push(offset);
@@ -27,12 +35,12 @@ public sealed class BraceFoldingStrategy
                 var start = startOffsets.Pop();
                 if (offset > start)
                 {
-                    newFoldings.Add(new NewFolding(start, offset + 1));
+                    regions.Add((start, offset + 1));
                 }
             }
         }
 
-        newFoldings.Sort((a, b) => a.StartOffset.CompareTo(b.StartOffset));
-        manager.UpdateFoldings(newFoldings, -1);
+        regions.Sort((a, b) => a.Start.CompareTo(b.Start));
+        return regions;
     }
 }

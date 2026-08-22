@@ -7,11 +7,14 @@ namespace IdePlusPlus.Editor;
 
 public sealed partial class DocumentViewModel : ObservableObject
 {
-    private DocumentViewModel(string contentId, string? initialFilePath, TextDocument textDocument)
+    private readonly string _untitledDisplayName;
+
+    private DocumentViewModel(string contentId, string? initialFilePath, TextDocument textDocument, string untitledDisplayName = "Untitled")
     {
         ContentId = contentId;
         TextDocument = textDocument;
         filePath = initialFilePath;
+        _untitledDisplayName = untitledDisplayName;
         SyntaxHighlighting = HighlightingRegistry.GetHighlightingFor(initialFilePath);
 
         // Wired after the initial content/path above, so loading a file's text into
@@ -38,13 +41,13 @@ public sealed partial class DocumentViewModel : ObservableObject
     {
         get
         {
-            var name = FilePath is null ? "Untitled" : Path.GetFileName(FilePath);
+            var name = FilePath is null ? _untitledDisplayName : Path.GetFileName(FilePath);
             return IsDirty ? name + "*" : name;
         }
     }
 
     public static DocumentViewModel ForNewFile(string untitledName) =>
-        new($"untitled://{untitledName}", null, new TextDocument());
+        new($"untitled://{untitledName}", null, new TextDocument(), untitledName);
 
     public static DocumentViewModel ForExistingFile(string filePath) =>
         new(filePath, filePath, new TextDocument(File.ReadAllText(filePath)));

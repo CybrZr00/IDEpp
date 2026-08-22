@@ -23,6 +23,7 @@
     <Project Path="tests/IdePlusPlus.Build.Tests/IdePlusPlus.Build.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Core.Tests/IdePlusPlus.Copilot.Core.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Diff.Tests/IdePlusPlus.Copilot.Diff.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Editor.Tests/IdePlusPlus.Editor.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Memory.Tests/IdePlusPlus.Copilot.Memory.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />

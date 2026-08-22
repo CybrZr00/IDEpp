@@ -25,6 +25,9 @@
         <KeyBinding Key="F11" Command="{Binding StepIntoCommand}" />
         <KeyBinding Key="F11" Modifiers="Shift" Command="{Binding StepOutCommand}" />
         <KeyBinding Key="G" Modifiers="Control" Command="{x:Static local:MainWindow.GoToLineCommand}" />
+        <KeyBinding Key="OemPlus" Modifiers="Control" Command="{Binding ZoomInCommand}" />
+        <KeyBinding Key="OemMinus" Modifiers="Control" Command="{Binding ZoomOutCommand}" />
+        <KeyBinding Key="D0" Modifiers="Control" Command="{Binding ResetZoomCommand}" />
     </Window.InputBindings>
 
     <Window.CommandBindings>
@@ -368,6 +371,11 @@
             </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="_Dark Mode" IsCheckable="True" IsChecked="{Binding IsDarkTheme, Mode=OneWay}" Command="{Binding ToggleThemeCommand}" />
+                <MenuItem Header="_Word Wrap" IsCheckable="True" IsChecked="{Binding IsWordWrapEnabled, Mode=OneWay}" Command="{Binding ToggleWordWrapCommand}" />
+                <Separator />
+                <MenuItem Header="Zoom _In" InputGestureText="Ctrl+=" Command="{Binding ZoomInCommand}" />
+                <MenuItem Header="Zoom _Out" InputGestureText="Ctrl+-" Command="{Binding ZoomOutCommand}" />
+                <MenuItem Header="_Reset Zoom" InputGestureText="Ctrl+0" Command="{Binding ResetZoomCommand}" />
             </MenuItem>
             <MenuItem Header="_Git" DataContext="{Binding SourceControl}">
                 <MenuItem Header="_Refresh Status" Command="{Binding RefreshCommand}" />

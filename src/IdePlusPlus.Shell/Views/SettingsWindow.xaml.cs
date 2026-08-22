@@ -26,5 +26,8 @@ public partial class SettingsWindow : Window
         DeepSeekApiKeyBox.Clear();
     }
 
+    private async void TestDeepSeekConnectionButton_OnClick(object sender, RoutedEventArgs e) =>
+        await _viewModel.TestDeepSeekConnectionAsync(DeepSeekApiKeyBox.Password);
+
     private void CloseButton_OnClick(object sender, RoutedEventArgs e) => Close();
 }

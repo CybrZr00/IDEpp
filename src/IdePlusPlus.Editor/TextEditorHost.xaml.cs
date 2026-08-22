@@ -49,12 +49,17 @@ public partial class TextEditorHost : UserControl
         ApplyEditorTheme();
         EditorTheme.Changed += ApplyEditorTheme;
 
+        ApplyEditorSettings();
+        EditorSettings.Changed += ApplyEditorSettings;
+        Editor.PreviewMouseWheel += OnEditorPreviewMouseWheel;
+
         DataContextChanged += (_, _) => Rebind();
         Unloaded += (_, _) =>
         {
             EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
             EditorServices.GoToLine.Requested -= OnGoToLineRequested;
             EditorTheme.Changed -= ApplyEditorTheme;
+            EditorSettings.Changed -= ApplyEditorSettings;
         };
     }
 
@@ -63,6 +68,31 @@ public partial class TextEditorHost : UserControl
         Editor.Background = EditorTheme.Background;
         Editor.Foreground = EditorTheme.Foreground;
         Editor.TextArea.TextView.InvalidateLayer(_currentLineRenderer.Layer);
+    }
+
+    private void ApplyEditorSettings()
+    {
+        Editor.WordWrap = EditorSettings.WordWrap;
+        Editor.FontSize = EditorSettings.FontSize;
+    }
+
+    private static void OnEditorPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            return;
+        }
+
+        if (e.Delta > 0)
+        {
+            EditorSettings.ZoomIn();
+        }
+        else
+        {
+            EditorSettings.ZoomOut();
+        }
+
+        e.Handled = true;
     }
 
     private void OnCaretPositionChanged(object? sender, EventArgs e)

@@ -69,6 +69,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         isDarkTheme = _themeService.IsDark;
         _themeService.Changed += () => _dispatcher.Invoke(() => IsDarkTheme = _themeService.IsDark);
 
+        isWordWrapEnabled = EditorSettings.WordWrap;
+        EditorSettings.Changed += () => _dispatcher.Invoke(() => IsWordWrapEnabled = EditorSettings.WordWrap);
+
         _debugSession.StateChanged += () => _dispatcher.Invoke(OnDebugStateChanged);
         _debugSession.OutputReceived += line => _dispatcher.Invoke(() =>
         {
@@ -159,6 +162,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool isDarkTheme;
 
     [ObservableProperty]
+    private bool isWordWrapEnabled;
+
+    [ObservableProperty]
     private string cursorPositionText = "Ln 1, Col 1";
 
     public string StatusBarText
@@ -181,6 +187,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [RelayCommand]
     private void ToggleTheme() => _themeService.Toggle();
+
+    [RelayCommand]
+    private void ToggleWordWrap() => EditorSettings.ToggleWordWrap();
+
+    [RelayCommand]
+    private void ZoomIn() => EditorSettings.ZoomIn();
+
+    [RelayCommand]
+    private void ZoomOut() => EditorSettings.ZoomOut();
+
+    [RelayCommand]
+    private void ResetZoom() => EditorSettings.ResetZoom();
 
     [RelayCommand]
     private void NewDocument() => ActiveDocument = _editorWorkspace.NewDocument();

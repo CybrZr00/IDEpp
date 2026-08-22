@@ -23,17 +23,20 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly AppSettingsStore _appSettingsStore;
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
+    private readonly DeepSeekFimClient _deepSeekFimClient;
 
     public SettingsViewModel(
         SecureSettingsStore secureSettingsStore,
         AppSettingsStore appSettingsStore,
         McpServerManager mcpServerManager,
-        McpServerConfigStore mcpServerConfigStore)
+        McpServerConfigStore mcpServerConfigStore,
+        DeepSeekFimClient deepSeekFimClient)
     {
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
+        _deepSeekFimClient = deepSeekFimClient;
 
         hasApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName));
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
@@ -103,6 +106,23 @@ public sealed partial class SettingsViewModel : ObservableObject
         _secureSettingsStore.SetSecret(DeepSeekFimClient.ApiKeySettingName, plaintextKey.Trim());
         HasDeepSeekApiKey = true;
         StatusMessage = "DeepSeek API key saved.";
+    }
+
+    /// <summary>Tests whatever key is currently typed in the box, or the already-saved key if the
+    /// box is empty - DeepSeek has no dedicated health-check endpoint, so this is a real (tiny)
+    /// completion request.</summary>
+    public async Task TestDeepSeekConnectionAsync(string typedKey)
+    {
+        var apiKey = string.IsNullOrWhiteSpace(typedKey) ? _secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName) : typedKey.Trim();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            StatusMessage = "Enter or save a DeepSeek API key first.";
+            return;
+        }
+
+        StatusMessage = "Testing DeepSeek connection...";
+        var (success, message) = await _deepSeekFimClient.TestConnectionAsync(apiKey, CancellationToken.None);
+        StatusMessage = success ? $"DeepSeek: {message}" : $"DeepSeek test failed: {message}";
     }
 
     [RelayCommand]

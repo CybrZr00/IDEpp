@@ -8,16 +8,18 @@ public sealed class EditorWorkspace
 {
     private const int MaxRecentFiles = 10;
 
-    private static readonly string RecentFilesPath = Path.Combine(
+    private static readonly string DefaultRecentFilesPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "IdePlusPlus",
         "recent-files.json");
 
+    private readonly string _recentFilesPath;
     private int _untitledCount;
 
-    public EditorWorkspace()
+    public EditorWorkspace(string? recentFilesPath = null)
     {
-        RecentFiles = new ObservableCollection<string>(LoadRecentFiles());
+        _recentFilesPath = recentFilesPath ?? DefaultRecentFilesPath;
+        RecentFiles = new ObservableCollection<string>(LoadRecentFiles(_recentFilesPath));
     }
 
     public ObservableCollection<DocumentViewModel> OpenDocuments { get; } = [];
@@ -112,16 +114,16 @@ public sealed class EditorWorkspace
         SaveRecentFiles();
     }
 
-    private static List<string> LoadRecentFiles()
+    private static List<string> LoadRecentFiles(string path)
     {
         try
         {
-            if (!File.Exists(RecentFilesPath))
+            if (!File.Exists(path))
             {
                 return [];
             }
 
-            var json = File.ReadAllText(RecentFilesPath);
+            var json = File.ReadAllText(path);
             return JsonSerializer.Deserialize<List<string>>(json) ?? [];
         }
         catch (Exception)
@@ -133,8 +135,8 @@ public sealed class EditorWorkspace
 
     private void SaveRecentFiles()
     {
-        var directory = Path.GetDirectoryName(RecentFilesPath)!;
+        var directory = Path.GetDirectoryName(_recentFilesPath)!;
         Directory.CreateDirectory(directory);
-        File.WriteAllText(RecentFilesPath, JsonSerializer.Serialize(RecentFiles));
+        File.WriteAllText(_recentFilesPath, JsonSerializer.Serialize(RecentFiles));
     }
 }

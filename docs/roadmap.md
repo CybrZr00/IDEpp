@@ -35,6 +35,18 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       (via `SideBySideDiffBuilder` + a word chunker, reused by both the AI edit-proposal diff and the
       new Git diff view). Not done: multi-file `propose_edit` (atomicity across files is a real design
       question, not just plumbing) and MCP resources/prompts support (tools-only remains as-is).
+- [x] Editor quick wins — breakpoints now persist across restarts (`BreakpointManager` gained the same
+      constructor-injectable-path pattern as `AppSettingsStore`/`SecureSettingsStore`), DeepSeek FIM
+      failures are logged via Serilog instead of failing silently, a "Test Connection" button in
+      Settings makes a real (tiny) completion request, and word-wrap/zoom (`View` menu, Ctrl+=/Ctrl+-
+      /Ctrl+0, Ctrl+MouseWheel) mirror the existing `EditorTheme` static-broadcast pattern via a new
+      `EditorSettings`. Added `IdePlusPlus.Editor.Tests` (previously zero coverage) for
+      `DocumentViewModel`/`EditorWorkspace`/`BreakpointManager`/`BraceFoldingStrategy` (the last given a
+      small refactor to separate its pure fold-region computation from the AvalonEdit `FoldingManager`
+      call, for testability) - writing those tests caught and fixed a real bug: `ForNewFile`'s `Title`
+      always showed the literal string "Untitled" regardless of the actual untitled name passed in
+      (e.g. "Untitled2"), even though `ContentId` used it correctly, so multiple new files were
+      indistinguishable in their tab titles.
 - [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
       debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right and
       out of scope for this pass; left as-is below for future planning.

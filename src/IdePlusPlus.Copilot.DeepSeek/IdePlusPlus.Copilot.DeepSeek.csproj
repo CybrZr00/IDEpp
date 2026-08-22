@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Serilog" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\IdePlusPlus.Editor\IdePlusPlus.Editor.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
   </ItemGroup>
