@@ -26,6 +26,160 @@
     </Window.InputBindings>
 
     <Window.Resources>
+        <!--
+            WPF's default (Aero2) MenuItem control template hardcodes its dropdown/submenu popup
+            chrome to OS system colors, not to any resource this app's theme can reach - overriding
+            SystemColors.MenuBrushKey/MenuTextBrushKey has no effect on it (tried, confirmed live:
+            the popup stayed light regardless of theme). The only reliable fix is a real
+            ControlTemplate of our own. Implicit (no x:Key) so it applies to every MenuItem in this
+            Window's logical tree, including nested submenus and the Solution Explorer context menu.
+        -->
+        <Style TargetType="MenuItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Style.Triggers>
+                <Trigger Property="Role" Value="TopLevelHeader">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="MenuItem">
+                                <Border x:Name="Border" Background="{TemplateBinding Background}">
+                                    <Grid>
+                                        <ContentPresenter Margin="6,3"
+                                                           ContentSource="Header"
+                                                           RecognizesAccessKey="True"
+                                                           VerticalAlignment="Center" />
+                                        <Popup x:Name="Popup"
+                                               Placement="Bottom"
+                                               IsOpen="{TemplateBinding IsSubmenuOpen}"
+                                               AllowsTransparency="True"
+                                               Focusable="False"
+                                               PopupAnimation="Fade">
+                                            <Border Background="{DynamicResource PanelBackgroundBrush}"
+                                                    BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                                                    BorderThickness="1">
+                                                <ScrollViewer CanContentScroll="True">
+                                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                                                </ScrollViewer>
+                                            </Border>
+                                        </Popup>
+                                    </Grid>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsHighlighted" Value="True">
+                                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                                    </Trigger>
+                                    <Trigger Property="IsSubmenuOpen" Value="True">
+                                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+                <Trigger Property="Role" Value="SubmenuHeader">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="MenuItem">
+                                <Border x:Name="Border" Background="{TemplateBinding Background}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="16" />
+                                        </Grid.ColumnDefinitions>
+                                        <ContentPresenter Grid.Column="1"
+                                                           Margin="4,4"
+                                                           ContentSource="Header"
+                                                           RecognizesAccessKey="True"
+                                                           VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{TemplateBinding InputGestureText}"
+                                                   Margin="16,0,4,0"
+                                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                                   VerticalAlignment="Center" />
+                                        <Path Grid.Column="3"
+                                              Data="M0,0 L4,4 L0,8 Z"
+                                              Fill="{TemplateBinding Foreground}"
+                                              VerticalAlignment="Center"
+                                              HorizontalAlignment="Center" />
+                                        <Popup x:Name="Popup"
+                                               Placement="Right"
+                                               IsOpen="{TemplateBinding IsSubmenuOpen}"
+                                               AllowsTransparency="True"
+                                               Focusable="False"
+                                               PopupAnimation="Fade">
+                                            <Border Background="{DynamicResource PanelBackgroundBrush}"
+                                                    BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                                                    BorderThickness="1">
+                                                <ScrollViewer CanContentScroll="True">
+                                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                                                </ScrollViewer>
+                                            </Border>
+                                        </Popup>
+                                    </Grid>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsHighlighted" Value="True">
+                                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+                <Trigger Property="Role" Value="SubmenuItem">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="MenuItem">
+                                <Border x:Name="Border" Background="{TemplateBinding Background}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Path x:Name="CheckMark"
+                                              Grid.Column="0"
+                                              Data="M1,4 L4,7 L9,0"
+                                              Stroke="{TemplateBinding Foreground}"
+                                              StrokeThickness="1.5"
+                                              Visibility="Collapsed"
+                                              Margin="4,0,0,0"
+                                              VerticalAlignment="Center" />
+                                        <ContentPresenter Grid.Column="1"
+                                                           Margin="4,4"
+                                                           ContentSource="Header"
+                                                           RecognizesAccessKey="True"
+                                                           VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{TemplateBinding InputGestureText}"
+                                                   Margin="16,0,8,0"
+                                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsHighlighted" Value="True">
+                                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                                    </Trigger>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
             <!-- Foreground must be set explicitly here, not just on the TreeView - the default
                  themed TreeViewItem template hardcodes its own (light-theme) text color via

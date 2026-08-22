@@ -12,5 +12,6 @@
     <SolidColorBrush x:Key="DiffRemovedBackgroundBrush" Color="#FADADA" />
     <SolidColorBrush x:Key="EditProposalBackgroundBrush" Color="#FAFAFA" />
     <SolidColorBrush x:Key="EditProposalBorderBrush" Color="#DDDDDD" />
+    <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#E5E5E5" />
 
 </ResourceDictionary>
