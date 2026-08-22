@@ -4,7 +4,11 @@ namespace IdePlusPlus.Build;
 
 public sealed class BuildService
 {
-    public async Task<int> BuildAsync(string projectOrSolutionPath, Action<string> onOutputLine, CancellationToken cancellationToken = default)
+    public async Task<int> BuildAsync(
+        string projectOrSolutionPath,
+        Action<string> onOutputLine,
+        string? targetFramework = null,
+        CancellationToken cancellationToken = default)
     {
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -16,6 +20,11 @@ public sealed class BuildService
         };
         startInfo.ArgumentList.Add("build");
         startInfo.ArgumentList.Add(projectOrSolutionPath);
+        if (targetFramework is not null)
+        {
+            startInfo.ArgumentList.Add("--framework");
+            startInfo.ArgumentList.Add(targetFramework);
+        }
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };

@@ -27,6 +27,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
+    private string? _runnableTargetFramework;
     private LaunchProfile? _currentLaunchProfile;
     private bool _debugBrowserLaunched;
     private SolutionTreeNode? _solutionRoot;
@@ -237,6 +238,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
 
             _runnableProjectPath = startupProject?.FullPath;
+            _runnableTargetFramework = startupProject?.TargetFramework;
             RunCommand.NotifyCanExecuteChanged();
             StartDebuggingCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");
@@ -261,6 +263,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         _runnableProjectPath = node.FullPath;
+        _runnableTargetFramework = node.TargetFramework;
         RunCommand.NotifyCanExecuteChanged();
         StartDebuggingCommand.NotifyCanExecuteChanged();
 
@@ -308,7 +311,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 Output.AppendLine($"Process exited with code {exitCode}.");
                 IsRunning = false;
-            }));
+            }),
+            _runnableTargetFramework);
     }
 
     [RelayCommand(CanExecute = nameof(IsRunning))]
@@ -376,7 +380,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         Output.Clear();
         Output.AppendLine("Building for debug...");
-        var dllPath = await ResolveOutputDllAsync(_runnableProjectPath!);
+        var dllPath = await ResolveOutputDllAsync(_runnableProjectPath!, _runnableTargetFramework);
         if (dllPath is null)
         {
             Output.AppendLine("Build failed; cannot start debugging.");
@@ -401,11 +405,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    private async Task<string?> ResolveOutputDllAsync(string projectPath)
+    private async Task<string?> ResolveOutputDllAsync(string projectPath, string? targetFramework)
     {
         var exitCode = await _buildService.BuildAsync(
             projectPath,
-            line => _dispatcher.Invoke(() => Output.AppendLine(line)));
+            line => _dispatcher.Invoke(() => Output.AppendLine(line)),
+            targetFramework);
         if (exitCode != 0)
         {
             return null;
@@ -414,13 +419,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
         var projectName = Path.GetFileNameWithoutExtension(projectPath);
         var binDirectory = Path.Combine(projectDirectory, "bin", "Debug");
-        if (!Directory.Exists(binDirectory))
+
+        // For multi-targeted projects, narrow the search to the TFM that was actually built -
+        // bin/Debug can otherwise hold stale output from a previously-built TFM (e.g. a mobile
+        // one) that could win the "newest file" search below by coincidence.
+        var searchDirectory = targetFramework is not null ? Path.Combine(binDirectory, targetFramework) : binDirectory;
+        if (!Directory.Exists(searchDirectory))
+        {
+            searchDirectory = binDirectory;
+        }
+
+        if (!Directory.Exists(searchDirectory))
         {
             return null;
         }
 
         return Directory
-            .GetFiles(binDirectory, $"{projectName}.dll", SearchOption.AllDirectories)
+            .GetFiles(searchDirectory, $"{projectName}.dll", SearchOption.AllDirectories)
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
     }

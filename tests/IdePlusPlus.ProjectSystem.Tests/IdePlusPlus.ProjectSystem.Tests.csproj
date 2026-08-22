@@ -20,6 +20,10 @@
           LinkBase="Fixtures\SampleConsoleApp\"
           CopyToOutputDirectory="PreserveNewest"
           Exclude="..\..\samples\SampleConsoleApp\bin\**;..\..\samples\SampleConsoleApp\obj\**" />
+    <None Include="..\..\samples\SampleMultiTargetApp\**"
+          LinkBase="Fixtures\SampleMultiTargetApp\"
+          CopyToOutputDirectory="PreserveNewest"
+          Exclude="..\..\samples\SampleMultiTargetApp\bin\**;..\..\samples\SampleMultiTargetApp\obj\**" />
   </ItemGroup>
 
 </Project>

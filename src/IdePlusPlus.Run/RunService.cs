@@ -8,8 +8,13 @@ public sealed class RunService
 
     public bool IsRunning => _process is { HasExited: false };
 
-    /// <summary>Starts `dotnet run` for the given project. Callbacks arrive on a background thread.</summary>
-    public void Start(string projectPath, Action<string> onOutputLine, Action<int> onExited)
+    /// <summary>
+    /// Starts `dotnet run` for the given project. Callbacks arrive on a background thread.
+    /// targetFramework is required for multi-targeted projects (e.g. MAUI) - without it, `dotnet
+    /// run` errors asking which framework to disambiguate to, or tries every one (including
+    /// mobile TFMs whose workloads likely aren't installed).
+    /// </summary>
+    public void Start(string projectPath, Action<string> onOutputLine, Action<int> onExited, string? targetFramework = null)
     {
         if (IsRunning)
         {
@@ -27,6 +32,11 @@ public sealed class RunService
         startInfo.ArgumentList.Add("run");
         startInfo.ArgumentList.Add("--project");
         startInfo.ArgumentList.Add(projectPath);
+        if (targetFramework is not null)
+        {
+            startInfo.ArgumentList.Add("--framework");
+            startInfo.ArgumentList.Add(targetFramework);
+        }
 
         // `dotnet run` already resolves launchSettings.json's env vars/URLs itself - the only thing
         // missing versus Visual Studio's F5 is opening a browser, so that's all this adds.

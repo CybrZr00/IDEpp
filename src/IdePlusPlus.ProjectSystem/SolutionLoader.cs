@@ -52,15 +52,32 @@ public static class SolutionLoader
 
     private static SolutionTreeNode LoadProject(string projectName, string projectPath)
     {
-        var projectNode = new SolutionTreeNode(projectName, projectPath, SolutionTreeNodeKind.Project);
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
 
         var evaluated = Microsoft.Build.Evaluation.Project.FromFile(
             projectPath,
             new Microsoft.Build.Definition.ProjectOptions());
 
+        SolutionTreeNode projectNode;
         try
         {
+            // Multi-targeted projects (MAUI's TargetFrameworks, plural) declare no single
+            // $(TargetFramework) - reading the plural property here is safe even without mobile
+            // workloads installed, since this is the "outer" cross-targeting evaluation, which
+            // doesn't import any platform-specific SDK targets (those only load per-TFM, at build
+            // time for a chosen $(TargetFramework)).
+            var targetFrameworks = evaluated.GetPropertyValue("TargetFrameworks");
+            var windowsTargetFramework = string.IsNullOrWhiteSpace(targetFrameworks)
+                ? null
+                : targetFrameworks
+                    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .FirstOrDefault(tfm => tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase));
+
+            projectNode = new SolutionTreeNode(projectName, projectPath, SolutionTreeNodeKind.Project)
+            {
+                TargetFramework = windowsTargetFramework,
+            };
+
             var visibleItemTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "Compile", "None", "Content", "Page", "ApplicationDefinition", "EmbeddedResource",
