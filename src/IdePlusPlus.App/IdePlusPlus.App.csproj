@@ -20,6 +20,7 @@
     <ProjectReference Include="..\IdePlusPlus.Copilot.Core\IdePlusPlus.Copilot.Core.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Copilot.OpenRouter\IdePlusPlus.Copilot.OpenRouter.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Copilot.Diff\IdePlusPlus.Copilot.Diff.csproj" />
   </ItemGroup>
 
 </Project>

@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
@@ -15,22 +16,25 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private readonly IChatClient _chatClient;
     private readonly SecureSettingsStore _settingsStore;
+    private readonly EditApplicationService _editApplicationService;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
+    private string? _solutionDirectory;
     private CancellationTokenSource? _streamCancellation;
 
-    public CopilotChatPaneViewModel(IChatClient chatClient, SecureSettingsStore settingsStore)
+    public CopilotChatPaneViewModel(IChatClient chatClient, SecureSettingsStore settingsStore, EditApplicationService editApplicationService)
         : base(PaneContentId, "Copilot Chat")
     {
         _chatClient = chatClient;
         _settingsStore = settingsStore;
+        _editApplicationService = editApplicationService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         var savedKey = _settingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName);
         HasApiKey = !string.IsNullOrWhiteSpace(savedKey);
     }
 
-    public ObservableCollection<ChatMessageViewModel> Messages { get; } = [];
+    public ObservableCollection<ObservableObject> Messages { get; } = [];
 
     public ObservableCollection<string> AvailableModels { get; } =
     [
@@ -60,6 +64,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
+    public void SetSolutionDirectory(string? directory) => _solutionDirectory = directory;
+
     public void SaveApiKey(string plaintextKey)
     {
         if (string.IsNullOrWhiteSpace(plaintextKey))
@@ -85,6 +91,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         Messages.Add(userMessage);
 
         var history = Messages
+            .OfType<ChatMessageViewModel>()
             .Where(m => m != userMessage)
             .Select(m => new ChatMessage(m.Role, m.Text))
             .ToList();
@@ -101,11 +108,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
 
+        var proposalParser = new EditProposalParser();
+        var proposalsByToolCallId = new Dictionary<string, EditProposalViewModel>();
+
         IsStreaming = true;
         _streamCancellation = new CancellationTokenSource();
         try
         {
-            await foreach (var streamEvent in _chatClient.StreamChatAsync(history, SelectedModel, _streamCancellation.Token))
+            await foreach (var streamEvent in _chatClient.StreamChatAsync(
+                               history, SelectedModel, [ProposeEditTool.Definition], _streamCancellation.Token))
             {
                 _dispatcher.Invoke(() =>
                 {
@@ -114,6 +125,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                         case TextDelta delta:
                             assistantMessage.Append(delta.Text);
                             break;
+
+                        case ToolCallDelta toolCallDelta:
+                            HandleToolCallDelta(toolCallDelta, proposalParser, proposalsByToolCallId);
+                            break;
+
                         case StreamError error:
                             assistantMessage.Append($"\n\n[error: {error.Message}]");
                             break;
@@ -129,6 +145,30 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             IsStreaming = false;
             _streamCancellation = null;
+        }
+    }
+
+    private void HandleToolCallDelta(
+        ToolCallDelta delta,
+        EditProposalParser proposalParser,
+        Dictionary<string, EditProposalViewModel> proposalsByToolCallId)
+    {
+        var proposalEvent = proposalParser.OnToolCallDelta(delta);
+
+        if (!proposalsByToolCallId.TryGetValue(proposalEvent.ToolCallId, out var proposal))
+        {
+            proposal = new EditProposalViewModel(proposalEvent.ToolCallId, _editApplicationService);
+            proposalsByToolCallId[proposalEvent.ToolCallId] = proposal;
+            Messages.Add(proposal);
+        }
+
+        if (proposalEvent.Status == EditProposalStatus.Complete)
+        {
+            proposal.Complete(proposalEvent, _solutionDirectory);
+        }
+        else
+        {
+            proposal.UpdateStreaming(proposalEvent);
         }
     }
 

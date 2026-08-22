@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="DiffPlex" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\IdePlusPlus.Copilot.Core\IdePlusPlus.Copilot.Core.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Editor\IdePlusPlus.Editor.csproj" />
+  </ItemGroup>
+
+</Project>

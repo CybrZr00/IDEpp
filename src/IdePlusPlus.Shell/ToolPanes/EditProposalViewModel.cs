@@ -1,0 +1,97 @@
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using IdePlusPlus.Copilot.Diff;
+
+namespace IdePlusPlus.Shell.ToolPanes;
+
+public sealed partial class EditProposalViewModel : ObservableObject
+{
+    private readonly EditApplicationService _applicationService;
+
+    private EditOperation? _operation;
+    private string? _fullPath;
+    private string? _originalContentSnapshot;
+
+    public EditProposalViewModel(string toolCallId, EditApplicationService applicationService)
+    {
+        ToolCallId = toolCallId;
+        _applicationService = applicationService;
+    }
+
+    public string ToolCallId { get; }
+
+    [ObservableProperty]
+    private string filePath = "generating...";
+
+    [ObservableProperty]
+    private bool isComplete;
+
+    [ObservableProperty]
+    private string previewText = "";
+
+    [ObservableProperty]
+    private ObservableCollection<DiffLine> diffLines = [];
+
+    [ObservableProperty]
+    private bool isDecided;
+
+    [ObservableProperty]
+    private string? decisionText;
+
+    public void UpdateStreaming(EditProposalEvent proposalEvent)
+    {
+        if (proposalEvent.FilePathPreview is { } filePathPreview)
+        {
+            FilePath = filePathPreview;
+        }
+
+        if (proposalEvent.NewTextPreview is { } newTextPreview)
+        {
+            PreviewText = newTextPreview;
+        }
+    }
+
+    public void Complete(EditProposalEvent proposalEvent, string? baseDirectory)
+    {
+        _operation = proposalEvent.Operation!;
+        FilePath = _operation.FilePath;
+        _fullPath = _applicationService.ResolveFullPath(_operation.FilePath, baseDirectory);
+        _originalContentSnapshot = _applicationService.GetCurrentContent(_fullPath);
+
+        var resultingContent = EditApplicationService.ComputeResultingContent(_operation, _originalContentSnapshot);
+        DiffLines = new ObservableCollection<DiffLine>(DiffComputer.Compute(_originalContentSnapshot, resultingContent));
+        IsComplete = true;
+    }
+
+    private bool CanDecide() => IsComplete && !IsDecided;
+
+    [RelayCommand(CanExecute = nameof(CanDecide))]
+    private void Accept()
+    {
+        var result = _applicationService.Apply(_operation!, _fullPath!, _originalContentSnapshot!);
+        IsDecided = true;
+        DecisionText = result == ApplyResult.Applied
+            ? "Accepted"
+            : "Couldn't apply - the file changed since this was proposed.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanDecide))]
+    private void Reject()
+    {
+        IsDecided = true;
+        DecisionText = "Rejected";
+    }
+
+    partial void OnIsCompleteChanged(bool value)
+    {
+        AcceptCommand.NotifyCanExecuteChanged();
+        RejectCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsDecidedChanged(bool value)
+    {
+        AcceptCommand.NotifyCanExecuteChanged();
+        RejectCommand.NotifyCanExecuteChanged();
+    }
+}

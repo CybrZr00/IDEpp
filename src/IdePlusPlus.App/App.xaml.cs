@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Windows;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
@@ -64,6 +65,7 @@ public partial class App : Application
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();
         services.AddSingleton<IChatClient>(sp => sp.GetRequiredService<OpenRouterChatClient>());
+        services.AddSingleton<EditApplicationService>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

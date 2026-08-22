@@ -25,6 +25,7 @@ public sealed class OpenRouterChatClient : IChatClient
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         IReadOnlyList<ChatMessage> messages,
         string model,
+        IReadOnlyList<ToolDefinition>? tools = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var apiKey = _settingsStore.GetSecret(ApiKeySettingName);
@@ -34,7 +35,7 @@ public sealed class OpenRouterChatClient : IChatClient
             yield break;
         }
 
-        var (response, connectError) = await TryConnectAsync(messages, model, apiKey, cancellationToken);
+        var (response, connectError) = await TryConnectAsync(messages, model, tools, apiKey, cancellationToken);
         if (connectError is not null)
         {
             yield return new StreamError(connectError);
@@ -84,31 +85,65 @@ public sealed class OpenRouterChatClient : IChatClient
                     yield break;
                 }
 
-                var delta = TryExtractDelta(data);
-                if (!string.IsNullOrEmpty(delta))
+                foreach (var chunkEvent in ParseChunkEvents(data))
                 {
-                    yield return new TextDelta(delta);
+                    yield return chunkEvent;
                 }
             }
         }
     }
 
-    private static string? TryExtractDelta(string json)
+    private static IEnumerable<ChatStreamEvent> ParseChunkEvents(string json)
     {
+        JsonNode? delta;
         try
         {
-            var node = JsonNode.Parse(json);
-            return node?["choices"]?[0]?["delta"]?["content"]?.GetValue<string>();
+            delta = JsonNode.Parse(json)?["choices"]?[0]?["delta"];
         }
         catch (Exception)
         {
             // Malformed or unexpected chunk shape - skip it rather than aborting the whole stream.
-            return null;
+            yield break;
+        }
+
+        if (delta is null)
+        {
+            yield break;
+        }
+
+        var content = delta["content"]?.GetValue<string>();
+        if (!string.IsNullOrEmpty(content))
+        {
+            yield return new TextDelta(content);
+        }
+
+        var toolCalls = delta["tool_calls"]?.AsArray();
+        if (toolCalls is null)
+        {
+            yield break;
+        }
+
+        foreach (var toolCall in toolCalls)
+        {
+            if (toolCall is null)
+            {
+                continue;
+            }
+
+            var index = toolCall["index"]?.GetValue<int>() ?? 0;
+            var id = toolCall["id"]?.GetValue<string>();
+            var functionName = toolCall["function"]?["name"]?.GetValue<string>();
+            var argumentsFragment = toolCall["function"]?["arguments"]?.GetValue<string>();
+            yield return new ToolCallDelta(index, id, functionName, argumentsFragment);
         }
     }
 
     private async Task<(HttpResponseMessage? Response, string? Error)> TryConnectAsync(
-        IReadOnlyList<ChatMessage> messages, string model, string apiKey, CancellationToken cancellationToken)
+        IReadOnlyList<ChatMessage> messages,
+        string model,
+        IReadOnlyList<ToolDefinition>? tools,
+        string apiKey,
+        CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, ChatCompletionsUrl);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -117,6 +152,7 @@ public sealed class OpenRouterChatClient : IChatClient
             model,
             stream = true,
             messages = messages.Select(m => new { role = RoleName(m.Role), content = m.Content }),
+            tools = tools is { Count: > 0 } ? tools.Select(ToOpenAiToolSchema) : null,
         });
 
         try
@@ -136,6 +172,17 @@ public sealed class OpenRouterChatClient : IChatClient
             return (null, $"Request failed: {ex.Message}");
         }
     }
+
+    private static object ToOpenAiToolSchema(ToolDefinition tool) => new
+    {
+        type = "function",
+        function = new
+        {
+            name = tool.Name,
+            description = tool.Description,
+            parameters = tool.ParametersSchema,
+        },
+    };
 
     private static string RoleName(ChatRole role) => role switch
     {
