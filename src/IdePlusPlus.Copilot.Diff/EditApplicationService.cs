@@ -85,6 +85,13 @@ public sealed class EditApplicationService
                 Directory.CreateDirectory(directory);
             }
 
+            // A file that isn't open has no editor undo stack to fall back on - back up the
+            // pre-edit content so an AI-proposed change to a closed file is still recoverable.
+            if (File.Exists(fullPath))
+            {
+                File.Copy(fullPath, fullPath + ".bak", overwrite: true);
+            }
+
             File.WriteAllText(fullPath, newContent);
         }
 

@@ -14,7 +14,12 @@ public sealed class RunService
     /// run` errors asking which framework to disambiguate to, or tries every one (including
     /// mobile TFMs whose workloads likely aren't installed).
     /// </summary>
-    public void Start(string projectPath, Action<string> onOutputLine, Action<int> onExited, string? targetFramework = null)
+    public void Start(
+        string projectPath,
+        Action<string> onOutputLine,
+        Action<int> onExited,
+        string? targetFramework = null,
+        string? configuration = null)
     {
         if (IsRunning)
         {
@@ -36,6 +41,12 @@ public sealed class RunService
         {
             startInfo.ArgumentList.Add("--framework");
             startInfo.ArgumentList.Add(targetFramework);
+        }
+
+        if (configuration is not null)
+        {
+            startInfo.ArgumentList.Add("--configuration");
+            startInfo.ArgumentList.Add(configuration);
         }
 
         // `dotnet run` already resolves launchSettings.json's env vars/URLs itself - the only thing

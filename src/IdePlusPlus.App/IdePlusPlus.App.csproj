@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Sinks.File" />
   </ItemGroup>
 
   <ItemGroup>
@@ -26,6 +28,7 @@
     <ProjectReference Include="..\IdePlusPlus.Copilot.Memory\IdePlusPlus.Copilot.Memory.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Copilot.LmStudio\IdePlusPlus.Copilot.LmStudio.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Copilot.Mcp\IdePlusPlus.Copilot.Mcp.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.SourceControl\IdePlusPlus.SourceControl.csproj" />
   </ItemGroup>
 
 </Project>

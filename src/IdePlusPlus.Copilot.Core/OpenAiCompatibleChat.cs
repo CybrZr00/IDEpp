@@ -41,6 +41,18 @@ public static class OpenAiCompatibleChat
         return new { role = RoleName(message.Role), content = message.Content };
     }
 
+    /// <summary>
+    /// Null (rather than an empty/default object) when effort is None, so the request body omits
+    /// the field entirely instead of sending an opinion the user never expressed.
+    /// </summary>
+    public static object? ToReasoningParameter(ChatEffort effort) => effort switch
+    {
+        ChatEffort.Low => new { effort = "low" },
+        ChatEffort.Medium => new { effort = "medium" },
+        ChatEffort.High => new { effort = "high" },
+        _ => null,
+    };
+
     public static object ToToolSchema(ToolDefinition tool) => new
     {
         type = "function",

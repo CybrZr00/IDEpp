@@ -35,7 +35,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public MainWindowViewModel(
         SolutionExplorerPaneViewModel solutionExplorer,
         OutputPaneViewModel output,
+        ErrorListPaneViewModel errorList,
         CopilotChatPaneViewModel copilotChat,
+        SourceControlPaneViewModel sourceControl,
         WelcomeDocumentViewModel welcome,
         CallStackPaneViewModel callStack,
         LocalsPaneViewModel locals,
@@ -47,7 +49,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
+        ErrorList = errorList;
         CopilotChat = copilotChat;
+        SourceControl = sourceControl;
         Welcome = welcome;
         CallStack = callStack;
         Locals = locals;
@@ -83,12 +87,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public OutputPaneViewModel Output { get; }
 
+    public ErrorListPaneViewModel ErrorList { get; }
+
     public ObservableCollection<PluginMenuCommand> PluginCommands { get; } = [];
 
     public void AddPluginCommand(string header, Action execute) =>
         _dispatcher.Invoke(() => PluginCommands.Add(new PluginMenuCommand(header, execute)));
 
     public CopilotChatPaneViewModel CopilotChat { get; }
+
+    public SourceControlPaneViewModel SourceControl { get; }
 
     public WelcomeDocumentViewModel Welcome { get; }
 
@@ -101,11 +109,42 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<string> RecentFiles => _editorWorkspace.RecentFiles;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WindowTitle))]
     private DocumentViewModel? activeDocument;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(BuildCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CleanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RebuildCommand))]
+    [NotifyPropertyChangedFor(nameof(WindowTitle))]
     private string? currentSolutionPath;
+
+    public string WindowTitle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (ActiveDocument is { } document)
+            {
+                parts.Add(document.Title.TrimEnd('*'));
+            }
+
+            if (CurrentSolutionPath is { } path)
+            {
+                parts.Add(Path.GetFileNameWithoutExtension(path));
+            }
+
+            parts.Add("IDE++");
+            return string.Join(" - ", parts);
+        }
+    }
+
+    public ObservableCollection<string> RecentSolutions { get; } = new(RecentSolutionsStore.Load());
+
+    public IReadOnlyList<string> AvailableConfigurations { get; } = ["Debug", "Release"];
+
+    [ObservableProperty]
+    private string configuration = "Debug";
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
@@ -159,7 +198,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenRecentFile(string filePath) => OpenPath(filePath);
 
-    public void OpenPath(string filePath) => ActiveDocument = _editorWorkspace.Open(filePath);
+    public void OpenPath(string filePath)
+    {
+        var document = _editorWorkspace.Open(filePath);
+        if (document is not null)
+        {
+            ActiveDocument = document;
+        }
+        else
+        {
+            Output.AppendLine($"Couldn't open '{filePath}' - it may have been moved, renamed, or deleted.");
+        }
+    }
 
     [RelayCommand(CanExecute = nameof(HasActiveDocument))]
     private void Save() => SaveDocument(ActiveDocument!);
@@ -168,6 +218,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [RelayCommand(CanExecute = nameof(HasActiveDocument))]
     private void SaveAs() => SaveDocumentAs(ActiveDocument!);
+
+    private bool HasOpenDocuments() => OpenDocuments.Count > 0;
+
+    [RelayCommand(CanExecute = nameof(HasOpenDocuments))]
+    private void SaveAll()
+    {
+        foreach (var document in OpenDocuments.Where(d => d.IsDirty).ToList())
+        {
+            SaveDocument(document);
+        }
+    }
+
+    /// <summary>Called from the "Go to Line..." dialog's code-behind once the user confirms a line
+    /// number - not a RelayCommand since it's never bound directly from XAML.</summary>
+    public void GoToLine(int line)
+    {
+        if (ActiveDocument is { } document && line > 0)
+        {
+            EditorServices.GoToLine.Request(document, line);
+        }
+    }
 
     public void SaveDocument(DocumentViewModel document)
     {
@@ -212,17 +283,43 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        await LoadSolutionAsync(dialog.FileName);
+    }
+
+    [RelayCommand]
+    private Task OpenRecentSolutionAsync(string solutionPath) => LoadSolutionAsync(solutionPath);
+
+    /// <summary>Reopens whatever solution was open last, if it still exists - called once from
+    /// App.xaml.cs after the main window is shown.</summary>
+    public async Task TryReopenLastSolutionOnStartupAsync()
+    {
+        if (RecentSolutionsStore.Load().FirstOrDefault() is { } lastSolutionPath && File.Exists(lastSolutionPath))
+        {
+            await LoadSolutionAsync(lastSolutionPath);
+        }
+    }
+
+    public async Task LoadSolutionAsync(string solutionPath)
+    {
         Output.Clear();
-        Output.AppendLine($"Loading {dialog.FileName}...");
+        Output.AppendLine($"Loading {solutionPath}...");
         try
         {
-            var root = await Task.Run(() => SolutionLoader.Load(dialog.FileName));
+            var root = await Task.Run(() => SolutionLoader.Load(solutionPath));
             SolutionExplorer.SetSolution(root);
-            CurrentSolutionPath = dialog.FileName;
+            CurrentSolutionPath = solutionPath;
             _solutionRoot = root;
 
-            var solutionDirectory = Path.GetDirectoryName(dialog.FileName);
+            var recentSolutions = RecentSolutionsStore.Touch(solutionPath);
+            RecentSolutions.Clear();
+            foreach (var recentSolutionPath in recentSolutions)
+            {
+                RecentSolutions.Add(recentSolutionPath);
+            }
+
+            var solutionDirectory = Path.GetDirectoryName(solutionPath);
             CopilotChat.SetSolutionDirectory(solutionDirectory);
+            _ = SourceControl.SetRepositoryDirectoryAsync(solutionDirectory);
             CopilotChat.SetIndexableFiles(root.Flatten()
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)
@@ -283,17 +380,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>Diagnostic.FilePath is exactly as MSBuild reported it - relative to the solution's
+    /// directory unless the project used an absolute path itself.</summary>
+    public void OpenDiagnostic(BuildDiagnostic diagnostic)
+    {
+        var baseDirectory = Path.GetDirectoryName(CurrentSolutionPath) ?? Directory.GetCurrentDirectory();
+        var fullPath = Path.IsPathRooted(diagnostic.FilePath)
+            ? diagnostic.FilePath
+            : Path.GetFullPath(Path.Combine(baseDirectory, diagnostic.FilePath));
+
+        OpenPath(fullPath);
+    }
+
     private bool HasSolution() => CurrentSolutionPath is not null;
+
+    private void OnBuildOutputLine(string line) => _dispatcher.Invoke(() =>
+    {
+        Output.AppendLine(line);
+        ErrorList.AddIfDiagnostic(line);
+    });
 
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private async Task BuildAsync()
     {
         Output.Clear();
-        Output.AppendLine($"Build started: {CurrentSolutionPath}");
-        var exitCode = await _buildService.BuildAsync(
-            CurrentSolutionPath!,
-            line => _dispatcher.Invoke(() => Output.AppendLine(line)));
+        ErrorList.Clear();
+        Output.AppendLine($"Build started ({Configuration}): {CurrentSolutionPath}");
+        var exitCode = await _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
         Output.AppendLine($"Build finished with exit code {exitCode}.");
+    }
+
+    [RelayCommand(CanExecute = nameof(HasSolution))]
+    private async Task CleanAsync()
+    {
+        Output.Clear();
+        ErrorList.Clear();
+        Output.AppendLine($"Clean started ({Configuration}): {CurrentSolutionPath}");
+        var exitCode = await _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
+        Output.AppendLine($"Clean finished with exit code {exitCode}.");
+    }
+
+    [RelayCommand(CanExecute = nameof(HasSolution))]
+    private async Task RebuildAsync()
+    {
+        Output.Clear();
+        ErrorList.Clear();
+        Output.AppendLine($"Rebuild started ({Configuration}): {CurrentSolutionPath}");
+        var exitCode = await _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
+        Output.AppendLine($"Rebuild finished with exit code {exitCode}.");
     }
 
     private bool CanRun() => _runnableProjectPath is not null && !IsRunning;
@@ -302,7 +436,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void Run()
     {
         Output.Clear();
-        Output.AppendLine($"Running: {_runnableProjectPath}");
+        Output.AppendLine($"Running ({Configuration}): {_runnableProjectPath}");
         IsRunning = true;
         _runService.Start(
             _runnableProjectPath!,
@@ -312,7 +446,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 Output.AppendLine($"Process exited with code {exitCode}.");
                 IsRunning = false;
             }),
-            _runnableTargetFramework);
+            _runnableTargetFramework,
+            Configuration);
     }
 
     [RelayCommand(CanExecute = nameof(IsRunning))]
@@ -379,6 +514,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async Task StartDebuggingAsync()
     {
         Output.Clear();
+        ErrorList.Clear();
         Output.AppendLine("Building for debug...");
         var dllPath = await ResolveOutputDllAsync(_runnableProjectPath!, _runnableTargetFramework);
         if (dllPath is null)
@@ -407,10 +543,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private async Task<string?> ResolveOutputDllAsync(string projectPath, string? targetFramework)
     {
-        var exitCode = await _buildService.BuildAsync(
-            projectPath,
-            line => _dispatcher.Invoke(() => Output.AppendLine(line)),
-            targetFramework);
+        var exitCode = await _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration);
         if (exitCode != 0)
         {
             return null;
@@ -418,7 +551,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
         var projectName = Path.GetFileNameWithoutExtension(projectPath);
-        var binDirectory = Path.Combine(projectDirectory, "bin", "Debug");
+        var binDirectory = Path.Combine(projectDirectory, "bin", Configuration);
 
         // For multi-targeted projects, narrow the search to the TFM that was actually built -
         // bin/Debug can otherwise hold stale output from a previously-built TFM (e.g. a mobile

@@ -39,9 +39,17 @@ public sealed class PluginLoader
             {
                 LoadPluginsFrom(dllPath);
             }
+            catch (ReflectionTypeLoadException ex)
+            {
+                // The single most likely failure from Assembly.LoadFrom (e.g. a missing dependency) -
+                // ex.Message alone is close to useless without the per-type LoaderExceptions.
+                var loaderErrors = string.Join(
+                    "; ", ex.LoaderExceptions.Where(le => le is not null).Select(le => le!.Message));
+                _output.AppendLine($"[Plugin] Failed to load {Path.GetFileName(dllPath)}: {ex.Message} ({loaderErrors})");
+            }
             catch (Exception ex)
             {
-                _output.AppendLine($"[Plugin] Failed to load {Path.GetFileName(dllPath)}: {ex.Message}");
+                _output.AppendLine($"[Plugin] Failed to load {Path.GetFileName(dllPath)}: {ex}");
             }
         }
     }
@@ -67,7 +75,7 @@ public sealed class PluginLoader
             }
             catch (Exception ex)
             {
-                _output.AppendLine($"[Plugin] {plugin.Name} threw during Initialize: {ex.Message}");
+                _output.AppendLine($"[Plugin] {plugin.Name} threw during Initialize: {ex}");
             }
         }
     }

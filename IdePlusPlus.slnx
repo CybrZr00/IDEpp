@@ -17,14 +17,18 @@
     <Project Path="src/IdePlusPlus.ProjectSystem/IdePlusPlus.ProjectSystem.csproj" />
     <Project Path="src/IdePlusPlus.Run/IdePlusPlus.Run.csproj" />
     <Project Path="src/IdePlusPlus.Shell/IdePlusPlus.Shell.csproj" />
+    <Project Path="src/IdePlusPlus.SourceControl/IdePlusPlus.SourceControl.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/IdePlusPlus.Build.Tests/IdePlusPlus.Build.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Core.Tests/IdePlusPlus.Copilot.Core.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Diff.Tests/IdePlusPlus.Copilot.Diff.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Infrastructure.Tests/IdePlusPlus.Infrastructure.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Run.Tests/IdePlusPlus.Run.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.SourceControl.Tests/IdePlusPlus.SourceControl.Tests.csproj" />
   </Folder>
 </Solution>

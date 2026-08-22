@@ -25,6 +25,7 @@ public sealed class OpenRouterChatClient : IChatClient
         IReadOnlyList<ChatMessage> messages,
         string model,
         IReadOnlyList<ToolDefinition>? tools = null,
+        ChatEffort effort = ChatEffort.None,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var apiKey = _settingsStore.GetSecret(ApiKeySettingName);
@@ -34,7 +35,7 @@ public sealed class OpenRouterChatClient : IChatClient
             yield break;
         }
 
-        var (response, connectError) = await TryConnectAsync(messages, model, tools, apiKey, cancellationToken);
+        var (response, connectError) = await TryConnectAsync(messages, model, tools, effort, apiKey, cancellationToken);
         if (connectError is not null)
         {
             yield return new StreamError(connectError);
@@ -56,6 +57,7 @@ public sealed class OpenRouterChatClient : IChatClient
         IReadOnlyList<ChatMessage> messages,
         string model,
         IReadOnlyList<ToolDefinition>? tools,
+        ChatEffort effort,
         string apiKey,
         CancellationToken cancellationToken)
     {
@@ -67,6 +69,7 @@ public sealed class OpenRouterChatClient : IChatClient
             stream = true,
             messages = messages.Select(OpenAiCompatibleChat.ToRequestMessage),
             tools = tools is { Count: > 0 } ? tools.Select(OpenAiCompatibleChat.ToToolSchema) : null,
+            reasoning = OpenAiCompatibleChat.ToReasoningParameter(effort),
         });
 
         try

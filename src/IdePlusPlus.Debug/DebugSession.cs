@@ -57,6 +57,11 @@ public sealed class DebugSession
             columnsStartAt1 = true,
         });
 
+        // Without this, whether an unhandled exception even stops the debugger depends entirely on
+        // netcoredbg's undeclared default. "user-unhandled" is netcoredbg's documented filter id
+        // (mirroring vsdbg's) for "break when an exception escapes user code unhandled".
+        await client.SendRequestAsync("setExceptionBreakpoints", new { filters = new[] { "user-unhandled" } });
+
         foreach (var (file, lines) in _breakpointManager.AllBreakpoints)
         {
             if (lines.Count == 0)

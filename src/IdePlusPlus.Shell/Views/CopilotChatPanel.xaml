@@ -106,6 +106,43 @@
             </Border>
         </DataTemplate>
 
+        <DataTemplate DataType="{x:Type toolPanes:PlanProposalViewModel}">
+            <Border Margin="4"
+                    Padding="8"
+                    CornerRadius="4"
+                    Background="{DynamicResource EditProposalBackgroundBrush}"
+                    BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                    BorderThickness="1"
+                    MaxWidth="320">
+                <StackPanel>
+                    <TextBlock Text="{Binding Summary}" FontWeight="Bold" TextWrapping="Wrap" />
+
+                    <ItemsControl ItemsSource="{Binding Steps}"
+                                  Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
+                                  Margin="0,4,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="11" Margin="0,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <StackPanel Orientation="Horizontal"
+                                Margin="0,6,0,0"
+                                Visibility="{Binding IsDecided, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}">
+                        <Button Content="Approve &amp; Implement" Command="{Binding ApproveCommand}" Padding="8,2" />
+                        <Button Content="Reject" Command="{Binding RejectCommand}" Margin="6,0,0,0" Padding="8,2" />
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding DecisionText}"
+                               Margin="0,6,0,0"
+                               FontStyle="Italic"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
+                               Visibility="{Binding IsDecided, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
         <DataTemplate DataType="{x:Type toolPanes:McpToolCallViewModel}">
             <Border Margin="4"
                     Padding="6"
@@ -135,6 +172,7 @@
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -188,17 +226,51 @@
                        TextWrapping="Wrap" />
         </StackPanel>
 
-        <ScrollViewer Grid.Row="2" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+        <StackPanel Grid.Row="2" Margin="4,0,4,4">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Effort" VerticalAlignment="Center" FontSize="11" Margin="0,0,4,0" />
+                <ComboBox ItemsSource="{Binding AvailableEfforts}"
+                          SelectedItem="{Binding SelectedEffort}"
+                          Width="70"
+                          FontSize="11" />
+                <CheckBox Content="Plan Mode"
+                          IsChecked="{Binding IsPlanMode}"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Margin="12,0,0,0"
+                          ToolTip="Investigates and proposes a plan for approval before touching any files" />
+                <CheckBox Content="Auto Mode"
+                          IsChecked="{Binding IsAutoMode}"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Margin="12,0,0,0"
+                          ToolTip="Accepts edit proposals automatically instead of waiting for Accept/Reject" />
+            </StackPanel>
+            <TextBlock Text="📝 Plan Mode is on - investigating and proposing a plan, no edits yet"
+                       FontSize="10"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       Margin="0,2,0,0"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding IsPlanMode, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+            <TextBlock Text="⚡ Auto Mode is on - edits are applied automatically, without review"
+                       FontSize="10"
+                       Foreground="OrangeRed"
+                       Margin="0,2,0,0"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding IsAutoMode, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
             <ItemsControl ItemsSource="{Binding Messages}" />
         </ScrollViewer>
 
-        <TextBlock Grid.Row="3"
+        <TextBlock Grid.Row="4"
                    Text="{Binding StatusMessage}"
                    Margin="4,0"
                    Foreground="{DynamicResource MutedForegroundBrush}"
                    FontSize="11" />
 
-        <Grid Grid.Row="4" Margin="4">
+        <Grid Grid.Row="5" Margin="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />

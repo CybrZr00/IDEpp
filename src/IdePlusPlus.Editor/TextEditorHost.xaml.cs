@@ -33,6 +33,7 @@ public partial class TextEditorHost : UserControl
         Editor.TextArea.TextView.BackgroundRenderers.Add(_currentLineRenderer);
         Editor.TextArea.TextView.ElementGenerators.Add(_ghostTextGenerator);
         EditorServices.DebugLocation.Changed += OnDebugLocationChanged;
+        EditorServices.GoToLine.Requested += OnGoToLineRequested;
 
         _completionDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
         _completionDebounceTimer.Tick += async (_, _) =>
@@ -52,6 +53,7 @@ public partial class TextEditorHost : UserControl
         Unloaded += (_, _) =>
         {
             EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
+            EditorServices.GoToLine.Requested -= OnGoToLineRequested;
             EditorTheme.Changed -= ApplyEditorTheme;
         };
     }
@@ -65,6 +67,14 @@ public partial class TextEditorHost : UserControl
 
     private void OnCaretPositionChanged(object? sender, EventArgs e)
     {
+        // The caret can move away from a pending suggestion without any text changing (arrow keys,
+        // a mouse click) - GhostTextGenerator only ever renders at SuggestionOffset, so leaving it
+        // set here would make Tab silently insert the stale suggestion at the wrong location.
+        if (_ghostTextGenerator.HasSuggestion && Editor.CaretOffset != _ghostTextGenerator.SuggestionOffset)
+        {
+            ClearGhostText();
+        }
+
         if (Editor.TextArea.IsKeyboardFocusWithin)
         {
             PublishCaretPosition();
@@ -89,6 +99,7 @@ public partial class TextEditorHost : UserControl
 
         ClearGhostText();
         _completionDebounceTimer.Stop();
+        _completionCancellation?.Cancel();
 
         _boundDocument = DataContext as DocumentViewModel;
         _breakpointMargin.FilePath = _boundDocument?.FilePath;
@@ -146,6 +157,20 @@ public partial class TextEditorHost : UserControl
 
     private void OnDebugLocationChanged() => UpdateCurrentLineHighlight();
 
+    private void OnGoToLineRequested(DocumentViewModel document, int line)
+    {
+        if (!ReferenceEquals(_boundDocument, document) || Editor.Document is null)
+        {
+            return;
+        }
+
+        var clampedLine = Math.Clamp(line, 1, Editor.Document.LineCount);
+        var documentLine = Editor.Document.GetLineByNumber(clampedLine);
+        Editor.CaretOffset = documentLine.Offset;
+        Editor.ScrollToLine(clampedLine);
+        Editor.Focus();
+    }
+
     private void UpdateCurrentLineHighlight()
     {
         var debugLocation = EditorServices.DebugLocation;
@@ -163,6 +188,8 @@ public partial class TextEditorHost : UserControl
         {
             return;
         }
+
+        var targetDocument = _boundDocument;
 
         _completionCancellation?.Cancel();
         var cancellation = new CancellationTokenSource();
@@ -193,8 +220,12 @@ public partial class TextEditorHost : UserControl
             return;
         }
 
-        // A newer keystroke superseded this request, or the caret has since moved - stale, discard.
-        if (cancellation.IsCancellationRequested || string.IsNullOrEmpty(completion) || Editor.CaretOffset != caretOffset)
+        // A newer keystroke superseded this request, the caret has since moved, or the user switched
+        // to a different document while this request was in flight - stale, discard.
+        if (cancellation.IsCancellationRequested
+            || string.IsNullOrEmpty(completion)
+            || !ReferenceEquals(_boundDocument, targetDocument)
+            || Editor.CaretOffset != caretOffset)
         {
             return;
         }

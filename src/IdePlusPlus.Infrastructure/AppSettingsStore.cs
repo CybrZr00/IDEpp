@@ -8,15 +8,17 @@ namespace IdePlusPlus.Infrastructure;
 /// </summary>
 public sealed class AppSettingsStore
 {
-    private static readonly string SettingsPath = Path.Combine(
+    private static readonly string DefaultSettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "IdePlusPlus", "settings.json");
 
+    private readonly string _settingsPath;
     private readonly Dictionary<string, string> _values;
 
-    public AppSettingsStore()
+    public AppSettingsStore(string? settingsPath = null)
     {
-        _values = Load();
+        _settingsPath = settingsPath ?? DefaultSettingsPath;
+        _values = Load(_settingsPath);
     }
 
     public string? Get(string key) => _values.GetValueOrDefault(key);
@@ -27,16 +29,16 @@ public sealed class AppSettingsStore
         Save();
     }
 
-    private static Dictionary<string, string> Load()
+    private static Dictionary<string, string> Load(string settingsPath)
     {
         try
         {
-            if (!File.Exists(SettingsPath))
+            if (!File.Exists(settingsPath))
             {
                 return [];
             }
 
-            return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(SettingsPath)) ?? [];
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(settingsPath)) ?? [];
         }
         catch (Exception)
         {
@@ -46,8 +48,8 @@ public sealed class AppSettingsStore
 
     private void Save()
     {
-        var directory = Path.GetDirectoryName(SettingsPath)!;
+        var directory = Path.GetDirectoryName(_settingsPath)!;
         Directory.CreateDirectory(directory);
-        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(_values));
+        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_values));
     }
 }

@@ -1,5 +1,8 @@
+using System.IO;
 using System.Net.Http;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
@@ -15,16 +18,33 @@ using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
+using IdePlusPlus.SourceControl;
 using Microsoft.Extensions.DependencyInjection;
+using Serilog;
 
 namespace IdePlusPlus.App;
 
 public partial class App : Application
 {
+    private static readonly string LogFilePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "IdePlusPlus", "logs", "log-.txt");
+
     private ServiceProvider? _serviceProvider;
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.File(LogFilePath, rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14)
+            .CreateLogger();
+
+        // Wired before anything else so a failure during DI setup or plugin loading is captured
+        // too, not just exceptions raised once the main window is up.
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
         // Must happen before any code in the process touches a Microsoft.Build.* type -
         // see the comment on SolutionLoader.EnsureMSBuildRegistered for why.
         SolutionLoader.EnsureMSBuildRegistered();
@@ -42,6 +62,7 @@ public partial class App : Application
         EditorServices.DebugLocation = _serviceProvider.GetRequiredService<DebugLocationIndicator>();
         EditorServices.CaretPosition = _serviceProvider.GetRequiredService<CaretPositionIndicator>();
         EditorServices.CompletionProvider = _serviceProvider.GetRequiredService<DeepSeekFimClient>();
+        EditorServices.GoToLine = new GoToLineRequest();
 
         // Applies the saved theme before the first window renders, to avoid a light-then-dark flash.
         _serviceProvider.GetRequiredService<ThemeService>().Initialize();
@@ -62,18 +83,61 @@ public partial class App : Application
         _ = mcpServerManager.ReconnectAllAsync();
 
         mainWindow.Show();
+
+        // Fire-and-forget, same as MCP reconnect above - a large solution shouldn't delay the
+        // window appearing.
+        _ = _serviceProvider.GetRequiredService<MainWindowViewModel>().TryReopenLastSolutionOnStartupAsync();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         _serviceProvider?.Dispose();
         base.OnExit(e);
+        Log.CloseAndFlush();
+    }
+
+    /// <summary>
+    /// Logged and swallowed rather than crashing the whole IDE - a single bad exception (e.g. from a
+    /// plugin's Tools-menu callback, or a stray binding/command handler) shouldn't take the process
+    /// down. Serilog captures the full exception for post-mortem diagnosis regardless of whether the
+    /// Output pane exists yet.
+    /// </summary>
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        Log.Error(e.Exception, "Unhandled exception on the UI thread");
+        LogToOutputPaneIfAvailable($"[ERROR] Unhandled exception: {e.Exception.Message}");
+        e.Handled = true;
+    }
+
+    private void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        // Fires on a non-UI thread with no way to prevent termination once e.IsTerminating is true -
+        // logging here is purely to leave a forensic trail for whatever crashed the process.
+        if (e.ExceptionObject is Exception ex)
+        {
+            Log.Fatal(ex, "Unhandled exception on a background thread (IsTerminating={IsTerminating})", e.IsTerminating);
+        }
+    }
+
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        Log.Error(e.Exception, "Unobserved task exception");
+        e.SetObserved();
+    }
+
+    private void LogToOutputPaneIfAvailable(string message)
+    {
+        if (_serviceProvider?.GetService<OutputPaneViewModel>() is { } output)
+        {
+            Dispatcher.Invoke(() => output.AppendLine(message));
+        }
     }
 
     private static void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<SolutionExplorerPaneViewModel>();
         services.AddSingleton<OutputPaneViewModel>();
+        services.AddSingleton<ErrorListPaneViewModel>();
         services.AddSingleton<CopilotChatPaneViewModel>();
         services.AddSingleton<CallStackPaneViewModel>();
         services.AddSingleton<LocalsPaneViewModel>();
@@ -100,6 +164,8 @@ public partial class App : Application
         services.AddSingleton<ProjectMemoryStore>();
         services.AddSingleton<LmStudioEmbeddingClient>();
         services.AddSingleton<CodebaseIndexService>();
+        services.AddSingleton<GitService>();
+        services.AddSingleton<SourceControlPaneViewModel>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

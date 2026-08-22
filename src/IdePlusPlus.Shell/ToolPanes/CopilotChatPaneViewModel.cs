@@ -25,9 +25,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const string ProviderSettingKey = "ChatProvider";
     private const string OpenRouterModelSettingKey = "OpenRouterChatModel";
     private const string LmStudioModelSettingKey = "LmStudioChatModel";
+    private const string EffortSettingKey = "ChatEffort";
+    private const string AutoModeSettingKey = "ChatAutoMode";
+    private const string PlanModeSettingKey = "ChatPlanMode";
 
     private const int CodebaseSearchTopK = 5;
     private const int MaxToolLoopIterations = 8;
+
+    // Manual mode's 8-iteration cap was implicitly backstopped by every propose_edit needing a
+    // human click to proceed - Auto Mode removes that checkpoint, so a purely tool-call-driven
+    // agentic task (e.g. against MCP tools) needs more room to run before hitting the ceiling.
+    // CancelStreaming is always available as the actual safety valve.
+    private const int AutoModeMaxToolLoopIterations = 30;
 
     private readonly OpenRouterChatClient _openRouterClient;
     private readonly LmStudioChatClient _lmStudioClient;
@@ -63,6 +72,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
         selectedModel = ModelSettingFor(selectedProvider) ?? DefaultModelFor(selectedProvider);
+        selectedEffort = Enum.TryParse<ChatEffort>(_appSettingsStore.Get(EffortSettingKey), out var savedEffort)
+            ? savedEffort
+            : ChatEffort.None;
+        isAutoMode = bool.TryParse(_appSettingsStore.Get(AutoModeSettingKey), out var savedAutoMode) && savedAutoMode;
+        isPlanMode = bool.TryParse(_appSettingsStore.Get(PlanModeSettingKey), out var savedPlanMode) && savedPlanMode;
 
         AvailableModels = new ObservableCollection<string>(
             selectedProvider == ProviderLmStudio ? [] : OpenRouterModels);
@@ -88,11 +102,28 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio];
 
+    public IReadOnlyList<ChatEffort> AvailableEfforts { get; } = [ChatEffort.None, ChatEffort.Low, ChatEffort.Medium, ChatEffort.High];
+
     [ObservableProperty]
     private string selectedProvider;
 
     [ObservableProperty]
     private string selectedModel;
+
+    [ObservableProperty]
+    private ChatEffort selectedEffort;
+
+    /// <summary>When on, edit proposals are accepted the instant they finish streaming instead of
+    /// waiting for a manual Accept click - the diff still renders first for auditability, it's just
+    /// not gated.</summary>
+    [ObservableProperty]
+    private bool isAutoMode;
+
+    /// <summary>When on, the model gets propose_plan instead of propose_edit and is instructed to
+    /// investigate and present a plan rather than touch any files - propose_edit only becomes
+    /// available again once the user approves a plan (see ApprovePlanAsync).</summary>
+    [ObservableProperty]
+    private bool isPlanMode;
 
     [ObservableProperty]
     private bool isRefreshingModels;
@@ -172,6 +203,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private async Task PrependContextAsync(List<ChatMessage> history, string userText)
     {
+        if (IsPlanMode)
+        {
+            history.Insert(0, new ChatMessage(
+                ChatRole.System,
+                "Plan Mode is active: investigate first (read files, search, use read-only tools), then call " +
+                "propose_plan exactly once with your full implementation plan. Do not attempt any file edits - " +
+                "propose_edit is unavailable until the user approves your plan."));
+        }
+
         if (_solutionDirectory is not null)
         {
             var memory = _projectMemoryStore.LoadMemory(_solutionDirectory);
@@ -213,7 +253,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _streamCancellation = new CancellationTokenSource();
         try
         {
-            for (var iteration = 0; iteration < MaxToolLoopIterations; iteration++)
+            var maxIterations = IsAutoMode ? AutoModeMaxToolLoopIterations : MaxToolLoopIterations;
+            for (var iteration = 0; iteration < maxIterations; iteration++)
             {
                 var pendingMcpCalls = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
                 if (pendingMcpCalls.Count == 0)
@@ -257,15 +298,17 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         var proposalParser = new EditProposalParser();
         var proposalsByToolCallId = new Dictionary<string, EditProposalViewModel>();
+        var planParser = new PlanProposalParser();
+        var planProposalsByToolCallId = new Dictionary<string, PlanProposalViewModel>();
         var mcpCallsByIndex = new Dictionary<int, PendingMcpCall>();
-        var routeIsProposeEdit = new Dictionary<int, bool>();
+        var routeByIndex = new Dictionary<int, ToolCallRoute>();
 
-        var tools = new List<ToolDefinition> { ProposeEditTool.Definition };
+        var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
 
         IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
 
-        await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, cancellationToken))
+        await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, SelectedEffort, cancellationToken))
         {
             _dispatcher.Invoke(() =>
             {
@@ -278,16 +321,25 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     case ToolCallDelta toolCallDelta:
                         if (toolCallDelta.FunctionName is not null)
                         {
-                            routeIsProposeEdit[toolCallDelta.Index] = toolCallDelta.FunctionName == ProposeEditTool.ToolName;
+                            routeByIndex[toolCallDelta.Index] = toolCallDelta.FunctionName switch
+                            {
+                                ProposeEditTool.ToolName => ToolCallRoute.ProposeEdit,
+                                ProposePlanTool.ToolName => ToolCallRoute.ProposePlan,
+                                _ => ToolCallRoute.Mcp,
+                            };
                         }
 
-                        if (routeIsProposeEdit.GetValueOrDefault(toolCallDelta.Index))
+                        switch (routeByIndex.GetValueOrDefault(toolCallDelta.Index, ToolCallRoute.Mcp))
                         {
-                            HandleToolCallDelta(toolCallDelta, proposalParser, proposalsByToolCallId);
-                        }
-                        else
-                        {
-                            AccumulateMcpCall(toolCallDelta, mcpCallsByIndex);
+                            case ToolCallRoute.ProposeEdit:
+                                HandleToolCallDelta(toolCallDelta, proposalParser, proposalsByToolCallId);
+                                break;
+                            case ToolCallRoute.ProposePlan:
+                                HandlePlanToolCallDelta(toolCallDelta, planParser, planProposalsByToolCallId);
+                                break;
+                            default:
+                                AccumulateMcpCall(toolCallDelta, mcpCallsByIndex);
+                                break;
                         }
 
                         break;
@@ -335,6 +387,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         public string EffectiveId => Id ?? $"call-{index}";
     }
 
+    private enum ToolCallRoute
+    {
+        ProposeEdit,
+        ProposePlan,
+        Mcp,
+    }
+
     private void HandleToolCallDelta(
         ToolCallDelta delta,
         EditProposalParser proposalParser,
@@ -352,11 +411,75 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         if (proposalEvent.Status == EditProposalStatus.Complete)
         {
             proposal.Complete(proposalEvent, _solutionDirectory);
+            if (IsAutoMode)
+            {
+                proposal.AcceptCommand.Execute(null);
+            }
         }
         else
         {
             proposal.UpdateStreaming(proposalEvent);
         }
+    }
+
+    private void HandlePlanToolCallDelta(
+        ToolCallDelta delta,
+        PlanProposalParser planParser,
+        Dictionary<string, PlanProposalViewModel> proposalsByToolCallId)
+    {
+        var planEvent = planParser.OnToolCallDelta(delta);
+
+        if (!proposalsByToolCallId.TryGetValue(planEvent.ToolCallId, out var proposal))
+        {
+            proposal = new PlanProposalViewModel(planEvent.ToolCallId, ApprovePlanAsync);
+            proposalsByToolCallId[planEvent.ToolCallId] = proposal;
+            Messages.Add(proposal);
+        }
+
+        if (planEvent.Status == PlanProposalStatus.Complete)
+        {
+            proposal.Complete(planEvent);
+        }
+        else
+        {
+            proposal.UpdateStreaming(planEvent);
+        }
+    }
+
+    /// <summary>
+    /// Turns Plan Mode off (so the next turn gets the real propose_edit tool) and re-prompts the
+    /// model to carry out the approved plan, continuing the same conversation rather than waiting
+    /// for the user to type something.
+    /// </summary>
+    private async Task ApprovePlanAsync(PlanProposalViewModel proposal)
+    {
+        IsPlanMode = false;
+
+        var marker = new ChatMessageViewModel(ChatRole.User) { Text = "✅ Approve plan & implement" };
+        Messages.Add(marker);
+
+        var stepsList = string.Join("\n", proposal.Steps.Select((step, i) => $"{i + 1}. {step}"));
+        var instruction = $"""
+            The plan below was approved. Implement it now - use propose_edit for any file changes, and
+            keep calling tools as needed. Don't propose another plan; just do the work.
+
+            Summary: {proposal.Summary}
+
+            Steps:
+            {stepsList}
+            """;
+
+        var history = Messages
+            .OfType<ChatMessageViewModel>()
+            .Where(m => m != marker)
+            .Select(m => new ChatMessage(m.Role, m.Text))
+            .ToList();
+        history.Add(new ChatMessage(ChatRole.User, instruction));
+
+        var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
+        Messages.Add(assistantMessage);
+
+        await RunAssistantTurnsAsync(history, assistantMessage);
     }
 
     [RelayCommand]
@@ -486,6 +609,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     partial void OnSelectedModelChanged(string value) =>
         _appSettingsStore.Set(SelectedProvider == ProviderLmStudio ? LmStudioModelSettingKey : OpenRouterModelSettingKey, value);
+
+    partial void OnSelectedEffortChanged(ChatEffort value) => _appSettingsStore.Set(EffortSettingKey, value.ToString());
+
+    partial void OnIsAutoModeChanged(bool value) => _appSettingsStore.Set(AutoModeSettingKey, value.ToString());
+
+    partial void OnIsPlanModeChanged(bool value) => _appSettingsStore.Set(PlanModeSettingKey, value.ToString());
 
     partial void OnIsStreamingChanged(bool value)
     {

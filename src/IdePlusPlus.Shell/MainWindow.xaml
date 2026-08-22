@@ -9,8 +9,9 @@
         xmlns:editor="clr-namespace:IdePlusPlus.Editor;assembly=IdePlusPlus.Editor"
         xmlns:projectSystem="clr-namespace:IdePlusPlus.ProjectSystem;assembly=IdePlusPlus.ProjectSystem"
         xmlns:debug="clr-namespace:IdePlusPlus.Debug;assembly=IdePlusPlus.Debug"
+        xmlns:build="clr-namespace:IdePlusPlus.Build;assembly=IdePlusPlus.Build"
         xmlns:views="clr-namespace:IdePlusPlus.Shell.Views"
-        Title="IDE++"
+        Title="{Binding WindowTitle}"
         Height="800"
         Width="1280"
         WindowStartupLocation="CenterScreen"
@@ -23,7 +24,14 @@
         <KeyBinding Key="F10" Command="{Binding StepOverCommand}" />
         <KeyBinding Key="F11" Command="{Binding StepIntoCommand}" />
         <KeyBinding Key="F11" Modifiers="Shift" Command="{Binding StepOutCommand}" />
+        <KeyBinding Key="G" Modifiers="Control" Command="{x:Static local:MainWindow.GoToLineCommand}" />
     </Window.InputBindings>
+
+    <Window.CommandBindings>
+        <CommandBinding Command="{x:Static local:MainWindow.GoToLineCommand}"
+                         CanExecute="GoToLineCommand_OnCanExecute"
+                         Executed="GoToLineCommand_OnExecuted" />
+    </Window.CommandBindings>
 
     <Window.Resources>
         <!--
@@ -216,8 +224,33 @@
                      HorizontalScrollBarVisibility="Auto"
                      TextChanged="OutputTextBox_OnTextChanged" />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:ErrorListPaneViewModel}">
+            <ListBox ItemsSource="{Binding Diagnostics}"
+                     Background="{DynamicResource PanelBackgroundBrush}"
+                     Foreground="{DynamicResource WindowForegroundBrush}"
+                     BorderThickness="0"
+                     FontFamily="Consolas"
+                     MouseDoubleClick="ErrorListBox_OnMouseDoubleClick">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type build:BuildDiagnostic}">
+                        <TextBlock FontSize="11">
+                            <Run Text="{Binding Severity, Mode=OneWay}" FontWeight="Bold" />
+                            <Run Text="{Binding Code, Mode=OneWay}" />
+                            <Run Text="{Binding Message, Mode=OneWay}" />
+                            <Run Text=" — " Foreground="{DynamicResource MutedForegroundBrush}" />
+                            <Run Text="{Binding FilePath, Mode=OneWay}" Foreground="{DynamicResource MutedForegroundBrush}" />
+                            <Run Text=":" Foreground="{DynamicResource MutedForegroundBrush}" />
+                            <Run Text="{Binding Line, Mode=OneWay}" Foreground="{DynamicResource MutedForegroundBrush}" />
+                        </TextBlock>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
             <views:CopilotChatPanel />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:SourceControlPaneViewModel}">
+            <views:SourceControlPanel />
         </DataTemplate>
         <DataTemplate DataType="{x:Type local:WelcomeDocumentViewModel}">
             <TextBlock Text="{Binding Message}"
@@ -284,12 +317,25 @@
                 <MenuItem Header="Open _Solution..." Command="{Binding OpenSolutionCommand}" />
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" />
                 <MenuItem Header="Save _As..." Command="{Binding SaveAsCommand}" />
+                <MenuItem Header="Save A_ll" Command="{Binding SaveAllCommand}" />
+                <MenuItem Header="Close A_ll" Click="CloseAllMenuItem_OnClick" />
                 <Separator />
                 <MenuItem Header="Recent Files" ItemsSource="{Binding RecentFiles}">
                     <MenuItem.ItemContainerStyle>
                         <Style TargetType="MenuItem">
-                            <Setter Property="Header" Value="{Binding}" />
+                            <Setter Property="Header" Value="{Binding Converter={x:Static toolPanes:FileNameConverter.Instance}}" />
+                            <Setter Property="ToolTip" Value="{Binding}" />
                             <Setter Property="Command" Value="{Binding DataContext.OpenRecentFileCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                            <Setter Property="CommandParameter" Value="{Binding}" />
+                        </Style>
+                    </MenuItem.ItemContainerStyle>
+                </MenuItem>
+                <MenuItem Header="Recent Solutions" ItemsSource="{Binding RecentSolutions}">
+                    <MenuItem.ItemContainerStyle>
+                        <Style TargetType="MenuItem">
+                            <Setter Property="Header" Value="{Binding Converter={x:Static toolPanes:FileNameConverter.Instance}}" />
+                            <Setter Property="ToolTip" Value="{Binding}" />
+                            <Setter Property="Command" Value="{Binding DataContext.OpenRecentSolutionCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
                             <Setter Property="CommandParameter" Value="{Binding}" />
                         </Style>
                     </MenuItem.ItemContainerStyle>
@@ -297,8 +343,16 @@
                 <Separator />
                 <MenuItem Header="E_xit" Click="ExitMenuItem_OnClick" />
             </MenuItem>
+            <MenuItem Header="_Edit">
+                <MenuItem Header="_Find..." Command="ApplicationCommands.Find" InputGestureText="Ctrl+F" />
+                <MenuItem Header="_Replace..." Command="ApplicationCommands.Replace" InputGestureText="Ctrl+H" />
+                <Separator />
+                <MenuItem Header="_Go to Line..." Command="{x:Static local:MainWindow.GoToLineCommand}" InputGestureText="Ctrl+G" />
+            </MenuItem>
             <MenuItem Header="_Build">
                 <MenuItem Header="_Build Solution" Command="{Binding BuildCommand}" />
+                <MenuItem Header="_Clean Solution" Command="{Binding CleanCommand}" />
+                <MenuItem Header="_Rebuild Solution" Command="{Binding RebuildCommand}" />
                 <Separator />
                 <MenuItem Header="_Run" Command="{Binding RunCommand}" />
                 <MenuItem Header="_Stop" Command="{Binding StopCommand}" />
@@ -315,6 +369,15 @@
             <MenuItem Header="_View">
                 <MenuItem Header="_Dark Mode" IsCheckable="True" IsChecked="{Binding IsDarkTheme, Mode=OneWay}" Command="{Binding ToggleThemeCommand}" />
             </MenuItem>
+            <MenuItem Header="_Git" DataContext="{Binding SourceControl}">
+                <MenuItem Header="_Refresh Status" Command="{Binding RefreshCommand}" />
+                <Separator />
+                <MenuItem Header="_Commit" Command="{Binding CommitCommand}" />
+                <Separator />
+                <MenuItem Header="_Fetch" Command="{Binding FetchCommand}" />
+                <MenuItem Header="_Pull" Command="{Binding PullCommand}" />
+                <MenuItem Header="P_ush" Command="{Binding PushCommand}" />
+            </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Settings..." Click="SettingsMenuItem_OnClick" />
                 <Separator />
@@ -326,6 +389,9 @@
                         </Style>
                     </MenuItem.ItemContainerStyle>
                 </MenuItem>
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About IDE++..." Click="AboutMenuItem_OnClick" />
             </MenuItem>
         </Menu>
 
@@ -356,6 +422,10 @@
                                                       ContentId="{x:Static toolPanes:SolutionExplorerPaneViewModel.PaneContentId}"
                                                       Title="Solution Explorer"
                                                       CanClose="False" />
+                        <avalonDock:LayoutAnchorable x:Name="SourceControlAnchorable"
+                                                      ContentId="{x:Static toolPanes:SourceControlPaneViewModel.PaneContentId}"
+                                                      Title="Git"
+                                                      CanClose="False" />
                     </avalonDock:LayoutAnchorablePane>
 
                     <avalonDock:LayoutPanel Orientation="Vertical">
@@ -370,6 +440,10 @@
                             <avalonDock:LayoutAnchorable x:Name="OutputAnchorable"
                                                           ContentId="{x:Static toolPanes:OutputPaneViewModel.PaneContentId}"
                                                           Title="Output"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="ErrorListAnchorable"
+                                                          ContentId="{x:Static toolPanes:ErrorListPaneViewModel.PaneContentId}"
+                                                          Title="Error List"
                                                           CanClose="False" />
                             <avalonDock:LayoutAnchorable x:Name="CallStackAnchorable"
                                                           ContentId="{x:Static toolPanes:CallStackPaneViewModel.PaneContentId}"
@@ -398,6 +472,17 @@
                    Foreground="{DynamicResource WindowForegroundBrush}">
             <StatusBarItem>
                 <TextBlock Text="{Binding StatusBarText}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Text="{Binding SourceControl.BranchStatusText}" Margin="16,0,0,0" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <ComboBox ItemsSource="{Binding AvailableConfigurations}"
+                          SelectedItem="{Binding Configuration}"
+                          Margin="16,0,0,0"
+                          Width="80"
+                          FontSize="11"
+                          ToolTip="Build/Run/Debug configuration" />
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <StackPanel Orientation="Horizontal">

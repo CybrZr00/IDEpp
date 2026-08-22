@@ -6,5 +6,6 @@ public interface IChatClient
         IReadOnlyList<ChatMessage> messages,
         string model,
         IReadOnlyList<ToolDefinition>? tools = null,
+        ChatEffort effort = ChatEffort.None,
         CancellationToken cancellationToken = default);
 }

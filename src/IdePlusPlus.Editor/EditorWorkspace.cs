@@ -32,7 +32,12 @@ public sealed class EditorWorkspace
         return document;
     }
 
-    public DocumentViewModel Open(string filePath)
+    /// <summary>
+    /// Opens filePath, or returns null if it can no longer be read (deleted/renamed/unavailable
+    /// drive since it was added to Recent Files) - pruning the stale entry rather than letting the
+    /// caller's File.ReadAllText crash out as an unhandled exception.
+    /// </summary>
+    public DocumentViewModel? Open(string filePath)
     {
         var existing = OpenDocuments.FirstOrDefault(d =>
             string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
@@ -42,10 +47,34 @@ public sealed class EditorWorkspace
             return existing;
         }
 
-        var document = DocumentViewModel.ForExistingFile(filePath);
+        if (!File.Exists(filePath))
+        {
+            RemoveFromRecentFiles(filePath);
+            return null;
+        }
+
+        DocumentViewModel document;
+        try
+        {
+            document = DocumentViewModel.ForExistingFile(filePath);
+        }
+        catch (IOException)
+        {
+            RemoveFromRecentFiles(filePath);
+            return null;
+        }
+
         OpenDocuments.Add(document);
         TouchRecentFile(filePath);
         return document;
+    }
+
+    private void RemoveFromRecentFiles(string filePath)
+    {
+        if (RecentFiles.Remove(filePath))
+        {
+            SaveRecentFiles();
+        }
     }
 
     public void Save(DocumentViewModel document)

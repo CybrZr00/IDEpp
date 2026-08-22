@@ -36,9 +36,14 @@ public sealed class SecureSettingsStore
             var plaintextBytes = ProtectedData.Unprotect(protectedBytes, optionalEntropy: null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plaintextBytes);
         }
-        catch (CryptographicException)
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
         {
-            // Encrypted under a different user profile, or the file is corrupt - treat as unset.
+            // Encrypted under a different user profile (e.g. a migrated/re-imaged machine), or the
+            // entry (or its base64 encoding) is corrupt - it can never be decrypted from here, so
+            // drop it rather than leaving a permanently-dead row in secrets.json. Re-entering the
+            // key will recreate it.
+            _protectedValuesByKey.Remove(key);
+            Save();
             return null;
         }
     }

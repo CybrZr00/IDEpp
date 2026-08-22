@@ -30,11 +30,12 @@ public sealed class LmStudioChatClient : IChatClient
         IReadOnlyList<ChatMessage> messages,
         string model,
         IReadOnlyList<ToolDefinition>? tools = null,
+        ChatEffort effort = ChatEffort.None,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var baseUrl = (_settingsStore.Get(BaseUrlSettingName) ?? DefaultBaseUrl).TrimEnd('/');
 
-        var (response, connectError) = await TryConnectAsync(baseUrl, messages, model, tools, cancellationToken);
+        var (response, connectError) = await TryConnectAsync(baseUrl, messages, model, tools, effort, cancellationToken);
         if (connectError is not null)
         {
             yield return new StreamError(connectError);
@@ -89,6 +90,7 @@ public sealed class LmStudioChatClient : IChatClient
         IReadOnlyList<ChatMessage> messages,
         string model,
         IReadOnlyList<ToolDefinition>? tools,
+        ChatEffort effort,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/chat/completions");
@@ -98,6 +100,7 @@ public sealed class LmStudioChatClient : IChatClient
             stream = true,
             messages = messages.Select(OpenAiCompatibleChat.ToRequestMessage),
             tools = tools is { Count: > 0 } ? tools.Select(OpenAiCompatibleChat.ToToolSchema) : null,
+            reasoning = OpenAiCompatibleChat.ToReasoningParameter(effort),
         });
 
         try
