@@ -1,5 +1,8 @@
 using System.Windows;
+using IdePlusPlus.Build;
 using IdePlusPlus.Editor;
+using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Run;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,6 +15,10 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Must happen before any code in the process touches a Microsoft.Build.* type -
+        // see the comment on SolutionLoader.EnsureMSBuildRegistered for why.
+        SolutionLoader.EnsureMSBuildRegistered();
+
         base.OnStartup(e);
 
         var services = new ServiceCollection();
@@ -35,6 +42,8 @@ public partial class App : Application
         services.AddSingleton<CopilotChatPaneViewModel>();
         services.AddSingleton<WelcomeDocumentViewModel>();
         services.AddSingleton<EditorWorkspace>();
+        services.AddSingleton<BuildService>();
+        services.AddSingleton<RunService>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

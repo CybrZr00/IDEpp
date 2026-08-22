@@ -7,6 +7,7 @@
         xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes"
         xmlns:local="clr-namespace:IdePlusPlus.Shell"
         xmlns:editor="clr-namespace:IdePlusPlus.Editor;assembly=IdePlusPlus.Editor"
+        xmlns:projectSystem="clr-namespace:IdePlusPlus.ProjectSystem;assembly=IdePlusPlus.ProjectSystem"
         Title="IDE++"
         Height="800"
         Width="1280"
@@ -15,15 +16,23 @@
         Drop="MainWindow_OnDrop">
 
     <Window.Resources>
+        <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
+            <TextBlock Text="{Binding Name}" />
+        </HierarchicalDataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
-            <TextBlock Text="Solution Explorer — open a solution to populate this tree."
-                       Margin="8"
-                       TextWrapping="Wrap" />
+            <TreeView ItemsSource="{Binding RootNodes}"
+                      BorderThickness="0"
+                      MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick" />
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
-            <TextBlock Text="Build and run output will stream here."
-                       Margin="8"
-                       TextWrapping="Wrap" />
+            <TextBox Text="{Binding Text, Mode=OneWay}"
+                     IsReadOnly="True"
+                     BorderThickness="0"
+                     FontFamily="Consolas"
+                     TextWrapping="NoWrap"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto"
+                     TextChanged="OutputTextBox_OnTextChanged" />
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
             <TextBlock Text="Copilot chat panel — OpenRouter integration lands in a later milestone."
@@ -50,6 +59,7 @@
             <MenuItem Header="_File">
                 <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" />
                 <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
+                <MenuItem Header="Open _Solution..." Command="{Binding OpenSolutionCommand}" />
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" />
                 <MenuItem Header="Save _As..." Command="{Binding SaveAsCommand}" />
                 <Separator />
@@ -64,6 +74,12 @@
                 </MenuItem>
                 <Separator />
                 <MenuItem Header="E_xit" Click="ExitMenuItem_OnClick" />
+            </MenuItem>
+            <MenuItem Header="_Build">
+                <MenuItem Header="_Build Solution" Command="{Binding BuildCommand}" />
+                <Separator />
+                <MenuItem Header="_Run" Command="{Binding RunCommand}" />
+                <MenuItem Header="_Stop" Command="{Binding StopCommand}" />
             </MenuItem>
         </Menu>
 

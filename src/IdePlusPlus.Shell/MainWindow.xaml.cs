@@ -1,8 +1,11 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using AvalonDock;
 using AvalonDock.Serializer.Xml;
 using IdePlusPlus.Editor;
+using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Shell.ToolPanes;
 
 namespace IdePlusPlus.Shell;
@@ -130,4 +133,14 @@ public partial class MainWindow : Window
             ((MainWindowViewModel)DataContext).CloseDocument(document);
         }
     }
+
+    private void SolutionExplorerTree_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is FrameworkElement { DataContext: SolutionTreeNode node })
+        {
+            ((MainWindowViewModel)DataContext).OpenTreeNode(node);
+        }
+    }
+
+    private void OutputTextBox_OnTextChanged(object sender, TextChangedEventArgs e) => ((TextBox)sender).ScrollToEnd();
 }
