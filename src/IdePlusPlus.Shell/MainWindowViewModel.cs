@@ -29,6 +29,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string? _runnableProjectPath;
     private LaunchProfile? _currentLaunchProfile;
     private bool _debugBrowserLaunched;
+    private SolutionTreeNode? _solutionRoot;
 
     public MainWindowViewModel(
         SolutionExplorerPaneViewModel solutionExplorer,
@@ -217,19 +218,58 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var root = await Task.Run(() => SolutionLoader.Load(dialog.FileName));
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = dialog.FileName;
-            CopilotChat.SetSolutionDirectory(Path.GetDirectoryName(dialog.FileName));
+            _solutionRoot = root;
+
+            var solutionDirectory = Path.GetDirectoryName(dialog.FileName);
+            CopilotChat.SetSolutionDirectory(solutionDirectory);
             CopilotChat.SetIndexableFiles(root.Flatten()
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)
                 .ToList());
-            _runnableProjectPath = root.Children.FirstOrDefault(c => c.Kind == SolutionTreeNodeKind.Project)?.FullPath;
+
+            var projects = root.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project).ToList();
+            var savedStartupPath = solutionDirectory is not null ? StartupProjectStore.Load(solutionDirectory) : null;
+            var startupProject = projects.FirstOrDefault(p => p.FullPath == savedStartupPath) ?? projects.FirstOrDefault();
+
+            if (startupProject is not null)
+            {
+                startupProject.IsStartupProject = true;
+            }
+
+            _runnableProjectPath = startupProject?.FullPath;
             RunCommand.NotifyCanExecuteChanged();
+            StartDebuggingCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");
         }
         catch (Exception ex)
         {
             Output.AppendLine($"Failed to load solution: {ex.Message}");
         }
+    }
+
+    /// <summary>Marks a project as the one Run/Debug act on, persisting the choice for next time this solution opens.</summary>
+    public void SetStartupProject(SolutionTreeNode node)
+    {
+        if (node.Kind != SolutionTreeNodeKind.Project || node.FullPath is null || _solutionRoot is null)
+        {
+            return;
+        }
+
+        foreach (var project in _solutionRoot.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project))
+        {
+            project.IsStartupProject = ReferenceEquals(project, node);
+        }
+
+        _runnableProjectPath = node.FullPath;
+        RunCommand.NotifyCanExecuteChanged();
+        StartDebuggingCommand.NotifyCanExecuteChanged();
+
+        if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
+        {
+            StartupProjectStore.Save(solutionDirectory, node.FullPath);
+        }
+
+        Output.AppendLine($"Startup project set to {node.Name}.");
     }
 
     public void OpenTreeNode(SolutionTreeNode node)

@@ -165,6 +165,25 @@ public partial class MainWindow : Window
         }
     }
 
+    // Built and shown in code-behind rather than as a XAML ContextMenu: a ContextMenu's popup isn't
+    // part of the visual tree its PlacementTarget lives in, so a RelativeSource binding from inside
+    // it can't reach the window's MainWindowViewModel to invoke SetStartupProject.
+    private void SolutionExplorerTree_OnPreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement { DataContext: SolutionTreeNode { Kind: SolutionTreeNodeKind.Project } node } element)
+        {
+            return;
+        }
+
+        var viewModel = (MainWindowViewModel)DataContext;
+        var menuItem = new MenuItem { Header = "Set as Startup Project" };
+        menuItem.Click += (_, _) => viewModel.SetStartupProject(node);
+
+        var contextMenu = new ContextMenu { PlacementTarget = element };
+        contextMenu.Items.Add(menuItem);
+        contextMenu.IsOpen = true;
+    }
+
     private void OutputTextBox_OnTextChanged(object sender, TextChangedEventArgs e) => ((TextBox)sender).ScrollToEnd();
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)

@@ -27,14 +27,25 @@
 
     <Window.Resources>
         <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
-            <TextBlock Text="{Binding Name}" />
+            <TextBlock Text="{Binding Name}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsStartupProject}" Value="True">
+                                <Setter Property="FontWeight" Value="Bold" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
         </HierarchicalDataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
             <TreeView ItemsSource="{Binding RootNodes}"
                       Background="{DynamicResource PanelBackgroundBrush}"
                       Foreground="{DynamicResource WindowForegroundBrush}"
                       BorderThickness="0"
-                      MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick" />
+                      MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick"
+                      PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown" />
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
             <TextBox Text="{Binding Text, Mode=OneWay}"

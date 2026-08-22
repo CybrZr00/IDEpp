@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace IdePlusPlus.ProjectSystem;
 
@@ -10,7 +11,7 @@ public enum SolutionTreeNodeKind
     File,
 }
 
-public sealed class SolutionTreeNode(string name, string? fullPath, SolutionTreeNodeKind kind)
+public sealed partial class SolutionTreeNode(string name, string? fullPath, SolutionTreeNodeKind kind) : ObservableObject
 {
     public string Name { get; } = name;
 
@@ -19,6 +20,10 @@ public sealed class SolutionTreeNode(string name, string? fullPath, SolutionTree
     public SolutionTreeNodeKind Kind { get; } = kind;
 
     public ObservableCollection<SolutionTreeNode> Children { get; } = [];
+
+    /// <summary>True for the one Project node Run/Debug will act on - see MainWindowViewModel.SetStartupProject.</summary>
+    [ObservableProperty]
+    private bool isStartupProject;
 
     /// <summary>Finds or creates the folder chain for a relative path's directory parts, returning the leaf folder to add files under.</summary>
     public SolutionTreeNode GetOrCreateFolder(IEnumerable<string> pathParts)
