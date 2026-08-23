@@ -4,6 +4,10 @@
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
     <AssemblyName>IdePlusPlus</AssemblyName>
+    <!-- Same source image as MainWindow.xaml's Icon and the About/Welcome logo, embedded here too
+         so the built .exe itself (Explorer, taskbar pin, shortcuts) shows it, not just the running
+         window. -->
+    <ApplicationIcon>..\IdePlusPlus.Shell\Assets\AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

@@ -5,6 +5,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- App icon (used by MainWindow.xaml's Icon and IdePlusPlus.App's ApplicationIcon) and the
+         in-app logo shown on the Welcome screen and About dialog. -->
+    <Resource Include="Assets\AppIcon.ico" />
+    <Resource Include="Assets\Logo.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- MainWindowViewModel now depends (transitively, via IdePlusPlus.Roslyn) on
          Microsoft.CodeAnalysis.Workspaces.MSBuild, which drags in Microsoft.Build.Framework and
          Microsoft.NET.StringTools without the runtime-asset exclusion Microsoft.Build.Locator's own
