@@ -12,7 +12,7 @@
         xmlns:build="clr-namespace:IdePlusPlus.Build;assembly=IdePlusPlus.Build"
         xmlns:views="clr-namespace:IdePlusPlus.Shell.Views"
         Title="{Binding WindowTitle}"
-        Icon="/Assets/AppIcon.ico"
+        Icon="pack://application:,,,/IdePlusPlus.Shell;component/Assets/AppIcon.ico"
         Height="800"
         Width="1280"
         WindowStartupLocation="CenterScreen"
@@ -306,7 +306,7 @@
         </DataTemplate>
         <DataTemplate DataType="{x:Type local:WelcomeDocumentViewModel}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Image Source="/Assets/Logo.png" Width="160" Height="160" Margin="0,0,0,16" />
+                <Image Source="pack://application:,,,/IdePlusPlus.Shell;component/Assets/Logo.png" Width="160" Height="160" Margin="0,0,0,16" />
                 <TextBlock Text="{Binding Message}"
                            FontSize="16"
                            HorizontalAlignment="Center" />
