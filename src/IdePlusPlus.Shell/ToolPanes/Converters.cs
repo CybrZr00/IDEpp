@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Media;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.TestRunner;
 
 namespace IdePlusPlus.Shell.ToolPanes;
 
@@ -35,6 +37,41 @@ public sealed class FileNameConverter : IValueConverter
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is string path ? System.IO.Path.GetFileName(path) : value ?? "";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Status-icon glyph for a Test Explorer method leaf's TestOutcome - paired with
+/// TestOutcomeToBrushConverter for color. No existing enum-to-glyph converter in this file to mirror,
+/// so this is a small new one following the same static-Instance IValueConverter shape as the rest.</summary>
+public sealed class TestOutcomeToGlyphConverter : IValueConverter
+{
+    public static readonly TestOutcomeToGlyphConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        TestOutcome.Passed => "✓",
+        TestOutcome.Failed => "✗",
+        TestOutcome.Skipped => "◐",
+        _ => "—",
+    };
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+public sealed class TestOutcomeToBrushConverter : IValueConverter
+{
+    public static readonly TestOutcomeToBrushConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        TestOutcome.Passed => Brushes.LimeGreen,
+        TestOutcome.Failed => Brushes.OrangeRed,
+        TestOutcome.Skipped => Brushes.Goldenrod,
+        _ => Brushes.Gray,
+    };
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

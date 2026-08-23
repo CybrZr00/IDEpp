@@ -148,6 +148,33 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
         warnings/errors), full test suite (193 tests across 16 projects, all passing), and a real
         launch smoke test with the new `DebugSessionManager` DI wiring. `DapClient.cs`'s wire
         protocol was not touched.
+  - [x] **3. Test Explorer** — new `IdePlusPlus.TestRunner` project (`TestDiscoveryService` shells to
+        `dotnet test --list-tests`, `TestRunService` shells to `dotnet test --logger trx` with real
+        `Process.Kill(entireProcessTree: true)` cancellation mirroring `RunService.Stop()` — the only
+        genuine cancellation precedent in the codebase, since `BuildService`'s own `CancellationToken`
+        parameter is accepted but never actually wired to a Cancel button — and `TrxParser` parses the
+        resulting VSTest `.trx` XML defensively, tolerating missing/unexpected elements). Both the
+        `--list-tests` output shape and the `.trx` schema were verified against this machine's real
+        installed SDK (10.0.301) rather than assumed from memory, per the design's own risk that both
+        formats are undocumented and SDK-version-fragile. `SolutionTreeNode` gained an `IsTestProject`
+        flag (via a new `TestProjectDetector` checking MSBuild's automatic `IsTestProject` property
+        with a `PackageReference`-name fallback) set at zero extra MSBuild-evaluation cost, right
+        alongside the existing `TargetFramework` read in `SolutionLoader`. A new docked Test Explorer
+        pane shows a Project→Class→Method tree with pass/fail/skipped/not-run status glyphs, Run
+        All/Selected/Failed/Cancel commands, and a live summary string; double-clicking a failure
+        navigates to its assertion's file:line on a best-effort basis (a regex over the TRX stack
+        trace's `"in <path>:line <n>"` suffix — silently a no-op, never a throw, when no such pattern
+        is found). Discovery runs after every successful Build and best-effort after solution load.
+        "Debug a single test" remains explicitly out of scope, as does streaming each `dotnet test`
+        run's raw output into the Output pane (results still land correctly; only the live
+        in-progress console text is not yet surfaced — a small, known follow-up, not a
+        functional gap). New `IdePlusPlus.TestRunner.Tests` (8 tests, including a real,
+        wall-clock-bounded cancellation test and a namespace-with-dots FQN-splitting case) and 2 new
+        `TestProjectDetector` tests, all against real scratch projects and real `dotnet test`/`dotnet
+        build` runs, never mocks. End-to-end sanity-checked against this repo's own real
+        `IdePlusPlus.SourceControl.Tests` project (discovered and ran all 29 real tests correctly)
+        beyond the unit suite. Verified: full-solution build (0 warnings/errors), full test suite
+        (211 tests across 17 projects, all passing), and a real launch smoke test.
 
 **Verification performed**: every milestone above was verified with `dotnet build` (0 warnings/errors)
 and `dotnet test` (105 tests passing across 12 test projects, up from 7 projects/~60 tests at the

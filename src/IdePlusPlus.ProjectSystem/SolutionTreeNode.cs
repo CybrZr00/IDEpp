@@ -34,6 +34,11 @@ public sealed partial class SolutionTreeNode(string name, string? fullPath, Solu
     /// </summary>
     public string? TargetFramework { get; init; }
 
+    /// <summary>True when TestProjectDetector identified this project as a test project at load
+    /// time (via $(IsTestProject) or a known test-framework PackageReference) - best-effort, set
+    /// once and never re-evaluated.</summary>
+    public bool IsTestProject { get; init; }
+
     /// <summary>Finds or creates the folder chain for a relative path's directory parts, returning the leaf folder to add files under.</summary>
     public SolutionTreeNode GetOrCreateFolder(IEnumerable<string> pathParts)
     {

@@ -73,9 +73,12 @@ public static class SolutionLoader
                     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .FirstOrDefault(tfm => tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase));
 
+            var isTestProject = TestProjectDetector.IsTestProject(evaluated);
+
             projectNode = new SolutionTreeNode(projectName, projectPath, SolutionTreeNodeKind.Project)
             {
                 TargetFramework = windowsTargetFramework,
+                IsTestProject = isTestProject,
             };
 
             var visibleItemTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

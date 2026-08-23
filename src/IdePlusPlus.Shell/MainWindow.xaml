@@ -249,6 +249,51 @@
                 </ListBox.ItemTemplate>
             </ListBox>
         </DataTemplate>
+        <HierarchicalDataTemplate DataType="{x:Type toolPanes:TestTreeNode}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Outcome, Converter={x:Static toolPanes:TestOutcomeToGlyphConverter.Instance}}"
+                           Foreground="{Binding Outcome, Converter={x:Static toolPanes:TestOutcomeToBrushConverter.Instance}}"
+                           FontWeight="Bold"
+                           Margin="0,0,4,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Kind}" Value="Method">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <!-- Foreground set explicitly, same reason as the Solution Explorer template above -
+                     the default themed TreeViewItem template hardcodes light-theme text color. -->
+                <TextBlock Text="{Binding Name}"
+                           Foreground="{DynamicResource WindowForegroundBrush}"
+                           ToolTip="{Binding ErrorMessage}" />
+            </StackPanel>
+        </HierarchicalDataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:TestExplorerPaneViewModel}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+                    <Button Content="Run All" Command="{Binding RunAllCommand}" Margin="0,0,4,0" />
+                    <Button Content="Run Selected" Command="{Binding RunSelectedCommand}" Margin="0,0,4,0" />
+                    <Button Content="Run Failed" Command="{Binding RunFailedCommand}" Margin="0,0,4,0" />
+                    <Button Content="Cancel" Command="{Binding CancelCommand}" />
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Bottom"
+                           Text="{Binding Summary}"
+                           Margin="4,2"
+                           FontSize="11"
+                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                <TreeView ItemsSource="{Binding Tree}"
+                          Background="{DynamicResource PanelBackgroundBrush}"
+                          Foreground="{DynamicResource WindowForegroundBrush}"
+                          BorderThickness="0"
+                          MouseDoubleClick="TestTreeView_OnMouseDoubleClick"
+                          SelectedItemChanged="TestTreeView_OnSelectedItemChanged" />
+            </DockPanel>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
             <views:CopilotChatPanel />
         </DataTemplate>
@@ -487,6 +532,10 @@
                             <avalonDock:LayoutAnchorable x:Name="ErrorListAnchorable"
                                                           ContentId="{x:Static toolPanes:ErrorListPaneViewModel.PaneContentId}"
                                                           Title="Error List"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="TestExplorerAnchorable"
+                                                          ContentId="{x:Static toolPanes:TestExplorerPaneViewModel.PaneContentId}"
+                                                          Title="Tests"
                                                           CanClose="False" />
                             <avalonDock:LayoutAnchorable x:Name="CallStackAnchorable"
                                                           ContentId="{x:Static toolPanes:CallStackPaneViewModel.PaneContentId}"

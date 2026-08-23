@@ -64,6 +64,7 @@ public partial class MainWindow : Window
         NuGetAnchorable.Content = viewModel.NuGet;
         OutputAnchorable.Content = viewModel.Output;
         ErrorListAnchorable.Content = viewModel.ErrorList;
+        TestExplorerAnchorable.Content = viewModel.TestExplorer;
         CallStackAnchorable.Content = viewModel.CallStack;
         LocalsAnchorable.Content = viewModel.Locals;
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
@@ -76,6 +77,7 @@ public partial class MainWindow : Window
             [NuGetPaneViewModel.PaneContentId] = viewModel.NuGet,
             [OutputPaneViewModel.PaneContentId] = viewModel.Output,
             [ErrorListPaneViewModel.PaneContentId] = viewModel.ErrorList,
+            [TestExplorerPaneViewModel.PaneContentId] = viewModel.TestExplorer,
             [CallStackPaneViewModel.PaneContentId] = viewModel.CallStack,
             [LocalsPaneViewModel.PaneContentId] = viewModel.Locals,
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
@@ -316,6 +318,19 @@ public partial class MainWindow : Window
             ((MainWindowViewModel)DataContext).OpenDiagnostic(diagnostic);
         }
     }
+
+    private void TestTreeView_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is FrameworkElement { DataContext: TestTreeNode { Kind: TestTreeNodeKind.Method } node } && node.SourceFilePath is not null)
+        {
+            ((MainWindowViewModel)DataContext).OpenTestFailure(node);
+        }
+    }
+
+    // TreeView.SelectedItem has no setter (unlike ListBox/ComboBox's SelectedItem elsewhere in this
+    // file), so it can't be bound TwoWay from XAML - mirror it into the view model from the event instead.
+    private void TestTreeView_OnSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e) =>
+        ((MainWindowViewModel)DataContext).TestExplorer.SelectedNode = e.NewValue as TestTreeNode;
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {

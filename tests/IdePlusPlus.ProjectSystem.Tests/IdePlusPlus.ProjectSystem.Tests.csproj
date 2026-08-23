@@ -9,6 +9,11 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Shouldly" />
+    <!-- Only needed to compile against Microsoft.Build.Evaluation.Project directly in
+         TestProjectDetectorTests - mirrors IdePlusPlus.ProjectSystem.csproj's own reference; the
+         actual runtime assembly comes from MSBuildLocator.RegisterDefaults() (via
+         SolutionLoader.EnsureMSBuildRegistered), not from this package. -->
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

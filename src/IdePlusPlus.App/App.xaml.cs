@@ -20,6 +20,7 @@ using IdePlusPlus.NuGet;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
+using IdePlusPlus.TestRunner;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 
@@ -171,6 +172,9 @@ public partial class App : Application
         services.AddSingleton<NuGetService>();
         services.AddSingleton<NuGetSearchClient>();
         services.AddSingleton<NuGetPaneViewModel>();
+        services.AddSingleton<TestDiscoveryService>();
+        services.AddSingleton<TestRunService>();
+        services.AddSingleton<TestExplorerPaneViewModel>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

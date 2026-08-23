@@ -59,6 +59,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         CopilotChatPaneViewModel copilotChat,
         SourceControlPaneViewModel sourceControl,
         NuGetPaneViewModel nuGet,
+        TestExplorerPaneViewModel testExplorer,
         WelcomeDocumentViewModel welcome,
         CallStackPaneViewModel callStack,
         LocalsPaneViewModel locals,
@@ -77,6 +78,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         CopilotChat = copilotChat;
         SourceControl = sourceControl;
         NuGet = nuGet;
+        TestExplorer = testExplorer;
         Welcome = welcome;
         CallStack = callStack;
         Locals = locals;
@@ -148,6 +150,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public SourceControlPaneViewModel SourceControl { get; }
 
     public NuGetPaneViewModel NuGet { get; }
+
+    public TestExplorerPaneViewModel TestExplorer { get; }
 
     public WelcomeDocumentViewModel Welcome { get; }
 
@@ -445,6 +449,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             StartDebuggingCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");
 
+            // Best-effort: a solution opened in a fresh session has never been built by this
+            // session, but may already have build output on disk from a prior one - so discovery
+            // might still find real tests immediately. Not gated on success (see DiscoverTestsAsync).
+            _ = DiscoverTestsAsync();
+
             // Default-on: only skipped if the user has explicitly turned it off in Settings.
             var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
             if (restoreOnLoad)
@@ -554,6 +563,41 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OpenPath(fullPath);
     }
 
+    /// <summary>TestTreeNode.SourceFilePath is best-effort text scraped from a failure's stack trace -
+    /// mirrors OpenDiagnostic's shape exactly, resolving a possibly-relative path against the solution
+    /// directory. A node with no recognizable location (SourceFilePath is null) is a graceful no-op.</summary>
+    public void OpenTestFailure(TestTreeNode node)
+    {
+        if (node.SourceFilePath is null)
+        {
+            return;
+        }
+
+        var baseDirectory = Path.GetDirectoryName(CurrentSolutionPath) ?? Directory.GetCurrentDirectory();
+        var fullPath = Path.IsPathRooted(node.SourceFilePath)
+            ? node.SourceFilePath
+            : Path.GetFullPath(Path.Combine(baseDirectory, node.SourceFilePath));
+
+        OpenPath(fullPath);
+    }
+
+    /// <summary>Fire-and-forget from BuildAsync/LoadSolutionAsync - a discovery failure must never
+    /// break build/load result reporting, just get logged to Output.</summary>
+    private async Task DiscoverTestsAsync()
+    {
+        try
+        {
+            var testProjects = (_solutionRoot?.Flatten() ?? [])
+                .Where(n => n.Kind == SolutionTreeNodeKind.Project && n.IsTestProject)
+                .ToList();
+            await TestExplorer.DiscoverAsync(testProjects);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Test discovery failed: {ex.Message}");
+        }
+    }
+
     private bool HasSolution() => CurrentSolutionPath is not null;
 
     private void OnBuildOutputLine(string line) => _dispatcher.Invoke(() =>
@@ -570,6 +614,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Output.AppendLine($"Build started ({Configuration}): {CurrentSolutionPath}");
         var exitCode = await _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
         Output.AppendLine($"Build finished with exit code {exitCode}.");
+
+        if (exitCode == 0)
+        {
+            // Fire-and-forget: a successful build is the reliable trigger for (re)discovering
+            // tests (a fresh clone has never been built, so solution-load alone would show none).
+            _ = DiscoverTestsAsync();
+        }
     }
 
     [RelayCommand(CanExecute = nameof(HasSolution))]

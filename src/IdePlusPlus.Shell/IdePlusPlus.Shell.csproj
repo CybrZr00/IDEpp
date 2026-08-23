@@ -32,6 +32,7 @@
     <ProjectReference Include="..\IdePlusPlus.Copilot.Mcp\IdePlusPlus.Copilot.Mcp.csproj" />
     <ProjectReference Include="..\IdePlusPlus.SourceControl\IdePlusPlus.SourceControl.csproj" />
     <ProjectReference Include="..\IdePlusPlus.NuGet\IdePlusPlus.NuGet.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.TestRunner\IdePlusPlus.TestRunner.csproj" />
   </ItemGroup>
 
 </Project>
