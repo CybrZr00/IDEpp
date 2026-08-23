@@ -1,0 +1,22 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- A warmer, lower-contrast take on DarkTheme.xaml - a near-black neutral background and pure
+         white text read as harsher/more fatiguing over a long session than a softened, faintly warm
+         dark gray with an off-white (not pure white) foreground. Colors here match EditorTheme's
+         SoftDark palette so the editor and the surrounding chrome read as one consistent theme. -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#302F2B" />
+    <SolidColorBrush x:Key="WindowForegroundBrush" Color="#D4CFC4" />
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#2B2B28" />
+    <SolidColorBrush x:Key="MutedForegroundBrush" Color="#A39C8C" />
+
+    <SolidColorBrush x:Key="ChatBubbleAssistantBackgroundBrush" Color="#3A392F" />
+    <SolidColorBrush x:Key="ChatBubbleUserBackgroundBrush" Color="#3C4A47" />
+    <SolidColorBrush x:Key="DiffAddedBackgroundBrush" Color="#33402C" />
+    <SolidColorBrush x:Key="DiffRemovedBackgroundBrush" Color="#402E2C" />
+    <SolidColorBrush x:Key="DiffHighlightBackgroundBrush" Color="#7A6430" />
+    <SolidColorBrush x:Key="EditProposalBackgroundBrush" Color="#302F2B" />
+    <SolidColorBrush x:Key="EditProposalBorderBrush" Color="#4A473E" />
+    <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#3A392F" />
+
+</ResourceDictionary>

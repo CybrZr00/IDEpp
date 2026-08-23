@@ -20,6 +20,7 @@ public partial class TextEditorHost : UserControl
     private readonly XmlFoldingStrategy _xmlFoldingStrategy = new();
     private readonly BreakpointMargin _breakpointMargin = new(EditorServices.BreakpointManager);
     private readonly CurrentLineBackgroundRenderer _currentLineRenderer = new();
+    private readonly CaretLineBackgroundRenderer _caretLineRenderer = new();
     private readonly DiagnosticSquiggleRenderer _diagnosticSquiggleRenderer = new();
     private readonly GhostTextGenerator _ghostTextGenerator = new();
     private readonly DispatcherTimer _completionDebounceTimer;
@@ -37,6 +38,7 @@ public partial class TextEditorHost : UserControl
         SearchPanel.Install(Editor);
 
         Editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
+        Editor.TextArea.TextView.BackgroundRenderers.Add(_caretLineRenderer);
         Editor.TextArea.TextView.BackgroundRenderers.Add(_currentLineRenderer);
         Editor.TextArea.TextView.BackgroundRenderers.Add(_diagnosticSquiggleRenderer);
         Editor.TextArea.TextView.ElementGenerators.Add(_ghostTextGenerator);
@@ -106,6 +108,12 @@ public partial class TextEditorHost : UserControl
         Editor.Background = EditorTheme.Background;
         Editor.Foreground = EditorTheme.Foreground;
         Editor.TextArea.TextView.InvalidateLayer(_currentLineRenderer.Layer);
+        Editor.TextArea.TextView.InvalidateLayer(_caretLineRenderer.Layer);
+
+        // EditorTheme.Apply also just retinted every built-in syntax-highlighting color in place
+        // (see SyntaxHighlightingRecolorer) - a full redraw is needed for already-open documents to
+        // pick that up, since InvalidateLayer above only covers the two background renderers.
+        Editor.TextArea.TextView.Redraw();
     }
 
     private void ApplyEditorSettings()
@@ -143,10 +151,24 @@ public partial class TextEditorHost : UserControl
             ClearGhostText();
         }
 
+        UpdateCaretLineHighlight();
+
         if (Editor.TextArea.IsKeyboardFocusWithin)
         {
             PublishCaretPosition();
         }
+    }
+
+    private void UpdateCaretLineHighlight()
+    {
+        var line = Editor.TextArea.Caret.Line;
+        if (_caretLineRenderer.Line == line)
+        {
+            return;
+        }
+
+        _caretLineRenderer.Line = line;
+        Editor.TextArea.TextView.InvalidateLayer(_caretLineRenderer.Layer);
     }
 
     private void PublishCaretPosition() =>
@@ -189,6 +211,7 @@ public partial class TextEditorHost : UserControl
         if (_boundDocument is null)
         {
             Editor.Document = null;
+            _caretLineRenderer.Line = null;
             return;
         }
 
@@ -209,6 +232,7 @@ public partial class TextEditorHost : UserControl
         }
 
         UpdateCurrentLineHighlight();
+        UpdateCaretLineHighlight();
         if (Editor.TextArea.IsKeyboardFocusWithin)
         {
             PublishCaretPosition();

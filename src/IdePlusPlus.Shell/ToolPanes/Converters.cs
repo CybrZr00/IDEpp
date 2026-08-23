@@ -77,6 +77,21 @@ public sealed class TestOutcomeToBrushConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Generic "does this bound enum equal that fixed enum member" check - used for the Theme
+/// submenu's checkable MenuItems, where each item's IsChecked reflects whether it's the currently
+/// active AppTheme. ConverterParameter is the enum member to compare against, e.g.
+/// {x:Static editor:AppTheme.Dark}.</summary>
+public sealed class EnumEqualsConverter : IValueConverter
+{
+    public static readonly EnumEqualsConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is not null && parameter is not null && value.Equals(parameter);
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public sealed class DiffLinePrefixConverter : IValueConverter
 {
     public static readonly DiffLinePrefixConverter Instance = new();
