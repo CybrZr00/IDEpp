@@ -10,6 +10,7 @@ using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.NuGet;
 using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.Shell.Views;
@@ -36,6 +37,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly McpServerManager _mcpServerManager;
     private readonly NuGetService _nuGetService;
     private readonly AppSettingsStore _appSettingsStore;
+    private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly Dispatcher _dispatcher;
 
     private string? _runnableProjectPath;
@@ -70,7 +72,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ThemeService themeService,
         McpServerManager mcpServerManager,
         NuGetService nuGetService,
-        AppSettingsStore appSettingsStore)
+        AppSettingsStore appSettingsStore,
+        RoslynWorkspaceService roslynWorkspaceService)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
@@ -90,6 +93,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _mcpServerManager = mcpServerManager;
         _nuGetService = nuGetService;
         _appSettingsStore = appSettingsStore;
+        _roslynWorkspaceService = roslynWorkspaceService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         isDarkTheme = _themeService.IsDark;
@@ -132,6 +136,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         EditorServices.CaretPosition.Changed += () => _dispatcher.Invoke(() =>
             CursorPositionText = $"Ln {EditorServices.CaretPosition.Line}, Col {EditorServices.CaretPosition.Column}");
+
+        // Fires on whatever background thread RoslynWorkspaceService finished recomputing
+        // diagnostics on - dispatched to the UI thread before touching the ObservableCollection,
+        // same as every other cross-thread subscription above.
+        _roslynWorkspaceService.DiagnosticsChanged += (filePath, diagnostics) =>
+            _dispatcher.Invoke(() => ErrorList.UpsertLiveDiagnostics(filePath, diagnostics));
     }
 
     public SolutionExplorerPaneViewModel SolutionExplorer { get; }
@@ -456,9 +466,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             // Default-on: only skipped if the user has explicitly turned it off in Settings.
             var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
+
+            // The Roslyn workspace load is deliberately sequenced to start only after the restore
+            // attempt (successful or not) finishes, not in parallel with it - loading an unrestored
+            // project into MSBuildWorkspace tends to produce a wall of false CS0246-style errors for
+            // every missing package reference, which would make the Error List momentarily useless.
+            // Still entirely fire-and-forget from here: neither path blocks solution load itself.
             if (restoreOnLoad)
             {
-                _ = NuGetRestoreOnLoadAsync(solutionPath);
+                _ = NuGetRestoreThenLoadRoslynWorkspaceAsync(solutionPath);
+            }
+            else
+            {
+                _ = LoadRoslynWorkspaceAsync(solutionPath);
             }
         }
         catch (Exception ex)
@@ -479,6 +499,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (Exception ex)
         {
             Output.AppendLine($"NuGet restore failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Awaits the NuGet restore attempt (regardless of its outcome) before starting the
+    /// Roslyn workspace load - see the sequencing comment in LoadSolutionAsync for why.</summary>
+    private async Task NuGetRestoreThenLoadRoslynWorkspaceAsync(string solutionPath)
+    {
+        await NuGetRestoreOnLoadAsync(solutionPath);
+        await LoadRoslynWorkspaceAsync(solutionPath);
+    }
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync (or chained after the restore attempt) - a
+    /// Roslyn load failure (e.g. the version-skew MissingMethodException/FileLoadException risk
+    /// described in the design doc, or simply a solution MSBuildWorkspace can't parse) must never
+    /// break the rest of solution loading, just get logged to Output like the NuGet restore failure
+    /// path above. WorkspaceFailed (per-project load problems) is intentionally not surfaced here -
+    /// it fires far too often for perfectly normal reasons (an unrestored or non-SDK-style project)
+    /// to log every occurrence to Output without drowning out everything else.</summary>
+    private async Task LoadRoslynWorkspaceAsync(string solutionPath)
+    {
+        try
+        {
+            await _roslynWorkspaceService.LoadSolutionAsync(solutionPath);
+            Output.AppendLine("Roslyn workspace loaded (IntelliSense/diagnostics ready).");
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Roslyn workspace load failed (IntelliSense/diagnostics may be unavailable): {ex.Message}");
         }
     }
 
@@ -610,7 +658,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async Task BuildAsync()
     {
         Output.Clear();
-        ErrorList.Clear();
+        ErrorList.ClearBuildDiagnostics();
         Output.AppendLine($"Build started ({Configuration}): {CurrentSolutionPath}");
         var exitCode = await _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
         Output.AppendLine($"Build finished with exit code {exitCode}.");
@@ -627,7 +675,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async Task CleanAsync()
     {
         Output.Clear();
-        ErrorList.Clear();
+        ErrorList.ClearBuildDiagnostics();
         Output.AppendLine($"Clean started ({Configuration}): {CurrentSolutionPath}");
         var exitCode = await _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
         Output.AppendLine($"Clean finished with exit code {exitCode}.");
@@ -637,7 +685,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async Task RebuildAsync()
     {
         Output.Clear();
-        ErrorList.Clear();
+        ErrorList.ClearBuildDiagnostics();
         Output.AppendLine($"Rebuild started ({Configuration}): {CurrentSolutionPath}");
         var exitCode = await _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
         Output.AppendLine($"Rebuild finished with exit code {exitCode}.");
@@ -751,7 +799,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async Task StartDebuggingAsync()
     {
         Output.Clear();
-        ErrorList.Clear();
+        ErrorList.ClearBuildDiagnostics();
 
         var startupProjectPaths = _startupProjectPaths.ToList();
         var isSingleProject = startupProjectPaths.Count == 1;

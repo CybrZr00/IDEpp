@@ -5,6 +5,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- MainWindowViewModel now depends (transitively, via IdePlusPlus.Roslyn) on
+         Microsoft.CodeAnalysis.Workspaces.MSBuild, which drags in Microsoft.Build.Framework and
+         Microsoft.NET.StringTools without the runtime-asset exclusion Microsoft.Build.Locator's own
+         build-time analyzer (MSBL001) requires - see IdePlusPlus.ProjectSystem.csproj for the same
+         pattern already established for Microsoft.Build itself. -->
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.StringTools" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Dirkster.AvalonDock" />
     <PackageReference Include="Dirkster.AvalonDock.Themes.VS2013" />
     <PackageReference Include="Dirkster.AvalonDock.Serializer.Xml" />
@@ -33,6 +40,7 @@
     <ProjectReference Include="..\IdePlusPlus.SourceControl\IdePlusPlus.SourceControl.csproj" />
     <ProjectReference Include="..\IdePlusPlus.NuGet\IdePlusPlus.NuGet.csproj" />
     <ProjectReference Include="..\IdePlusPlus.TestRunner\IdePlusPlus.TestRunner.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Roslyn\IdePlusPlus.Roslyn.csproj" />
   </ItemGroup>
 
 </Project>

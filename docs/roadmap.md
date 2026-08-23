@@ -175,6 +175,43 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
         `IdePlusPlus.SourceControl.Tests` project (discovered and ran all 29 real tests correctly)
         beyond the unit suite. Verified: full-solution build (0 warnings/errors), full test suite
         (211 tests across 17 projects, all passing), and a real launch smoke test.
+  - [x] **4. Roslyn-based IntelliSense/diagnostics** — new `IdePlusPlus.Roslyn` project hosting an
+        `MSBuildWorkspace` per solution, loaded independently of and after (chained, not parallel
+        with) `SolutionLoader`'s own tree load and any NuGet restore-on-load attempt, to reduce the
+        risk of a wall of false `CS0246`s from an unrestored project. Drives live squiggly-underline
+        diagnostics in the editor plus a Build/Live split in the Error List (`BuildDiagnostic` gained
+        a `Source` enum; all four existing `ErrorList.Clear()` call sites in Build/Clean/Rebuild/
+        Start-Debugging were redirected to a new `ClearBuildDiagnostics()` so live rows survive a
+        build run), and a member-list completion popup (`AvalonEdit.CodeCompletion.CompletionWindow`)
+        on `.`/Ctrl+Space, mutually exclusive with the existing single-line DeepSeek FIM ghost text in
+        both directions. Package versions (`Microsoft.CodeAnalysis.CSharp.Workspaces`/`.Workspaces
+        .MSBuild`/`.CSharp.Features`, all `5.0.0`) were chosen empirically, not guessed — their
+        `Microsoft.Build.Framework` dependency (18.0.2) was checked against this repo's pinned
+        `Microsoft.Build` 18.9.6 line before committing, and `5.0.0` is also the first version whose
+        dependency chain can parse `.slnx` at all (via `Microsoft.VisualStudio.SolutionPersistence`),
+        which this repo needs. **A real on-disk data-loss bug was caught and fixed before this ever
+        reached the working tree**: the first implementation pushed unsaved editor keystrokes into
+        the workspace via `Workspace.TryApplyChanges`, which is built for "format and save" CLI
+        tools and silently writes changed document text straight back to the file on disk — running
+        the mandated real-solution verification step actually overwrote `GitService.cs` with
+        synthetic probe text before this was caught, restored via `git checkout --`, and fixed by
+        tracking unsaved text purely in an in-memory `Solution` snapshot that's never fed back into
+        the `Workspace` itself. `RoslynWorkspaceService`'s type doc now states this invariant
+        prominently, and the final code was grepped to confirm `TryApplyChanges` is never called
+        anywhere, only mentioned in the comments explaining why not. Verification for this feature
+        went well beyond "it compiled" at every stage, per its own design doc's explicit risk
+        callout: the real `IdePlusPlus.slnx` was loaded via a real `MSBuildWorkspace` and produced
+        real diagnostics (5 genuine `CS####` errors from injected bad syntax) and real completions
+        (55 real BCL members after `File.`) before any Shell wiring was written; the final stage
+        launched the real built app and used UI Automation to drive it, visually confirming real
+        squiggles and a real completion popup against this repo's own source files, then confirmed
+        via `git status` that none of those in-app edits ever touched disk. Signature help,
+        go-to-definition, find-all-references, and rename remain explicitly out of scope. New
+        `IdePlusPlus.Roslyn.Tests` (5 tests: 3 pure diagnostic-mapping unit tests plus 2 real
+        integration tests against a real scratch solution built via the actual `dotnet` CLI — a
+        genuine `CS0029` semantic error and a real `System.String.` completion request, no mocks).
+        Verified: full-solution build (0 warnings/errors), full test suite (216 tests across 18
+        projects, all passing), and a real launch smoke test.
 
 **Verification performed**: every milestone above was verified with `dotnet build` (0 warnings/errors)
 and `dotnet test` (105 tests passing across 12 test projects, up from 7 projects/~60 tests at the

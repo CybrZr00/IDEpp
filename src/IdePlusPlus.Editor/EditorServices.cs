@@ -17,4 +17,12 @@ public static class EditorServices
 
     /// <summary>Null until an inline completion provider (e.g. DeepSeek FIM) has a usable API key configured.</summary>
     public static IInlineCompletionProvider? CompletionProvider { get; set; }
+
+    /// <summary>Null until the Roslyn workspace has been constructed (App.xaml.cs wires this
+    /// unconditionally, so in practice this is only null very early in startup or in tests that never
+    /// set it).</summary>
+    public static ILiveDiagnosticsProvider? DiagnosticsProvider { get; set; }
+
+    /// <summary>Null under the same conditions as <see cref="DiagnosticsProvider"/>.</summary>
+    public static IMemberCompletionProvider? MemberCompletionProvider { get; set; }
 }

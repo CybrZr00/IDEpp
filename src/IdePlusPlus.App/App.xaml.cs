@@ -15,6 +15,7 @@ using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.NuGet;
 using IdePlusPlus.Shell;
@@ -64,6 +65,8 @@ public partial class App : Application
         EditorServices.DebugLocation = _serviceProvider.GetRequiredService<DebugLocationIndicator>();
         EditorServices.CaretPosition = _serviceProvider.GetRequiredService<CaretPositionIndicator>();
         EditorServices.CompletionProvider = _serviceProvider.GetRequiredService<DeepSeekFimClient>();
+        EditorServices.DiagnosticsProvider = _serviceProvider.GetRequiredService<RoslynWorkspaceService>();
+        EditorServices.MemberCompletionProvider = _serviceProvider.GetRequiredService<RoslynCompletionService>();
         EditorServices.GoToLine = new GoToLineRequest();
 
         // Applies the saved theme before the first window renders, to avoid a light-then-dark flash.
@@ -175,6 +178,8 @@ public partial class App : Application
         services.AddSingleton<TestDiscoveryService>();
         services.AddSingleton<TestRunService>();
         services.AddSingleton<TestExplorerPaneViewModel>();
+        services.AddSingleton<RoslynWorkspaceService>();
+        services.AddSingleton<RoslynCompletionService>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

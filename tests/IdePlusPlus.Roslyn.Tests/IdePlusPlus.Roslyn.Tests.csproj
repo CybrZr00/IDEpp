@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+    <!-- Needed directly (not just transitively via IdePlusPlus.Roslyn) so the real end-to-end test
+         can call MSBuildLocator.RegisterDefaults() itself before constructing a
+         RoslynWorkspaceService - this test project is its own process, so nothing else in it has
+         registered MSBuild yet. -->
+    <PackageReference Include="Microsoft.Build.Locator" />
+    <!-- MSBuildLocator's own build check (MSBL001) requires every Microsoft.Build.* assembly
+         reaching this project - here, transitively via IdePlusPlus.Roslyn's
+         Microsoft.CodeAnalysis.Workspaces.MSBuild dependency - to be explicitly excluded from
+         runtime assets, since the real assemblies must come from whatever
+         MSBuildLocator.RegisterDefaults() resolves at runtime, not from NuGet. -->
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.StringTools" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\IdePlusPlus.Roslyn\IdePlusPlus.Roslyn.csproj" />
+  </ItemGroup>
+
+</Project>

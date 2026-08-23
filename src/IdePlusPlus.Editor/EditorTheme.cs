@@ -24,6 +24,10 @@ public static class EditorTheme
 
     public static Brush GhostTextForeground { get; private set; } = Brushes.Gray;
 
+    public static Brush DiagnosticErrorSquiggle { get; private set; } = new SolidColorBrush(Color.FromRgb(228, 84, 84));
+
+    public static Brush DiagnosticWarningSquiggle { get; private set; } = new SolidColorBrush(Color.FromRgb(212, 168, 44));
+
     public static event Action? Changed;
 
     public static void Apply(bool dark)
@@ -38,6 +42,8 @@ public static class EditorTheme
             BreakpointMarginBackground = new SolidColorBrush(Color.FromRgb(37, 37, 38));
             BreakpointDot = new SolidColorBrush(Color.FromRgb(228, 84, 84));
             GhostTextForeground = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            DiagnosticErrorSquiggle = new SolidColorBrush(Color.FromRgb(240, 100, 100));
+            DiagnosticWarningSquiggle = new SolidColorBrush(Color.FromRgb(216, 178, 74));
         }
         else
         {
@@ -47,9 +53,11 @@ public static class EditorTheme
             BreakpointMarginBackground = Brushes.WhiteSmoke;
             BreakpointDot = Brushes.Firebrick;
             GhostTextForeground = Brushes.Gray;
+            DiagnosticErrorSquiggle = new SolidColorBrush(Color.FromRgb(228, 84, 84));
+            DiagnosticWarningSquiggle = new SolidColorBrush(Color.FromRgb(212, 168, 44));
         }
 
-        foreach (var brush in new[] { Background, Foreground, CurrentLineHighlight, BreakpointMarginBackground, BreakpointDot, GhostTextForeground })
+        foreach (var brush in new[] { Background, Foreground, CurrentLineHighlight, BreakpointMarginBackground, BreakpointDot, GhostTextForeground, DiagnosticErrorSquiggle, DiagnosticWarningSquiggle })
         {
             if (brush.CanFreeze)
             {
