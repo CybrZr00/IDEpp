@@ -1,2 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One-way door: this was, until IPluginHost v2, a deliberately dependency-free 2-line csproj (no
+    package or framework references at all - just TargetFramework/Nullable inherited from the
+    repo-root Directory.Build.props). RegisterToolWindow's factory signature
+    (Func<System.Windows.Controls.UserControl>) needs WPF types, so this is the first framework
+    reference this assembly has ever taken. It cannot be un-taken later without breaking every
+    already-compiled plugin binary that references this assembly.
+  -->
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
 </Project>

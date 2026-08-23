@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -26,6 +27,8 @@ public partial class TextEditorHost : UserControl
     private DocumentViewModel? _boundDocument;
     private CancellationTokenSource? _completionCancellation;
     private CancellationTokenSource? _memberCompletionCancellation;
+    private CancellationTokenSource? _hoverCancellation;
+    private ToolTip? _hoverToolTip;
     private CompletionWindow? _activeCompletionWindow;
 
     public TextEditorHost()
@@ -68,6 +71,13 @@ public partial class TextEditorHost : UserControl
         Editor.TextArea.TextEntered += OnEditorTextEntered;
         Editor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
         Editor.GotKeyboardFocus += (_, _) => PublishCaretPosition();
+
+        // Neither of these fires unless a plugin has actually registered an editor context-menu
+        // command or a hover provider (EditorServices.EditorContextMenuCommands/HoverProviderLookup
+        // are null until then) - a document with no such plugin installed behaves exactly as before.
+        Editor.ContextMenuOpening += OnEditorContextMenuOpening;
+        Editor.TextArea.TextView.MouseHover += OnTextViewMouseHover;
+        Editor.TextArea.TextView.MouseHoverStopped += OnTextViewMouseHoverStopped;
 
         ApplyEditorTheme();
         EditorTheme.Changed += ApplyEditorTheme;
@@ -160,6 +170,12 @@ public partial class TextEditorHost : UserControl
         _completionCancellation?.Cancel();
         _memberCompletionCancellation?.Cancel();
         _activeCompletionWindow?.Close();
+
+        // A pending/showing hover belongs to whatever document was bound when the mouse stopped
+        // moving - switching documents (e.g. via a tab click) shouldn't leave it dangling or let a
+        // slow in-flight lookup apply its result to the newly-bound document.
+        _hoverCancellation?.Cancel();
+        CloseHoverToolTip();
 
         // The squiggle renderer is shared by every document this editor ever binds to - clear
         // whatever the previous document's diagnostics were so they don't briefly show over the
@@ -463,4 +479,153 @@ public partial class TextEditorHost : UserControl
         _ghostTextGenerator.Clear();
         Editor.TextArea.TextView.Redraw();
     }
+
+    // Built in code-behind (not XAML) for the same reason Solution Explorer's project context menu
+    // is - a ContextMenu's popup isn't part of the visual tree its PlacementTarget lives in, and its
+    // contents (which plugin commands apply right now) can only be known at the moment it opens
+    // anyway. A document with no applicable plugin command shows no menu at all, same as before any
+    // plugin ever registered one.
+    private void OnEditorContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        Editor.ContextMenu = null;
+
+        if (EditorServices.EditorContextMenuCommands?.Invoke() is not { Count: > 0 } commands
+            || _boundDocument?.FilePath is not { } filePath)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        var state = new EditorContextMenuState(
+            filePath,
+            string.IsNullOrEmpty(Editor.SelectedText) ? null : Editor.SelectedText,
+            Editor.TextArea.Caret.Line,
+            Editor.TextArea.Caret.Column);
+
+        var applicable = commands.Where(c => c.CanExecute(state)).ToList();
+        if (applicable.Count == 0)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        var menu = new ContextMenu();
+        foreach (var command in applicable)
+        {
+            var menuItem = new MenuItem { Header = command.Header };
+            menuItem.Click += (_, _) => command.Execute(state);
+            menu.Items.Add(menuItem);
+        }
+
+        Editor.ContextMenu = menu;
+    }
+
+    /// <summary>Fires after the mouse comes to rest over a point in the text view - looks up the
+    /// word under the cursor and, if a plugin registered a hover provider for this document's file
+    /// extension, asks it for text to show in a plain tooltip. Managed as an explicit ToolTip
+    /// instance we open/close ourselves (rather than WPF's own automatic hover-driven ToolTip),
+    /// since WPF's built-in tooltip has no notion of "which word" within one large text control.</summary>
+    private void OnTextViewMouseHover(object sender, MouseEventArgs e)
+    {
+        _ = ShowHoverAsync(e);
+    }
+
+    private void OnTextViewMouseHoverStopped(object sender, MouseEventArgs e)
+    {
+        _hoverCancellation?.Cancel();
+        CloseHoverToolTip();
+        e.Handled = true;
+    }
+
+    private void CloseHoverToolTip()
+    {
+        if (_hoverToolTip is { } toolTip)
+        {
+            toolTip.IsOpen = false;
+            _hoverToolTip = null;
+        }
+    }
+
+    private async Task ShowHoverAsync(MouseEventArgs e)
+    {
+        if (EditorServices.HoverProviderLookup is not { } lookup
+            || _boundDocument?.FilePath is not { } filePath
+            || Editor.Document is null)
+        {
+            return;
+        }
+
+        var extension = Path.GetExtension(filePath);
+        if (string.IsNullOrEmpty(extension) || lookup(extension) is not { } getHoverText)
+        {
+            return;
+        }
+
+        var textView = Editor.TextArea.TextView;
+        var position = textView.GetPositionFloor(e.GetPosition(textView) + textView.ScrollOffset);
+        if (position is not { } textViewPosition)
+        {
+            return;
+        }
+
+        var offset = Editor.Document.GetOffset(textViewPosition.Location);
+        var word = GetWordAtOffset(Editor.Document, offset);
+        if (string.IsNullOrEmpty(word))
+        {
+            return;
+        }
+
+        _hoverCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _hoverCancellation = cancellation;
+
+        var request = new EditorHoverRequest(filePath, textViewPosition.Line, textViewPosition.Column, word);
+        string? text;
+        try
+        {
+            text = await getHoverText(request, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (cancellation.IsCancellationRequested || string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        CloseHoverToolTip();
+        _hoverToolTip = new ToolTip
+        {
+            Content = text,
+            PlacementTarget = Editor,
+            IsOpen = true,
+        };
+    }
+
+    private static string? GetWordAtOffset(TextDocument document, int offset)
+    {
+        if (offset < 0 || offset > document.TextLength)
+        {
+            return null;
+        }
+
+        var start = offset;
+        var end = offset;
+
+        while (start > 0 && IsWordChar(document.GetCharAt(start - 1)))
+        {
+            start--;
+        }
+
+        while (end < document.TextLength && IsWordChar(document.GetCharAt(end)))
+        {
+            end++;
+        }
+
+        return end > start ? document.GetText(start, end - start) : null;
+    }
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 }

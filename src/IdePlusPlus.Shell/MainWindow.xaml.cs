@@ -4,13 +4,16 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using AvalonDock;
+using AvalonDock.Layout;
 using AvalonDock.Serializer.Xml;
 using AvalonDock.Themes;
+using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.PluginContracts;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.Shell.Views;
@@ -37,6 +40,15 @@ public partial class MainWindow : Window
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
+    private readonly PluginHost _pluginHost;
+
+    // Registering a LayoutAnchorable for a plugin's tool window has to wait until after
+    // RestoreLayout() has run (see AttachPendingPluginToolWindows' doc comment) - plugins register
+    // during LoadPlugins(), which App.xaml.cs calls after this constructor returns but before
+    // Show(), i.e. always before RestoreLayout's Loaded handler fires. Buffered here in the
+    // meantime rather than touching DockManager.Layout immediately.
+    private readonly List<(string ContentId, string Title, object Content)> _pendingPluginToolWindows = [];
+    private bool _layoutRestored;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -45,13 +57,17 @@ public partial class MainWindow : Window
         AppSettingsStore appSettingsStore,
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
-        DeepSeekFimClient deepSeekFimClient)
+        DeepSeekFimClient deepSeekFimClient,
+        PluginHost pluginHost,
+        PluginToolWindowRegistry pluginToolWindowRegistry,
+        PluginKeyBindingRegistry pluginKeyBindingRegistry)
     {
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
         _deepSeekFimClient = deepSeekFimClient;
+        _pluginHost = pluginHost;
 
         DataContext = viewModel;
         InitializeComponent();
@@ -87,7 +103,27 @@ public partial class MainWindow : Window
         ApplyDockingTheme(themeService.IsDark);
         themeService.Changed += () => ApplyDockingTheme(themeService.IsDark);
 
+        // Attaches every tool window a plugin has registered by the time this runs, plus (via the
+        // event) any registered afterward - see OnPluginToolWindowRegistered's doc comment for why
+        // this can't just add straight into the XAML-declared pane.
+        foreach (var toolWindow in pluginToolWindowRegistry.ToolWindows)
+        {
+            OnPluginToolWindowRegistered(toolWindow);
+        }
+
+        pluginToolWindowRegistry.Registered += OnPluginToolWindowRegistered;
+
+        // Window.InputBindings is a plain runtime collection - unlike tool windows, there's no
+        // layout-serialization ordering concern, so these can be added as soon as they're known.
+        foreach (var binding in pluginKeyBindingRegistry.Bindings)
+        {
+            AddPluginKeyBinding(binding);
+        }
+
+        pluginKeyBindingRegistry.Registered += AddPluginKeyBinding;
+
         Loaded += (_, _) => RestoreLayout();
+        Loaded += (_, _) => AttachPendingPluginToolWindows();
         Loaded += (_, _) => RestoreWindowBounds();
         Closing += (_, _) => SaveLayout();
         Closing += (_, _) => SaveWindowBounds();
@@ -144,6 +180,110 @@ public partial class MainWindow : Window
 
     private void ApplyDockingTheme(bool dark) =>
         DockManager.Theme = dark ? new Vs2013DarkTheme() : new Vs2013LightTheme();
+
+    /// <summary>
+    /// Records a plugin tool window's content (calling its factory exactly once, per
+    /// IPluginHost.RegisterToolWindow's contract) and either attaches it immediately or defers it -
+    /// see <see cref="AttachPendingPluginToolWindows"/> for why deferring matters. Also makes the
+    /// content resolvable by ContentId for RestoreLayout's LayoutSerializationCallback, so a saved
+    /// layout that already had this exact pane (same plugin, same title, from a previous session)
+    /// restores it in whatever position/floating state the user last left it in.
+    /// </summary>
+    private void OnPluginToolWindowRegistered(PluginToolWindow toolWindow)
+    {
+        var contentId = $"Plugin_{toolWindow.PluginName}_{toolWindow.Title}";
+        var content = toolWindow.Factory();
+        _contentById[contentId] = content;
+
+        if (_layoutRestored)
+        {
+            AttachPluginToolWindowIfNotAlreadyPresent(contentId, toolWindow.Title, content);
+        }
+        else
+        {
+            _pendingPluginToolWindows.Add((contentId, toolWindow.Title, content));
+        }
+    }
+
+    /// <summary>
+    /// Attaches every tool window buffered since construction, now that RestoreLayout has run (with
+    /// or without an actual saved-layout file - either way DockManager.Layout now holds whatever the
+    /// window's real, final layout tree is). This can't happen earlier: when a saved layout.xml
+    /// exists, XmlLayoutSerializer.Deserialize replaces DockManager.Layout with an entirely new tree
+    /// built from that file, which would silently discard a LayoutAnchorable added to the
+    /// XAML-declared tree beforehand.
+    /// </summary>
+    private void AttachPendingPluginToolWindows()
+    {
+        _layoutRestored = true;
+
+        foreach (var (contentId, title, content) in _pendingPluginToolWindows)
+        {
+            AttachPluginToolWindowIfNotAlreadyPresent(contentId, title, content);
+        }
+
+        _pendingPluginToolWindows.Clear();
+    }
+
+    private void AttachPluginToolWindowIfNotAlreadyPresent(string contentId, string title, object content)
+    {
+        // A saved layout that already mentioned this exact ContentId was already reconstructed by
+        // RestoreLayout's callback above (which resolved it via _contentById, populated by
+        // OnPluginToolWindowRegistered before this runs) - adding a second LayoutAnchorable with the
+        // same ContentId would duplicate the pane.
+        if (DockManager.Layout.Descendents().OfType<LayoutAnchorable>().Any(a => a.ContentId == contentId))
+        {
+            return;
+        }
+
+        if (FindPluginToolWindowHomePane() is not { } homePane)
+        {
+            return; // Defensive only - the Solution Explorer pane this anchors to always exists.
+        }
+
+        homePane.Children.Add(new LayoutAnchorable
+        {
+            Title = title,
+            ContentId = contentId,
+            // Unlike every core IDE pane (all CanClose="False" in MainWindow.xaml), a plugin's tool
+            // window is the user's to close - there's no "reopen" command for it yet (that's the
+            // same deferred scope as reloading a plugin at runtime), but closing it is harmless:
+            // ContentId/content stay tracked in _contentById for as long as the app runs, and a
+            // fresh launch re-registers it from scratch anyway.
+            CanClose = true,
+            Content = content,
+        });
+    }
+
+    /// <summary>
+    /// Finds the pane currently hosting Solution Explorer - a core pane that always exists - and
+    /// uses it as the attachment point for a newly-registered plugin tool window, rather than
+    /// reaching for the XAML-declared pane element directly: after RestoreLayout runs,
+    /// DockingManager.Layout may be an entirely different tree than the one InitializeComponent
+    /// built (see AttachPendingPluginToolWindows), which would leave a XAML x:Name field pointing at
+    /// a detached, invisible pane. Looking it up fresh by Solution Explorer's ContentId works
+    /// correctly either way, and also respects the user having moved Solution Explorer elsewhere.
+    /// </summary>
+    private LayoutAnchorablePane? FindPluginToolWindowHomePane() =>
+        DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
+            .FirstOrDefault(a => a.ContentId == SolutionExplorerPaneViewModel.PaneContentId)?.Parent as LayoutAnchorablePane;
+
+    private void AddPluginKeyBinding(PluginKeyBinding binding)
+    {
+        // PluginKeyBindingRegistry.TryRegister already validated gestureText parses and doesn't
+        // collide with a reserved gesture before firing Registered/adding to Bindings - this can't
+        // fail in practice, but a KeyGestureConverter round-trip is cheap insurance against a future
+        // change to that validation.
+        if (new KeyGestureConverter().ConvertFromString(binding.GestureText) is not KeyGesture gesture)
+        {
+            return;
+        }
+
+        // binding.Execute is already wrapped by PluginHost.RegisterKeyBinding in the same
+        // try/catch-and-log-to-Output pattern as RunPluginCommand - a throwing plugin handler can't
+        // reach here unhandled.
+        InputBindings.Add(new KeyBinding(new RelayCommand(binding.Execute), gesture));
+    }
 
     private void RestoreLayout()
     {
@@ -279,33 +419,68 @@ public partial class MainWindow : Window
 
     // Built and shown in code-behind rather than as a XAML ContextMenu: a ContextMenu's popup isn't
     // part of the visual tree its PlacementTarget lives in, so a RelativeSource binding from inside
-    // it can't reach the window's MainWindowViewModel to invoke SetStartupProject.
+    // it can't reach the window's MainWindowViewModel to invoke SetStartupProject. Handles any node
+    // kind now (previously only Project) so a plugin's context-menu command can appear on
+    // File/Folder/Solution nodes too - the three core items above stay Project-only exactly as before.
     private void SolutionExplorerTree_OnPreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.OriginalSource is not FrameworkElement { DataContext: SolutionTreeNode { Kind: SolutionTreeNodeKind.Project } node } element)
+        if (e.OriginalSource is not FrameworkElement { DataContext: SolutionTreeNode node } element)
         {
             return;
         }
 
         var viewModel = (MainWindowViewModel)DataContext;
-        var menuItem = new MenuItem { Header = "Set as Startup Project" };
-        menuItem.Click += (_, _) => viewModel.SetStartupProject(node);
-
-        var startupProjectsMenuItem = new MenuItem
-        {
-            Header = "Include in Startup Projects",
-            IsCheckable = true,
-            IsChecked = viewModel.IsStartupProject(node),
-        };
-        startupProjectsMenuItem.Click += (_, _) => viewModel.ToggleStartupProject(node);
-
-        var nuGetMenuItem = new MenuItem { Header = "Manage NuGet Packages..." };
-        nuGetMenuItem.Click += (_, _) => viewModel.OpenNuGetPane(node);
-
         var contextMenu = new ContextMenu { PlacementTarget = element };
-        contextMenu.Items.Add(menuItem);
-        contextMenu.Items.Add(startupProjectsMenuItem);
-        contextMenu.Items.Add(nuGetMenuItem);
+
+        if (node.Kind == SolutionTreeNodeKind.Project)
+        {
+            var menuItem = new MenuItem { Header = "Set as Startup Project" };
+            menuItem.Click += (_, _) => viewModel.SetStartupProject(node);
+            contextMenu.Items.Add(menuItem);
+
+            var startupProjectsMenuItem = new MenuItem
+            {
+                Header = "Include in Startup Projects",
+                IsCheckable = true,
+                IsChecked = viewModel.IsStartupProject(node),
+            };
+            startupProjectsMenuItem.Click += (_, _) => viewModel.ToggleStartupProject(node);
+            contextMenu.Items.Add(startupProjectsMenuItem);
+
+            var nuGetMenuItem = new MenuItem { Header = "Manage NuGet Packages..." };
+            nuGetMenuItem.Click += (_, _) => viewModel.OpenNuGetPane(node);
+            contextMenu.Items.Add(nuGetMenuItem);
+        }
+
+        // Folder nodes have no FullPath in this tree (see SolutionTreeNode.GetOrCreateFolder) - a
+        // plugin command can't be offered a meaningful path for one, so it's skipped for those,
+        // same as it would be for any node kind a plugin's canExecute itself rejects.
+        if (node.FullPath is { } fullPath)
+        {
+            var context = new SolutionExplorerContextMenuContext(fullPath, node.Kind == SolutionTreeNodeKind.Folder);
+            var pluginItems = _pluginHost.SolutionExplorerContextMenuCommands.Where(c => c.CanExecute(context)).ToList();
+
+            if (pluginItems.Count > 0)
+            {
+                if (contextMenu.Items.Count > 0)
+                {
+                    contextMenu.Items.Add(new Separator());
+                }
+
+                foreach (var command in pluginItems)
+                {
+                    var pluginMenuItem = new MenuItem { Header = command.Header };
+                    pluginMenuItem.Click += (_, _) => command.Execute(context);
+                    contextMenu.Items.Add(pluginMenuItem);
+                }
+            }
+        }
+
+        if (contextMenu.Items.Count == 0)
+        {
+            return;
+        }
+
         contextMenu.IsOpen = true;
     }
 

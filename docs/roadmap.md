@@ -89,15 +89,17 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       found a truncated final message but zero log output. Whether (3) is what actually happened
       in the reported session is unconfirmed (no log file existed to check), but it closes a real
       gap either way.
-- [ ] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
-      debug/attach, plugin API v2 + sandboxing) — each is a multi-week initiative in its own right.
-      Grounded, file-level designs for all five (produced by a 5-way parallel codebase survey plus a
-      cross-check synthesis for conflicts/shared-infra/hidden dependencies) now live in
-      [bigger-bets-designs.md](bigger-bets-designs.md). Implementation order, per the synthesis
-      (tractability and value-per-risk first, riskiest/most novel last; no feature's MVP hard-blocks
-      on another's): **1. NuGet package management → 2. Multi-project debug/attach →
+- [x] "Bigger bets" (Roslyn IntelliSense/diagnostics, NuGet management, Test Explorer, multi-project
+      debug/attach, plugin API v2 + sandboxing) — each a multi-week initiative in its own right, all
+      five now shipped. Grounded, file-level designs for all five (produced by a 5-way parallel
+      codebase survey plus a cross-check synthesis for conflicts/shared-infra/hidden dependencies)
+      live in [bigger-bets-designs.md](bigger-bets-designs.md). Implementation order, per the
+      synthesis (tractability and value-per-risk first, riskiest/most novel last; no feature's MVP
+      hard-blocked on another's): **1. NuGet package management → 2. Multi-project debug/attach →
       3. Test Explorer → 4. Roslyn IntelliSense/diagnostics → 5. Plugin API v2 + sandboxing.**
-      In progress, one feature at a time with full build/test/launch verification between each.
+      Each landed one at a time with full build/test/launch verification (and, for the two
+      highest-risk items, real end-to-end verification beyond "it compiled" — see items 4 and 5
+      below) before the next started.
   - [x] **1. NuGet package management** — new `IdePlusPlus.NuGet` project (`NuGetService` shells to
         `dotnet.exe` for list/add/remove/restore, mirroring `GitService`'s `ArgumentList`-only
         process-spawn pattern with `BuildService`-style streamed output for the slow operations;
@@ -212,6 +214,56 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
         genuine `CS0029` semantic error and a real `System.String.` completion request, no mocks).
         Verified: full-solution build (0 warnings/errors), full test suite (216 tests across 18
         projects, all passing), and a real launch smoke test.
+  - [x] **5. Plugin API v2 + sandboxing** (final bigger bet) — replaced `Assembly.LoadFrom` with a
+        per-plugin collectible `AssemblyLoadContext` (`PluginLoadContext`), forwarding a fixed set of
+        shared/host assembly names (`IdePlusPlus.PluginContracts`, WPF's own assemblies, AvalonEdit,
+        AvalonDock, `System.Text.Json`) to the Default ALC so type identity across the host/plugin
+        boundary is preserved — without this, a plugin merely shipping its own copy of a shared DLL
+        would get a second, distinct runtime type for `IIdePlugin`/`IPluginHost` and every interface
+        dispatch across the boundary would fail. A real GC/unload test was treated as a hard gate, not
+        optional polish, per the design doc: a genuine scratch plugin assembly (compiled via a real
+        `dotnet build`, not an in-memory stub) was loaded, `Initialize`'d, unloaded, and its load
+        context's `WeakReference` confirmed collected — `IsAlive` was `false` on the very first GC
+        check, no retries needed. `IPluginHost` gained 6 new additive members (editor/Solution
+        Explorer context-menu commands, a dockable tool window, a hover provider, keybindings with
+        reserved-gesture rejection, and chat-tool registration mirroring MCP's
+        `"{ServerName}__{Name}"` qualified-name convention as `"plugin__{PluginName}__{ToolName}"`)
+        — the original 3 members are byte-for-byte unchanged, and `samples/SamplePlugin`'s existing
+        v1 behavior was verified still working through the new ALC-based loader via a real,
+        independently-compiled build of that exact sample. Every plugin-supplied delegate (menu
+        `execute`/`canExecute`, hover, tool-window factory, chat-tool `execute`) is wrapped in
+        try/catch-and-log, matching the existing `RunPluginCommand` convention, so a throwing plugin
+        callback degrades one feature rather than the app. Dynamic AvalonDock pane registration —
+        flagged by the design as likely the single largest risk in this feature — required a real
+        ordering fix: `XmlLayoutSerializer.Deserialize` replaces the whole layout tree when a saved
+        `layout.xml` exists, which would silently discard a plugin pane added before that ran, so
+        registrations are buffered and attached only after `RestoreLayout()` completes, with a
+        ContentId-collision check to avoid duplicating a pane a saved layout already reconstructed.
+        Plugin chat-tool calls are checked and routed before the existing MCP fallback, structurally
+        unable to reach `ProposeEditTool`/`ProposePlanTool`'s real file-editing routes. Framing
+        throughout, including in code comments: neither Tier 1 (ALC isolation) nor Tier 2 (narrow
+        capability surface) is a security boundary against a deliberately malicious plugin — a
+        collectible `AssemblyLoadContext` does not hide other loaded assemblies from reflection, so
+        `Activator.CreateInstance(typeof(SecureSettingsStore))`, arbitrary file access, P/Invoke, and
+        `Environment.Exit` remain fully reachable from plugin code regardless; a genuine boundary
+        would need an out-of-process host (Tier 3, explicitly deferred). Real end-to-end
+        verification: the actual built app was launched with the real, rebuilt `SamplePlugin.dll`
+        dropped into the real plugins directory and stayed alive and responsive with zero Serilog
+        errors; full interactive click-through of the new UI surfaces (context-menu item, tool
+        window, hover tooltip, live chat-tool call) was not completed because the interactive desktop
+        session was locked at verification time — per safety policy, no attempt was made to unlock it
+        or enter credentials, and this gap is stated here rather than implied away. 18 new tests
+        across `IdePlusPlus.Shell.Tests` (the unload/GC hard gate, the SamplePlugin compatibility
+        check, reserved-gesture rejection, and chat-tool registry routing/error-isolation), all
+        against real compiled plugin assemblies, no mocks of the loader itself. Verified: full-solution
+        build (0 warnings/errors), full test suite (217 tests across 17 projects, all passing), and a
+        real launch smoke test (with no plugin installed, confirming the no-plugin path is unaffected).
+
+**All five "bigger bet" initiatives are now shipped.** Signature help, go-to-definition,
+find-all-references, rename, debugging a single test, remote/non-local attach, NuGet
+version-conflict UI, and a real out-of-process plugin sandbox (Tier 3) all remain explicitly
+deferred, as scoped in each feature's own design section above — future work, not gaps introduced
+silently.
 
 **Verification performed**: every milestone above was verified with `dotnet build` (0 warnings/errors)
 and `dotnet test` (105 tests passing across 12 test projects, up from 7 projects/~60 tests at the

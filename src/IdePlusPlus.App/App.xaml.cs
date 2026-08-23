@@ -18,6 +18,7 @@ using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.NuGet;
+using IdePlusPlus.PluginContracts;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
@@ -68,6 +69,21 @@ public partial class App : Application
         EditorServices.DiagnosticsProvider = _serviceProvider.GetRequiredService<RoslynWorkspaceService>();
         EditorServices.MemberCompletionProvider = _serviceProvider.GetRequiredService<RoslynCompletionService>();
         EditorServices.GoToLine = new GoToLineRequest();
+
+        // Both delegates re-query PluginHost fresh on every invocation (not memoized here), so it
+        // doesn't matter that PluginLoader.LoadPlugins() below hasn't run yet - by the time either
+        // one is actually invoked (a right-click, a mouse hover), every plugin's registrations from
+        // startup are already in place.
+        var pluginHost = _serviceProvider.GetRequiredService<PluginHost>();
+        EditorServices.EditorContextMenuCommands = () => pluginHost.EditorContextMenuCommands
+            .Select(c => new EditorContextMenuCommandDescriptor(
+                c.Header,
+                state => c.CanExecute(new EditorContextMenuContext(state.FilePath, state.SelectedText, state.Line, state.Column)),
+                state => c.Execute(new EditorContextMenuContext(state.FilePath, state.SelectedText, state.Line, state.Column))))
+            .ToList();
+        EditorServices.HoverProviderLookup = extension => pluginHost.HoverProviders.TryGetValue(extension, out var provider)
+            ? (request, ct) => provider.GetHoverTextAsync(new PluginHoverContext(request.FilePath, request.Line, request.Column, request.Word), ct)
+            : null;
 
         // Applies the saved theme before the first window renders, to avoid a light-then-dark flash.
         _serviceProvider.GetRequiredService<ThemeService>().Initialize();
@@ -157,7 +173,14 @@ public partial class App : Application
         services.AddSingleton<SecureSettingsStore>();
         services.AddSingleton<AppSettingsStore>();
         services.AddSingleton<ThemeService>();
+        services.AddSingleton<PluginToolWindowRegistry>();
+        services.AddSingleton<PluginKeyBindingRegistry>();
+        services.AddSingleton<PluginChatToolRegistry>();
         services.AddSingleton<PluginHost>();
+        // PluginLoader depends on the IPluginHost interface (not the concrete PluginHost) so it can be
+        // unit-tested without constructing a real MainWindowViewModel/WPF Application - resolve it to
+        // the same singleton PluginHost instance registered above.
+        services.AddSingleton<IPluginHost>(sp => sp.GetRequiredService<PluginHost>());
         services.AddSingleton<PluginLoader>();
         services.AddSingleton<HttpClient>();
         services.AddSingleton<OpenRouterChatClient>();

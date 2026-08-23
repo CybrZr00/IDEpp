@@ -13,6 +13,7 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.Shell;
 using Serilog;
 
 namespace IdePlusPlus.Shell.ToolPanes;
@@ -59,6 +60,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly ChatHistoryStore _chatHistoryStore;
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly McpServerManager _mcpServerManager;
+    private readonly PluginChatToolRegistry _pluginChatToolRegistry;
     private readonly WorkspaceFileReader _workspaceFileReader = new();
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
@@ -74,7 +76,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         ProjectMemoryStore projectMemoryStore,
         ChatHistoryStore chatHistoryStore,
         CodebaseIndexService codebaseIndexService,
-        McpServerManager mcpServerManager)
+        McpServerManager mcpServerManager,
+        PluginChatToolRegistry pluginChatToolRegistry)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -85,6 +88,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _chatHistoryStore = chatHistoryStore;
         _codebaseIndexService = codebaseIndexService;
         _mcpServerManager = mcpServerManager;
+        _pluginChatToolRegistry = pluginChatToolRegistry;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -442,22 +446,32 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
-    /// <summary>Routes a tool call to the local read-only workspace tools or out to an MCP server.</summary>
+    /// <summary>Routes a tool call to a plugin's chat tool, the local read-only workspace tools, or
+    /// out to an MCP server.</summary>
     private async Task<(bool IsError, string Text)> ExecuteToolAsync(PendingMcpCall call, CancellationToken cancellationToken)
     {
+        // Checked first, before the MCP fallback below - a plugin tool's qualified name
+        // ("plugin__{PluginName}__{Name}") is never a workspace tool name and _mcpServerManager has
+        // never heard of it either, so without this it would reach CallToolAsync and come back as
+        // an unknown-tool error instead of actually running.
+        if (_pluginChatToolRegistry.IsPluginTool(call.Name!))
+        {
+            if (!TryParseToolArguments(call.Arguments.ToString(), out var pluginArguments))
+            {
+                return (true, $"Malformed arguments JSON for '{call.Name}'.");
+            }
+
+            var pluginResult = await _pluginChatToolRegistry.ExecuteAsync(call.Name!, pluginArguments, cancellationToken);
+            return (pluginResult.IsError, pluginResult.Text);
+        }
+
         if (!WorkspaceTools.IsWorkspaceTool(call.Name!))
         {
             var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), cancellationToken);
             return (mcpResult.IsError, mcpResult.Text);
         }
 
-        JsonNode? arguments;
-        try
-        {
-            var argumentsJson = call.Arguments.ToString();
-            arguments = string.IsNullOrWhiteSpace(argumentsJson) ? null : JsonNode.Parse(argumentsJson);
-        }
-        catch (System.Text.Json.JsonException)
+        if (!TryParseToolArguments(call.Arguments.ToString(), out var arguments))
         {
             return (true, $"Malformed arguments JSON for '{call.Name}'.");
         }
@@ -498,6 +512,22 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
+    /// <summary>Shared by both the plugin-tool and workspace-tool branches of <see cref="ExecuteToolAsync"/> -
+    /// empty/whitespace arguments (a tool with no parameters) parse to null rather than failing.</summary>
+    private static bool TryParseToolArguments(string argumentsJson, out JsonNode? arguments)
+    {
+        try
+        {
+            arguments = string.IsNullOrWhiteSpace(argumentsJson) ? null : JsonNode.Parse(argumentsJson);
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            arguments = null;
+            return false;
+        }
+    }
+
     private sealed record TurnResult(List<PendingMcpCall> Calls, List<EditProposalViewModel> EditProposals, bool ProducedPlanProposal);
 
     private async Task<TurnResult> StreamOneTurnAsync(
@@ -513,6 +543,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
         tools.AddRange(WorkspaceTools.All);
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
+        tools.AddRange(_pluginChatToolRegistry.GetToolDefinitions());
 
         IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
 
