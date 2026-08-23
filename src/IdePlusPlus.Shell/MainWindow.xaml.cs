@@ -50,6 +50,13 @@ public partial class MainWindow : Window
     private readonly List<(string ContentId, string Title, object Content)> _pendingPluginToolWindows = [];
     private bool _layoutRestored;
 
+    // Snapshot of every pane MainWindow.xaml declares (ContentId/Title/the ContentIds of its original
+    // pane-mates), captured right after InitializeComponent - before RestoreLayout's Deserialize can
+    // replace DockManager.Layout with an older saved tree that predates one of these panes. Used by
+    // AttachMissingCoreToolWindows to add back whichever of them Deserialize dropped, the same way
+    // AttachPendingPluginToolWindows already does for plugin panes.
+    private readonly List<(string ContentId, string Title, string[] SiblingContentIds)> _coreToolWindows;
+
     public MainWindow(
         MainWindowViewModel viewModel,
         ThemeService themeService,
@@ -100,6 +107,23 @@ public partial class MainWindow : Window
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
+        // Every LayoutAnchorable that exists right after InitializeComponent is, by construction,
+        // one MainWindow.xaml declared directly (nothing else - plugins included - has registered
+        // anything yet at this point in the constructor), so this is the complete set of "core"
+        // panes without needing to filter on CanClose. CanClose can't be used for that filter anyway:
+        // DockingManager.LayoutItemContainerStyle (below) sets CanClose="True" on every LayoutItem
+        // wrapper and writes it back into the underlying model, so by the time anything reads
+        // a.CanClose here it's already true for every anchorable regardless of what XAML declared.
+        _coreToolWindows = DockManager.Layout.Descendents().OfType<LayoutAnchorable>().ToList()
+            .Select(a => (
+                a.ContentId,
+                a.Title,
+                SiblingContentIds: ((LayoutAnchorablePane)a.Parent).Children.OfType<LayoutAnchorable>()
+                    .Where(sibling => sibling != a)
+                    .Select(sibling => sibling.ContentId)
+                    .ToArray()))
+            .ToList();
+
         ApplyDockingTheme(themeService.IsDark);
         themeService.Changed += () => ApplyDockingTheme(themeService.IsDark);
 
@@ -123,6 +147,7 @@ public partial class MainWindow : Window
         pluginKeyBindingRegistry.Registered += AddPluginKeyBinding;
 
         Loaded += (_, _) => RestoreLayout();
+        Loaded += (_, _) => AttachMissingCoreToolWindows();
         Loaded += (_, _) => AttachPendingPluginToolWindows();
         Loaded += (_, _) => RestoreWindowBounds();
         Closing += (_, _) => SaveLayout();
@@ -236,7 +261,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (FindPluginToolWindowHomePane() is not { } homePane)
+        if (FindSolutionExplorerPane() is not { } homePane)
         {
             return; // Defensive only - the Solution Explorer pane this anchors to always exists.
         }
@@ -256,15 +281,64 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Finds the pane currently hosting Solution Explorer - a core pane that always exists - and
-    /// uses it as the attachment point for a newly-registered plugin tool window, rather than
-    /// reaching for the XAML-declared pane element directly: after RestoreLayout runs,
-    /// DockingManager.Layout may be an entirely different tree than the one InitializeComponent
-    /// built (see AttachPendingPluginToolWindows), which would leave a XAML x:Name field pointing at
-    /// a detached, invisible pane. Looking it up fresh by Solution Explorer's ContentId works
-    /// correctly either way, and also respects the user having moved Solution Explorer elsewhere.
+    /// Re-adds whichever XAML-declared, CanClose="False" panes (Git, NuGet, Error List, ...)
+    /// RestoreLayout's Deserialize dropped because a saved layout.xml from before that pane existed
+    /// doesn't mention its ContentId - the same silent-discard RestoreLayout's own doc comment
+    /// describes, which AttachPendingPluginToolWindows already works around for plugin panes but
+    /// which nothing previously did for the app's own core panes. Without this, a pane added to
+    /// MainWindow.xaml after a user's first run stays permanently invisible - not closed, just never
+    /// reconstructed - with no in-app way to bring it back short of deleting layout.xml by hand.
     /// </summary>
-    private LayoutAnchorablePane? FindPluginToolWindowHomePane() =>
+    private void AttachMissingCoreToolWindows()
+    {
+        var present = DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
+            .Select(a => a.ContentId)
+            .ToHashSet();
+
+        foreach (var (contentId, title, siblingContentIds) in _coreToolWindows)
+        {
+            if (present.Contains(contentId))
+            {
+                continue;
+            }
+
+            // Prefer re-docking next to whichever of its original pane-mates survived the restore
+            // (e.g. Git/NuGet back next to Solution Explorer), falling back to Solution Explorer's
+            // pane if every one of them was also dropped.
+            var homePane = siblingContentIds
+                .Select(sibling => DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
+                    .FirstOrDefault(a => a.ContentId == sibling)?.Parent as LayoutAnchorablePane)
+                .FirstOrDefault(pane => pane is not null)
+                ?? FindSolutionExplorerPane();
+
+            if (homePane is null)
+            {
+                continue; // Defensive only - the Solution Explorer pane this anchors to always exists.
+            }
+
+            homePane.Children.Add(new LayoutAnchorable
+            {
+                Title = title,
+                ContentId = contentId,
+                CanClose = false,
+                Content = _contentById[contentId],
+            });
+
+            present.Add(contentId);
+        }
+    }
+
+    /// <summary>
+    /// Finds the pane currently hosting Solution Explorer - a core pane that always exists - and
+    /// uses it as the attachment point for a newly-registered plugin tool window or a dropped core
+    /// pane with no surviving pane-mate, rather than reaching for the XAML-declared pane element
+    /// directly: after RestoreLayout runs, DockingManager.Layout may be an entirely different tree
+    /// than the one InitializeComponent built (see AttachPendingPluginToolWindows), which would leave
+    /// a XAML x:Name field pointing at a detached, invisible pane. Looking it up fresh by Solution
+    /// Explorer's ContentId works correctly either way, and also respects the user having moved
+    /// Solution Explorer elsewhere.
+    /// </summary>
+    private LayoutAnchorablePane? FindSolutionExplorerPane() =>
         DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
             .FirstOrDefault(a => a.ContentId == SolutionExplorerPaneViewModel.PaneContentId)?.Parent as LayoutAnchorablePane;
 
