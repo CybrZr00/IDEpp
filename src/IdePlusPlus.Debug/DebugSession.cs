@@ -30,6 +30,10 @@ public sealed class DebugSession
 
     public bool IsStopped { get; private set; }
 
+    /// <summary>Human-readable label for this session (e.g. the program's file name, or the
+    /// attached process), used by session-picker UI once more than one session can be active.</summary>
+    public string DisplayName { get; private set; } = "";
+
     public async Task StartAsync(
         string debugAdapterExecutablePath,
         string programPath,
@@ -43,6 +47,8 @@ public sealed class DebugSession
                 $"and extract it to '{debugAdapterExecutablePath}'.",
                 debugAdapterExecutablePath);
         }
+
+        DisplayName = Path.GetFileName(programPath);
 
         var client = DapClient.Start(debugAdapterExecutablePath);
         client.EventReceived += OnEvent;
@@ -85,6 +91,68 @@ public sealed class DebugSession
             cwd = workingDirectory,
             stopAtEntry = false,
             env = environmentVariables ?? new Dictionary<string, string>(),
+        });
+
+        await client.SendRequestAsync("configurationDone");
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Sibling to <see cref="StartAsync"/> for attaching to an already-running process instead of
+    /// launching a new one: same initialize/exception-filter/breakpoints/configurationDone sequence,
+    /// but sends DAP "attach" (netcoredbg's vscode-interpreter mode, mirroring vsdbg, accepts
+    /// "attach" as a sibling request to "launch" taking a processId) instead of "launch".
+    /// </summary>
+    public async Task AttachAsync(
+        string debugAdapterExecutablePath,
+        int processId,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
+    {
+        if (!File.Exists(debugAdapterExecutablePath))
+        {
+            throw new FileNotFoundException(
+                "netcoredbg not found. Download it from https://github.com/Samsung/netcoredbg/releases " +
+                $"and extract it to '{debugAdapterExecutablePath}'.",
+                debugAdapterExecutablePath);
+        }
+
+        DisplayName = $"Attached: process {processId}";
+
+        var client = DapClient.Start(debugAdapterExecutablePath);
+        client.EventReceived += OnEvent;
+        _client = client;
+
+        await client.SendRequestAsync("initialize", new
+        {
+            clientID = "ideplusplus",
+            adapterID = "netcoredbg",
+            pathFormat = "path",
+            linesStartAt1 = true,
+            columnsStartAt1 = true,
+        });
+
+        await client.SendRequestAsync("setExceptionBreakpoints", new { filters = new[] { "user-unhandled" } });
+
+        foreach (var (file, lines) in _breakpointManager.AllBreakpoints)
+        {
+            if (lines.Count == 0)
+            {
+                continue;
+            }
+
+            await client.SendRequestAsync("setBreakpoints", new
+            {
+                source = new { path = file },
+                breakpoints = lines.Select(line => new { line }).ToArray(),
+            });
+        }
+
+        await client.SendRequestAsync("attach", new
+        {
+            name = "IDE++ attach",
+            type = "coreclr",
+            request = "attach",
+            processId,
         });
 
         await client.SendRequestAsync("configurationDone");

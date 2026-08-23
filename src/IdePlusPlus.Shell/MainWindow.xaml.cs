@@ -289,11 +289,20 @@ public partial class MainWindow : Window
         var menuItem = new MenuItem { Header = "Set as Startup Project" };
         menuItem.Click += (_, _) => viewModel.SetStartupProject(node);
 
+        var startupProjectsMenuItem = new MenuItem
+        {
+            Header = "Include in Startup Projects",
+            IsCheckable = true,
+            IsChecked = viewModel.IsStartupProject(node),
+        };
+        startupProjectsMenuItem.Click += (_, _) => viewModel.ToggleStartupProject(node);
+
         var nuGetMenuItem = new MenuItem { Header = "Manage NuGet Packages..." };
         nuGetMenuItem.Click += (_, _) => viewModel.OpenNuGetPane(node);
 
         var contextMenu = new ContextMenu { PlacementTarget = element };
         contextMenu.Items.Add(menuItem);
+        contextMenu.Items.Add(startupProjectsMenuItem);
         contextMenu.Items.Add(nuGetMenuItem);
         contextMenu.IsOpen = true;
     }

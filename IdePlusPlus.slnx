@@ -29,6 +29,7 @@
     <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Debug.Tests/IdePlusPlus.Debug.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Infrastructure.Tests/IdePlusPlus.Infrastructure.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.NuGet.Tests/IdePlusPlus.NuGet.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />

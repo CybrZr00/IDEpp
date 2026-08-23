@@ -115,6 +115,39 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
         Verified: full-solution build (0 warnings/errors), full test suite (179 tests across 15
         projects, all passing), and a real launch smoke test. No existing file's behavior changed
         beyond the named integration points (`GitService`/`BuildService` untouched).
+  - [x] **2. Multi-project debug/attach** — `DebugSession`'s singleton DI registration replaced with
+        a `DebugSessionManager` owning zero-or-more concurrent `DebugSession` instances (each keeps
+        its own `DapClient`/netcoredbg process — confirmed via `DapClient`'s per-instance `seq`
+        dictionary that this needed zero protocol changes to run concurrently). Added `DebugSession
+        .AttachAsync` sending DAP `attach` instead of `launch`, a `ProcessAttachTarget` heuristic
+        (`coreclr.dll`/`hostfxr.dll` sibling, or apphost + matching `.deps.json`) behind an
+        "Attach to Process..." Debug-menu item and dialog, a session picker (`ComboBox`) shown above
+        both the Call Stack and Locals panes (which stay simple single-collection views per the
+        design's MVP scope — `MainWindowViewModel` keeps its own `DebugSessions` mirror, synced only
+        on the UI thread via `_dispatcher.Invoke`, since `DebugSessionManager`'s own events fire on
+        the DAP reader's background thread and a WPF-bound `ObservableCollection` cannot be mutated
+        off-thread), and a new `StartupProjectsStore` persisting a project-path list (migrating
+        transparently from the old single-path `startup-project.txt`) surfaced as an additive
+        "Include in Startup Projects" checkbox alongside the existing single-target "Set as Startup
+        Project". A real ordering bug was caught during implementation and fixed before landing: a
+        newly started session's own `StateChanged` event reaches `MainWindowViewModel` *before*
+        `DebugSessionManager` finishes adding it to `Sessions`/marking it active, which would have
+        left `IsDebugging`/`IsStoppedAtBreakpoint` stuck false and Stop/Continue/Step permanently
+        disabled after every debug launch — fixed by also recomputing debug state on
+        `SessionsChanged`, not just `StateChanged`. The single-startup-project case (today's only
+        case) is an explicit behavioral no-op: with no saved multi-project state, the new
+        `_startupProjectPaths` list resolves to exactly the one existing runnable project, so
+        `StartDebuggingAsync`'s loop executes once with identical Output text and command-enablement
+        transitions as before. New `IdePlusPlus.Debug.Tests` project (6 tests for the attach
+        heuristic against a real temp-directory filesystem, not mocks) plus 4 new
+        `StartupProjectsStore` migration tests. `DebugSessionManager`'s own orchestration logic
+        (active-session bookkeeping) is left deliberately uncovered — `DebugSession`'s constructor
+        transitively requires a live `System.Windows.Application.Current`, which does not exist in a
+        plain xunit host, so exercising it needs a real (unavailable in this environment) netcoredbg
+        process rather than a construction-only test double. Verified: full-solution build (0
+        warnings/errors), full test suite (193 tests across 16 projects, all passing), and a real
+        launch smoke test with the new `DebugSessionManager` DI wiring. `DapClient.cs`'s wire
+        protocol was not touched.
 
 **Verification performed**: every milestone above was verified with `dotnet build` (0 warnings/errors)
 and `dotnet test` (105 tests passing across 12 test projects, up from 7 projects/~60 tests at the

@@ -149,7 +149,7 @@ public partial class App : Application
         services.AddSingleton<BreakpointManager>();
         services.AddSingleton<DebugLocationIndicator>();
         services.AddSingleton<CaretPositionIndicator>();
-        services.AddSingleton<DebugSession>();
+        services.AddSingleton<DebugSessionManager>();
         services.AddSingleton<SecureSettingsStore>();
         services.AddSingleton<AppSettingsStore>();
         services.AddSingleton<ThemeService>();

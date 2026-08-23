@@ -266,43 +266,70 @@
         <DataTemplate DataType="{x:Type editor:DocumentViewModel}">
             <editor:TextEditorHost />
         </DataTemplate>
+        <!--
+            Shared by the Call Stack and Locals templates below: a session-picker header, only
+            meaningful once more than one DebugSession is running (multi-project debug/attach) - with
+            0-1 sessions it's a harmless no-op rather than being hidden, to keep the XAML simple.
+        -->
+        <DataTemplate x:Key="DebugSessionPickerHeader">
+            <Grid Margin="4,2"
+                  DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Session:" VerticalAlignment="Center" Margin="0,0,6,0"
+                           Foreground="{DynamicResource MutedForegroundBrush}" FontSize="11" />
+                <ComboBox Grid.Column="1"
+                          ItemsSource="{Binding DebugSessions}"
+                          SelectedItem="{Binding ActiveDebugSession}"
+                          DisplayMemberPath="DisplayName"
+                          FontSize="11" />
+            </Grid>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CallStackPaneViewModel}">
-            <ListBox ItemsSource="{Binding Frames}"
-                     Background="{DynamicResource PanelBackgroundBrush}"
-                     Foreground="{DynamicResource WindowForegroundBrush}"
-                     BorderThickness="0"
-                     FontFamily="Consolas">
-                <ListBox.ItemTemplate>
-                    <DataTemplate DataType="{x:Type debug:StackFrameInfo}">
-                        <TextBlock>
-                            <Run Text="{Binding Name, Mode=OneWay}" />
-                            <Run Text=" — " />
-                            <Run Text="{Binding FilePath, Mode=OneWay}" />
-                            <Run Text=":" />
-                            <Run Text="{Binding Line, Mode=OneWay}" />
-                        </TextBlock>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <DockPanel>
+                <ContentControl DockPanel.Dock="Top" ContentTemplate="{StaticResource DebugSessionPickerHeader}" />
+                <ListBox ItemsSource="{Binding Frames}"
+                         Background="{DynamicResource PanelBackgroundBrush}"
+                         Foreground="{DynamicResource WindowForegroundBrush}"
+                         BorderThickness="0"
+                         FontFamily="Consolas">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type debug:StackFrameInfo}">
+                            <TextBlock>
+                                <Run Text="{Binding Name, Mode=OneWay}" />
+                                <Run Text=" — " />
+                                <Run Text="{Binding FilePath, Mode=OneWay}" />
+                                <Run Text=":" />
+                                <Run Text="{Binding Line, Mode=OneWay}" />
+                            </TextBlock>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:LocalsPaneViewModel}">
-            <ListBox ItemsSource="{Binding Variables}"
-                     Background="{DynamicResource PanelBackgroundBrush}"
-                     Foreground="{DynamicResource WindowForegroundBrush}"
-                     BorderThickness="0"
-                     FontFamily="Consolas">
-                <ListBox.ItemTemplate>
-                    <DataTemplate DataType="{x:Type debug:VariableInfo}">
-                        <TextBlock>
-                            <Run Text="{Binding Name, Mode=OneWay}" FontWeight="Bold" />
-                            <Run Text=" = " />
-                            <Run Text="{Binding Value, Mode=OneWay}" />
-                            <Run Text=" : " />
-                            <Run Text="{Binding Type, Mode=OneWay}" Foreground="{DynamicResource MutedForegroundBrush}" />
-                        </TextBlock>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <DockPanel>
+                <ContentControl DockPanel.Dock="Top" ContentTemplate="{StaticResource DebugSessionPickerHeader}" />
+                <ListBox ItemsSource="{Binding Variables}"
+                         Background="{DynamicResource PanelBackgroundBrush}"
+                         Foreground="{DynamicResource WindowForegroundBrush}"
+                         BorderThickness="0"
+                         FontFamily="Consolas">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type debug:VariableInfo}">
+                            <TextBlock>
+                                <Run Text="{Binding Name, Mode=OneWay}" FontWeight="Bold" />
+                                <Run Text=" = " />
+                                <Run Text="{Binding Value, Mode=OneWay}" />
+                                <Run Text=" : " />
+                                <Run Text="{Binding Type, Mode=OneWay}" Foreground="{DynamicResource MutedForegroundBrush}" />
+                            </TextBlock>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
         </DataTemplate>
     </Window.Resources>
 
@@ -366,6 +393,7 @@
             <MenuItem Header="_Debug">
                 <MenuItem Header="Start De_bugging" InputGestureText="F5" Command="{Binding StartDebuggingCommand}" />
                 <MenuItem Header="Sto_p Debugging" Command="{Binding StopDebuggingCommand}" />
+                <MenuItem Header="_Attach to Process..." Command="{Binding AttachToProcessCommand}" />
                 <Separator />
                 <MenuItem Header="_Continue" InputGestureText="Ctrl+F5" Command="{Binding ContinueDebuggingCommand}" />
                 <MenuItem Header="Step _Over" InputGestureText="F10" Command="{Binding StepOverCommand}" />
