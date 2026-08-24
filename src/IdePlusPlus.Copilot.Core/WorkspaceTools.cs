@@ -24,7 +24,10 @@ public static class WorkspaceTools
     public static readonly ToolDefinition ReadFile = new(
         Name: ReadFileToolName,
         Description: "Read a file from the open solution. Use this to inspect real code before answering or planning - " +
-                     "never guess at a file's contents.",
+                     "never guess at a file's contents. Each line is returned prefixed with its 1-based line number " +
+                     "followed by ': '. Those prefixes are NOT part of the file - use them for propose_edit's " +
+                     "start_line/end_line, and never copy them into propose_edit's new_text. A file you have already " +
+                     "read this conversation does not need re-reading unless you have since changed it.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",

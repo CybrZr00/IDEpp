@@ -33,14 +33,35 @@ public sealed class WorkspaceFileReader
         try
         {
             var text = File.ReadAllText(fullPath);
-            return text.Length > MaxFileChars
-                ? text[..MaxFileChars] + $"\n\n[truncated - file is {text.Length} chars, showing first {MaxFileChars}]"
-                : text;
+            if (text.Length <= MaxFileChars)
+            {
+                return WithLineNumbers(text);
+            }
+
+            // Length captured from the original text, not the truncated copy - the notice is only
+            // useful if it reports how much the file actually holds.
+            return WithLineNumbers(text[..MaxFileChars])
+                   + $"\n\n[truncated - file is {text.Length} chars, showing first {MaxFileChars}]";
         }
         catch (IOException ex)
         {
             return $"Could not read {relativePath}: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Prefixes every line with its 1-based number, which is what makes propose_edit's replace_range
+    /// mode actually reachable: without them the model can only guess at start_line/end_line, so in
+    /// practice it fell back to whole_file for every edit - re-emitting an entire file as a
+    /// JSON-escaped tool argument even for a three-line change. That cost is exactly what a reasoning
+    /// model weighs up and avoids by describing the edit in prose instead of calling the tool.
+    /// The "N: " prefix is not part of the file; both tool descriptions say so explicitly, because a
+    /// model that echoes the prefixes back inside new_text would corrupt the file it's editing.
+    /// </summary>
+    public static string WithLineNumbers(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        return string.Join("\n", lines.Select((line, index) => $"{index + 1,6}: {line}"));
     }
 
     public string ListFiles(string? solutionDirectory, string? relativeDirectory, bool recursive)

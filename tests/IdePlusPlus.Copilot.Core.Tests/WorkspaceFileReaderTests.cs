@@ -22,9 +22,25 @@ public sealed class WorkspaceFileReaderTests : IDisposable
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
     [Fact]
-    public void ReadFile_ReturnsFileContents()
+    public void ReadFile_ReturnsFileContentsPrefixedWithLineNumbers()
     {
-        _reader.ReadFile(_root, "src/Foo.cs").ShouldBe("class Foo { }");
+        _reader.ReadFile(_root, "src/Foo.cs").ShouldBe("     1: class Foo { }");
+    }
+
+    [Fact]
+    public void ReadFile_MultiLineFile_NumbersEveryLineSequentially()
+    {
+        File.WriteAllText(Path.Combine(_root, "multi.cs"), "one\ntwo\nthree");
+
+        _reader.ReadFile(_root, "multi.cs").ShouldBe("     1: one\n     2: two\n     3: three");
+    }
+
+    [Fact]
+    public void ReadFile_CrlfLineEndings_AreNumberedWithoutBlankLinesBetween()
+    {
+        File.WriteAllText(Path.Combine(_root, "crlf.cs"), "one\r\ntwo");
+
+        _reader.ReadFile(_root, "crlf.cs").ShouldBe("     1: one\n     2: two");
     }
 
     [Fact]
@@ -69,6 +85,9 @@ public sealed class WorkspaceFileReaderTests : IDisposable
 
         result.ShouldContain("[truncated");
         result.Length.ShouldBeLessThan(WorkspaceFileReader.MaxFileChars + 200);
+
+        // The notice reports the real file size, not the length of the truncated copy.
+        result.ShouldContain($"file is {WorkspaceFileReader.MaxFileChars + 500} chars");
     }
 
     [Fact]
