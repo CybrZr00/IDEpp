@@ -64,6 +64,15 @@ public static class OpenAiCompatibleChat
         },
     };
 
+    /// <summary>
+    /// "auto" (explicitly, rather than relying on whatever a given provider/model defaults to when
+    /// the field is absent) when tools were offered at all, otherwise null - serialized as a literal
+    /// JSON null when there are no tools (JsonContent.Create doesn't drop null properties), which an
+    /// OpenAI-compatible API treats the same as the field being absent.
+    /// </summary>
+    public static string? ToToolChoice(IReadOnlyList<ToolDefinition>? tools) =>
+        tools is { Count: > 0 } ? "auto" : null;
+
     private static string RoleName(ChatRole role) => role switch
     {
         ChatRole.System => "system",
@@ -155,7 +164,17 @@ public static class OpenAiCompatibleChat
         // throws ArgumentOutOfRangeException rather than returning null for an out-of-bounds index,
         // so this must check Count before indexing rather than relying on ?[0] alone.
         var choices = root?["choices"]?.AsArray();
-        var delta = choices is { Count: > 0 } ? choices[0]?["delta"] : null;
+        var choice = choices is { Count: > 0 } ? choices[0] : null;
+
+        // Read before the delta-null check below: the chunk that carries finish_reason often has an
+        // empty (not null) delta, but some providers send it on its own trailing chunk with no delta
+        // at all - either way this must not be skipped by the early-return that follows.
+        if (choice?["finish_reason"]?.GetValue<string>() is { Length: > 0 } finishReason)
+        {
+            yield return new FinishReasonReceived(finishReason);
+        }
+
+        var delta = choice?["delta"];
         if (delta is null)
         {
             yield break;

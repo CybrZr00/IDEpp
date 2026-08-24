@@ -38,6 +38,25 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// settings it also owns.</summary>
     public const string SystemPromptSettingKey = "ChatSystemPrompt";
 
+    /// <summary>
+    /// Used whenever the user hasn't set a custom System Prompt in Settings - without this, no
+    /// system-level instruction was ever sent at all, and a reasoning-heavy model (Claude Sonnet is
+    /// the default - see DefaultModelFor) is prone to responding to a multi-file request with a
+    /// prose plan ("1. Remove X... 2. Update Y... Let me implement this:") and then stopping without
+    /// ever calling propose_edit, since nothing told it that describing a plan isn't the same as
+    /// doing the work. Each tool's own Description (e.g. ProposeEditTool's "always call this... never
+    /// paste the new code as plain chat text instead") is a per-tool nudge, not a substitute for this.
+    /// </summary>
+    private const string DefaultSystemPrompt =
+        "You are an AI coding assistant embedded in the IDE++ IDE. You have tools to read files, " +
+        "list directories, search the indexed codebase, and propose edits directly in the user's " +
+        "editor (plus any MCP/plugin tools currently connected). Investigate with the read-only " +
+        "tools first, then act: when a change is needed, call the edit tool to make it in the same " +
+        "turn you describe it, rather than writing out a numbered plan in chat text and stopping - " +
+        "the user cannot act on a plan that was only described, and a stopped turn does not resume " +
+        "itself. Keep narration brief; prefer calling a tool over explaining at length what you're " +
+        "about to do.";
+
     private const int CodebaseSearchTopK = 5;
     private const int MaxToolLoopIterations = 8;
 
@@ -293,10 +312,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private async Task PrependContextAsync(List<ChatMessage> history, string userText)
     {
-        if (_appSettingsStore.Get(SystemPromptSettingKey) is { Length: > 0 } systemPrompt)
-        {
-            history.Insert(0, new ChatMessage(ChatRole.System, systemPrompt));
-        }
+        var systemPrompt = _appSettingsStore.Get(SystemPromptSettingKey);
+        history.Insert(0, new ChatMessage(
+            ChatRole.System,
+            string.IsNullOrWhiteSpace(systemPrompt) ? DefaultSystemPrompt : systemPrompt));
 
         if (IsPlanMode)
         {
@@ -589,6 +608,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                     case StreamError error:
                         assistantMessage.Append($"\n\n[error: {error.Message}]");
+                        break;
+
+                    // "length" means the model was cut off by the output-token cap, not that it
+                    // chose to stop - without flagging this, a truncated turn (e.g. one that got cut
+                    // off partway through a verbose plan, before ever reaching a tool call) looks
+                    // identical to a normal, complete reply.
+                    case FinishReasonReceived { Reason: "length" }:
+                        assistantMessage.Append("\n\n[response was cut off - it hit the model's output length limit before finishing]");
                         break;
 
                     case UsageReceived usage:

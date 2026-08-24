@@ -36,7 +36,7 @@
                        Margin="0,0,0,16" />
 
             <TextBlock Text="System Prompt" FontWeight="Bold" Margin="0,0,0,8" />
-            <TextBlock Text="Custom instructions prepended to every conversation (e.g. coding-style rules). Leave blank for none."
+            <TextBlock Text="Custom instructions prepended to every conversation (e.g. coding-style rules), replacing the built-in default that tells the assistant to act via tools rather than just describe a plan. Leave blank to keep that default."
                        FontSize="11"
                        Foreground="{DynamicResource MutedForegroundBrush}"
                        TextWrapping="Wrap"

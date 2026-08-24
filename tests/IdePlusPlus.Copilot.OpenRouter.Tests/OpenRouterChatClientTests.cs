@@ -104,6 +104,71 @@ public class OpenRouterChatClientTests
     }
 
     [Fact]
+    public async Task StreamChatAsync_FinishReasonLength_YieldsFinishReasonReceived()
+    {
+        const string sseBody = """
+            data: {"choices":[{"delta":{"content":"partial pl"}}]}
+
+            data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+
+            data: [DONE]
+
+            """;
+
+        var client = new OpenRouterChatClient(new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, sseBody)), NewSettingsStoreWithApiKey());
+
+        var events = await CollectAsync(client);
+
+        events.OfType<FinishReasonReceived>().ShouldHaveSingleItem().Reason.ShouldBe("length");
+    }
+
+    [Fact]
+    public async Task StreamChatAsync_FinishReasonStop_IsAlsoSurfaced()
+    {
+        const string sseBody = """
+            data: {"choices":[{"delta":{"content":"done"}}]}
+
+            data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
+
+        var client = new OpenRouterChatClient(new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, sseBody)), NewSettingsStoreWithApiKey());
+
+        var events = await CollectAsync(client);
+
+        events.OfType<FinishReasonReceived>().ShouldHaveSingleItem().Reason.ShouldBe("stop");
+    }
+
+    [Fact]
+    public async Task StreamChatAsync_WithTools_SendsToolChoiceAuto()
+    {
+        var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, "data: [DONE]\n\n");
+        var client = new OpenRouterChatClient(new HttpClient(handler), NewSettingsStoreWithApiKey());
+        var tools = new[] { new ToolDefinition("some_tool", "does something", System.Text.Json.Nodes.JsonNode.Parse("{}")!) };
+
+        await foreach (var _ in client.StreamChatAsync(OneUserMessage, "test-model", tools))
+        {
+        }
+
+        handler.LastRequestBody.ShouldNotBeNull().ShouldContain("\"tool_choice\":\"auto\"");
+    }
+
+    [Fact]
+    public async Task StreamChatAsync_WithNoTools_SendsNullToolChoice()
+    {
+        var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, "data: [DONE]\n\n");
+        var client = new OpenRouterChatClient(new HttpClient(handler), NewSettingsStoreWithApiKey());
+
+        await foreach (var _ in client.StreamChatAsync(OneUserMessage, "test-model"))
+        {
+        }
+
+        handler.LastRequestBody.ShouldNotBeNull().ShouldContain("\"tool_choice\":null");
+    }
+
+    [Fact]
     public async Task StreamChatAsync_SkipsMalformedChunksWithoutAbortingTheStream()
     {
         const string sseBody = """

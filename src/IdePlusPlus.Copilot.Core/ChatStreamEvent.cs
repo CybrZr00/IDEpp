@@ -24,3 +24,9 @@ public sealed record StreamCompleted : ChatStreamEvent;
 public sealed record UsageReceived(int PromptTokens, int CompletionTokens) : ChatStreamEvent;
 
 public sealed record StreamError(string Message) : ChatStreamEvent;
+
+/// <summary>The provider's own reason the completion ended (e.g. "stop", "tool_calls", "length",
+/// "content_filter") - "length" in particular means the model was cut off by the output-token cap
+/// before it finished, which looks identical to "the model chose to stop" unless this is surfaced
+/// separately. Emitted once, from the same chunk StreamCompleted follows.</summary>
+public sealed record FinishReasonReceived(string Reason) : ChatStreamEvent;

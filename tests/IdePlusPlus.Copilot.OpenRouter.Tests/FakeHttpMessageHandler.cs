@@ -4,12 +4,16 @@ namespace IdePlusPlus.Copilot.OpenRouter.Tests;
 
 internal class FakeHttpMessageHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
 {
+    /// <summary>The request body of the most recent SendAsync call - lets a test assert on what was
+    /// actually sent (e.g. that tool_choice is present) without a real HTTP call.</summary>
+    public string? LastRequestBody { get; private set; }
+
     public static FakeHttpMessageHandler ThatShouldNeverBeCalled() => new ThrowingHandler();
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var response = new HttpResponseMessage(statusCode) { Content = new StringContent(body) };
-        return Task.FromResult(response);
+        LastRequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+        return new HttpResponseMessage(statusCode) { Content = new StringContent(body) };
     }
 
     private sealed class ThrowingHandler() : FakeHttpMessageHandler(HttpStatusCode.OK, "")

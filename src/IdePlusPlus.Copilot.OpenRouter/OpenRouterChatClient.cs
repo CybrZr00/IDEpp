@@ -70,6 +70,7 @@ public sealed class OpenRouterChatClient : IChatClient
             stream_options = new { include_usage = true },
             messages = messages.Select(OpenAiCompatibleChat.ToRequestMessage),
             tools = tools is { Count: > 0 } ? tools.Select(OpenAiCompatibleChat.ToToolSchema) : null,
+            tool_choice = OpenAiCompatibleChat.ToToolChoice(tools),
             reasoning = OpenAiCompatibleChat.ToReasoningParameter(effort),
         });
 
