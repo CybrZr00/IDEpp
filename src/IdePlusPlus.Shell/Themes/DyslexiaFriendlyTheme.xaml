@@ -1,0 +1,23 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- An off-white/cream background (rather than LightTheme's stark white) and a soft warm-charcoal
+         foreground (rather than pure black) both reduce the high-frequency black/white "vibration"
+         many dyslexic readers report; every accent color below is similarly muted rather than fully
+         saturated, for the same lower-visual-noise reason. Colors here match EditorTheme's
+         DyslexiaFriendly palette so the editor and the surrounding chrome read as one consistent theme. -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F3EAD3" />
+    <SolidColorBrush x:Key="WindowForegroundBrush" Color="#3B3529" />
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FAF3E3" />
+    <SolidColorBrush x:Key="MutedForegroundBrush" Color="#8A8171" />
+
+    <SolidColorBrush x:Key="ChatBubbleAssistantBackgroundBrush" Color="#F1E7CF" />
+    <SolidColorBrush x:Key="ChatBubbleUserBackgroundBrush" Color="#DCE7DC" />
+    <SolidColorBrush x:Key="DiffAddedBackgroundBrush" Color="#E3EEDD" />
+    <SolidColorBrush x:Key="DiffRemovedBackgroundBrush" Color="#F3DEDA" />
+    <SolidColorBrush x:Key="DiffHighlightBackgroundBrush" Color="#F0D9A0" />
+    <SolidColorBrush x:Key="EditProposalBackgroundBrush" Color="#F5EEDC" />
+    <SolidColorBrush x:Key="EditProposalBorderBrush" Color="#E0D3B0" />
+    <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#EEE2C4" />
+
+</ResourceDictionary>

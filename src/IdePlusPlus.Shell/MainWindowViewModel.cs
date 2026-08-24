@@ -102,8 +102,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _roslynWorkspaceService = roslynWorkspaceService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
-        isDarkTheme = _themeService.IsDark;
-        _themeService.Changed += () => _dispatcher.Invoke(() => IsDarkTheme = _themeService.IsDark);
+        currentTheme = _themeService.Current;
+        _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
 
         isWordWrapEnabled = EditorSettings.WordWrap;
         EditorSettings.Changed += () => _dispatcher.Invoke(() => IsWordWrapEnabled = EditorSettings.WordWrap);
@@ -293,7 +293,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool isRunning;
 
     [ObservableProperty]
-    private bool isDarkTheme;
+    private AppTheme currentTheme;
 
     [ObservableProperty]
     private bool isWordWrapEnabled;
@@ -320,7 +320,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ToggleTheme() => _themeService.Toggle();
+    private void SetTheme(AppTheme theme) => _themeService.SetTheme(theme);
 
     [RelayCommand]
     private void ToggleWordWrap() => EditorSettings.ToggleWordWrap();

@@ -452,7 +452,28 @@
                 <MenuItem Header="Step Ou_t" InputGestureText="Shift+F11" Command="{Binding StepOutCommand}" />
             </MenuItem>
             <MenuItem Header="_View">
-                <MenuItem Header="_Dark Mode" IsCheckable="True" IsChecked="{Binding IsDarkTheme, Mode=OneWay}" Command="{Binding ToggleThemeCommand}" />
+                <MenuItem Header="_Theme">
+                    <MenuItem Header="_Light"
+                              IsCheckable="True"
+                              IsChecked="{Binding CurrentTheme, Mode=OneWay, Converter={x:Static toolPanes:EnumEqualsConverter.Instance}, ConverterParameter={x:Static editor:AppTheme.Light}}"
+                              Command="{Binding SetThemeCommand}"
+                              CommandParameter="{x:Static editor:AppTheme.Light}" />
+                    <MenuItem Header="_Dark"
+                              IsCheckable="True"
+                              IsChecked="{Binding CurrentTheme, Mode=OneWay, Converter={x:Static toolPanes:EnumEqualsConverter.Instance}, ConverterParameter={x:Static editor:AppTheme.Dark}}"
+                              Command="{Binding SetThemeCommand}"
+                              CommandParameter="{x:Static editor:AppTheme.Dark}" />
+                    <MenuItem Header="_Soft Dark"
+                              IsCheckable="True"
+                              IsChecked="{Binding CurrentTheme, Mode=OneWay, Converter={x:Static toolPanes:EnumEqualsConverter.Instance}, ConverterParameter={x:Static editor:AppTheme.SoftDark}}"
+                              Command="{Binding SetThemeCommand}"
+                              CommandParameter="{x:Static editor:AppTheme.SoftDark}" />
+                    <MenuItem Header="Dys_lexia-Friendly"
+                              IsCheckable="True"
+                              IsChecked="{Binding CurrentTheme, Mode=OneWay, Converter={x:Static toolPanes:EnumEqualsConverter.Instance}, ConverterParameter={x:Static editor:AppTheme.DyslexiaFriendly}}"
+                              Command="{Binding SetThemeCommand}"
+                              CommandParameter="{x:Static editor:AppTheme.DyslexiaFriendly}" />
+                </MenuItem>
                 <MenuItem Header="_Word Wrap" IsCheckable="True" IsChecked="{Binding IsWordWrapEnabled, Mode=OneWay}" Command="{Binding ToggleWordWrapCommand}" />
                 <Separator />
                 <MenuItem Header="Zoom _In" InputGestureText="Ctrl+=" Command="{Binding ZoomInCommand}" />

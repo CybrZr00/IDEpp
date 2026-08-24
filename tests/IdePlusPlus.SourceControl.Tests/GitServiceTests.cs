@@ -23,18 +23,28 @@ public sealed class GitServiceTests : IDisposable
         RunGit("config", "user.name", "Test User");
     }
 
+    private readonly List<string> _extraDirectoriesToClean = [];
+
     public void Dispose()
+    {
+        foreach (var directory in new[] { _repositoryDirectory }.Concat(_extraDirectoriesToClean))
+        {
+            DeleteDirectoryBestEffort(directory);
+        }
+    }
+
+    private static void DeleteDirectoryBestEffort(string directory)
     {
         try
         {
             // git marks object files under .git/objects read-only on Windows - Directory.Delete
             // can't remove those until the attribute is cleared first.
-            foreach (var path in Directory.EnumerateFileSystemEntries(_repositoryDirectory, "*", SearchOption.AllDirectories))
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories))
             {
                 File.SetAttributes(path, FileAttributes.Normal);
             }
 
-            Directory.Delete(_repositoryDirectory, recursive: true);
+            Directory.Delete(directory, recursive: true);
         }
         catch (IOException)
         {
@@ -183,6 +193,47 @@ public sealed class GitServiceTests : IDisposable
         File.ReadAllText(Path.Combine(_repositoryDirectory, "hello.txt")).ShouldBe("committed content");
     }
 
+    /// <summary>
+    /// Reproduces the out-of-the-box state on a machine that has never set pull.rebase/pull.ff:
+    /// with nothing configured, git 2.29+ refuses a pull against diverged branches outright
+    /// ("fatal: Need to specify how to reconcile divergent branches") instead of pulling anything.
+    /// PullAsync must pin a reconcile strategy itself rather than depend on ambient global config.
+    /// </summary>
+    [Fact]
+    public async Task PullAsync_WithDivergentNonConflictingHistory_MergesWithoutNeedingGlobalReconcileConfig()
+    {
+        var remoteDirectory = Path.Combine(Path.GetTempPath(), $"ideplusplus-remote-{Guid.NewGuid()}");
+        Directory.CreateDirectory(remoteDirectory);
+        _extraDirectoriesToClean.Add(remoteDirectory);
+        RunGitIn(remoteDirectory, "init", "--bare", "--initial-branch=main");
+
+        RunGit("remote", "add", "origin", remoteDirectory);
+        CommitInitialFile();
+        RunGit("push", "-u", "origin", "main");
+
+        var cloneDirectory = Path.Combine(Path.GetTempPath(), $"ideplusplus-clone-{Guid.NewGuid()}");
+        _extraDirectoriesToClean.Add(cloneDirectory);
+        RunGitIn(Path.GetTempPath(), "clone", "--quiet", remoteDirectory, cloneDirectory);
+        RunGitIn(cloneDirectory, "config", "user.email", "clone@example.com");
+        RunGitIn(cloneDirectory, "config", "user.name", "Clone User");
+        File.WriteAllText(Path.Combine(cloneDirectory, "from-clone.txt"), "from clone");
+        RunGitIn(cloneDirectory, "add", "from-clone.txt");
+        RunGitIn(cloneDirectory, "commit", "-m", "from clone");
+        RunGitIn(cloneDirectory, "push");
+
+        // The original repo now has a local, unpushed commit that diverges from what the clone
+        // just pushed - the exact shape that needs an explicit reconcile strategy to pull.
+        WriteFile("from-original.txt", "from original");
+        RunGit("add", "from-original.txt");
+        RunGit("commit", "-m", "from original");
+
+        var result = await _gitService.PullAsync(_repositoryDirectory);
+
+        result.Success.ShouldBeTrue(result.Output);
+        File.Exists(Path.Combine(_repositoryDirectory, "from-clone.txt")).ShouldBeTrue();
+        File.Exists(Path.Combine(_repositoryDirectory, "from-original.txt")).ShouldBeTrue();
+    }
+
     [Fact]
     public async Task CommitAsync_WithAMessageContainingShellMetacharacters_CommitsSafely()
     {
@@ -207,7 +258,9 @@ public sealed class GitServiceTests : IDisposable
     private void WriteFile(string relativePath, string content) =>
         File.WriteAllText(Path.Combine(_repositoryDirectory, relativePath), content);
 
-    private string RunGit(params string[] arguments)
+    private string RunGit(params string[] arguments) => RunGitIn(_repositoryDirectory, arguments);
+
+    private static string RunGitIn(string workingDirectory, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo("git")
         {
@@ -215,7 +268,7 @@ public sealed class GitServiceTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = _repositoryDirectory,
+            WorkingDirectory = workingDirectory,
         };
         foreach (var argument in arguments)
         {

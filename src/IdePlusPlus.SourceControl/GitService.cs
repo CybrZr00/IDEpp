@@ -62,8 +62,14 @@ public sealed class GitService
     public Task<GitCommandResult> PushAsync(string repositoryDirectory, CancellationToken cancellationToken = default) =>
         RunAsync(repositoryDirectory, ["push"], cancellationToken);
 
+    // Plain `git pull` depends on the user's global pull.rebase/pull.ff config to know how to
+    // reconcile diverged branches; when that's unset (the out-of-the-box state on a lot of real
+    // machines) git 2.29+ refuses outright with "fatal: Need to specify how to reconcile divergent
+    // branches" instead of pulling anything - so this pins the strategy explicitly rather than
+    // inheriting whatever (if anything) is configured outside the IDE. --no-edit avoids the merge
+    // commit needing an editor, which a GUI-launched process has no terminal to run.
     public Task<GitCommandResult> PullAsync(string repositoryDirectory, CancellationToken cancellationToken = default) =>
-        RunAsync(repositoryDirectory, ["pull"], cancellationToken);
+        RunAsync(repositoryDirectory, ["pull", "--no-rebase", "--no-edit"], cancellationToken);
 
     public Task<GitCommandResult> FetchAsync(string repositoryDirectory, CancellationToken cancellationToken = default) =>
         RunAsync(repositoryDirectory, ["fetch"], cancellationToken);
@@ -102,6 +108,14 @@ public sealed class GitService
         {
             startInfo.ArgumentList.Add(argument);
         }
+
+        // A GUI-launched process has no terminal for git to prompt against, so without this a push/
+        // pull/fetch against a remote needing credentials (or an SSH host-key confirmation) just
+        // hangs forever waiting for input nobody can type - IsBusy stays true and the pane looks
+        // completely dead. Disabling prompts makes git fail fast instead, with a message ("could not
+        // read Username...") that actually reaches StatusMessage.
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        startInfo.Environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes";
 
         using var process = new Process { StartInfo = startInfo };
 

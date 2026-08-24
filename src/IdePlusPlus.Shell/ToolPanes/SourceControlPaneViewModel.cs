@@ -258,19 +258,25 @@ public sealed partial class SourceControlPaneViewModel : ToolPaneViewModel
     }
 
     [RelayCommand(CanExecute = nameof(CanRunGitCommand))]
-    private Task PushAsync() => RunGitActionAsync(() => _gitService.PushAsync(_repositoryDirectory!));
+    private Task PushAsync() => RunGitActionAsync("Pushing...", () => _gitService.PushAsync(_repositoryDirectory!));
 
     [RelayCommand(CanExecute = nameof(CanRunGitCommand))]
-    private Task PullAsync() => RunGitActionAsync(() => _gitService.PullAsync(_repositoryDirectory!));
+    private Task PullAsync() => RunGitActionAsync("Pulling...", () => _gitService.PullAsync(_repositoryDirectory!));
 
     [RelayCommand(CanExecute = nameof(CanRunGitCommand))]
-    private Task FetchAsync() => RunGitActionAsync(() => _gitService.FetchAsync(_repositoryDirectory!));
+    private Task FetchAsync() => RunGitActionAsync("Fetching...", () => _gitService.FetchAsync(_repositoryDirectory!));
 
     [RelayCommand(CanExecute = nameof(CanRunGitCommand))]
     private Task CheckoutBranchAsync(GitBranch branch) =>
-        branch.IsCurrent ? Task.CompletedTask : RunGitActionAsync(() => _gitService.CheckoutBranchAsync(_repositoryDirectory!, branch.Name));
+        branch.IsCurrent
+            ? Task.CompletedTask
+            : RunGitActionAsync("Checking out...", () => _gitService.CheckoutBranchAsync(_repositoryDirectory!, branch.Name));
 
-    private async Task RunGitActionAsync(Func<Task<GitCommandResult>> action)
+    /// <summary>Sets StatusMessage to <paramref name="inProgressMessage"/> up front, before the git
+    /// process even starts, rather than only once it finishes - push/pull/fetch hit the network and
+    /// can take a while, and a pane that shows nothing until the command completes reads as "did my
+    /// click even register?" even though it's just IsBusy-disabled buttons doing their job.</summary>
+    private async Task RunGitActionAsync(string inProgressMessage, Func<Task<GitCommandResult>> action)
     {
         if (_repositoryDirectory is null)
         {
@@ -278,6 +284,7 @@ public sealed partial class SourceControlPaneViewModel : ToolPaneViewModel
         }
 
         IsBusy = true;
+        StatusMessage = inProgressMessage;
         try
         {
             var result = await action();
