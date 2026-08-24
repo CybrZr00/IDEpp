@@ -13,7 +13,7 @@ public class LaunchSettingsLoaderTests
     }
 
     [Fact]
-    public void Load_PicksFirstProjectProfile_IgnoringIisExpress()
+    public void Load_NoProfileNameGiven_DefaultsToFirstProjectProfile_IgnoringIisExpress()
     {
         using var project = new TestProject();
         project.WriteLaunchSettings("""
@@ -40,9 +40,130 @@ public class LaunchSettingsLoaderTests
 
         profile.ShouldNotBeNull();
         profile.Name.ShouldBe("http");
+        profile.CommandName.ShouldBe("Project");
         profile.LaunchBrowser.ShouldBeTrue();
         profile.ApplicationUrl.ShouldBe("http://localhost:5000");
         profile.EnvironmentVariables["ASPNETCORE_ENVIRONMENT"].ShouldBe("Development");
+    }
+
+    [Fact]
+    public void Load_WithExplicitProfileName_ReturnsThatProfileEvenIfNotFirst()
+    {
+        using var project = new TestProject();
+        project.WriteLaunchSettings("""
+            {
+              "profiles": {
+                "http": { "commandName": "Project", "applicationUrl": "http://localhost:5000" },
+                "https": { "commandName": "Project", "applicationUrl": "https://localhost:5001" }
+              }
+            }
+            """);
+
+        var profile = LaunchSettingsLoader.Load(project.ProjectPath, "https");
+
+        profile.ShouldNotBeNull();
+        profile.Name.ShouldBe("https");
+        profile.ApplicationUrl.ShouldBe("https://localhost:5001");
+    }
+
+    [Fact]
+    public void Load_WithExplicitProfileName_CanReturnNonProjectProfile()
+    {
+        using var project = new TestProject();
+        project.WriteLaunchSettings("""
+            {
+              "profiles": {
+                "IIS Express": { "commandName": "IISExpress", "launchBrowser": true }
+              }
+            }
+            """);
+
+        var profile = LaunchSettingsLoader.Load(project.ProjectPath, "IIS Express");
+
+        profile.ShouldNotBeNull();
+        profile.CommandName.ShouldBe("IISExpress");
+    }
+
+    [Fact]
+    public void Load_WithUnknownExplicitProfileName_ReturnsNull()
+    {
+        using var project = new TestProject();
+        project.WriteLaunchSettings("""
+            {
+              "profiles": {
+                "http": { "commandName": "Project" }
+              }
+            }
+            """);
+
+        LaunchSettingsLoader.Load(project.ProjectPath, "does-not-exist").ShouldBeNull();
+    }
+
+    [Fact]
+    public void Load_ParsesCommandLineArgsIntoArgvList()
+    {
+        using var project = new TestProject();
+        project.WriteLaunchSettings("""
+            {
+              "profiles": {
+                "http": { "commandName": "Project", "commandLineArgs": "--seed 42 \"path with spaces\"" }
+              }
+            }
+            """);
+
+        var profile = LaunchSettingsLoader.Load(project.ProjectPath);
+
+        profile.ShouldNotBeNull();
+        profile.CommandLineArgs.ShouldBe(["--seed", "42", "path with spaces"]);
+    }
+
+    [Fact]
+    public void Load_MissingCommandLineArgs_ReturnsEmptyList()
+    {
+        using var project = new TestProject();
+        project.WriteLaunchSettings("""
+            {
+              "profiles": {
+                "http": { "commandName": "Project" }
+              }
+            }
+            """);
+
+        var profile = LaunchSettingsLoader.Load(project.ProjectPath);
+
+        profile.ShouldNotBeNull();
+        profile.CommandLineArgs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void LoadProfileNames_ReturnsAllProfilesRegardlessOfCommandName()
+    {
+        using var project = new TestProject();
+        project.WriteLaunchSettings("""
+            {
+              "profiles": {
+                "IIS Express": { "commandName": "IISExpress" },
+                "http": { "commandName": "Project" },
+                "https": { "commandName": "Project" }
+              }
+            }
+            """);
+
+        var names = LaunchSettingsLoader.LoadProfileNames(project.ProjectPath);
+
+        names.ShouldBe(
+        [
+            ("IIS Express", "IISExpress"),
+            ("http", "Project"),
+            ("https", "Project"),
+        ]);
+    }
+
+    [Fact]
+    public void LoadProfileNames_NoLaunchSettingsFile_ReturnsEmptyList()
+    {
+        using var project = new TestProject();
+        LaunchSettingsLoader.LoadProfileNames(project.ProjectPath).ShouldBeEmpty();
     }
 
     [Fact]

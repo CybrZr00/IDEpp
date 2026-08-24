@@ -831,7 +831,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     NetcoredbgPath,
                     dllPath,
                     Path.GetDirectoryName(projectPath)!,
-                    _currentLaunchProfile?.EnvironmentVariables);
+                    _currentLaunchProfile?.EnvironmentVariables,
+                    _currentLaunchProfile?.CommandLineArgs);
             }
             catch (Exception ex)
             {

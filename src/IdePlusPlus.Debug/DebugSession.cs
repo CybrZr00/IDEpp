@@ -38,7 +38,8 @@ public sealed class DebugSession
         string debugAdapterExecutablePath,
         string programPath,
         string workingDirectory,
-        IReadOnlyDictionary<string, string>? environmentVariables = null)
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
+        IReadOnlyList<string>? commandLineArgs = null)
     {
         if (!File.Exists(debugAdapterExecutablePath))
         {
@@ -91,6 +92,7 @@ public sealed class DebugSession
             cwd = workingDirectory,
             stopAtEntry = false,
             env = environmentVariables ?? new Dictionary<string, string>(),
+            args = commandLineArgs ?? Array.Empty<string>(),
         });
 
         await client.SendRequestAsync("configurationDone");

@@ -19,12 +19,18 @@ public sealed class RunService
         Action<string> onOutputLine,
         Action<int> onExited,
         string? targetFramework = null,
-        string? configuration = null)
+        string? configuration = null,
+        string? launchProfileName = null)
     {
         if (IsRunning)
         {
             throw new InvalidOperationException("A process is already running; call Stop first.");
         }
+
+        // `dotnet run` resolves launchSettings.json's env vars/URLs itself once told which profile to
+        // use - loaded once here and reused both to build --launch-profile/args below and to decide
+        // when to auto-open a browser.
+        var launchProfile = LaunchSettingsLoader.Load(projectPath, launchProfileName);
 
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -34,24 +40,11 @@ public sealed class RunService
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(projectPath),
         };
-        startInfo.ArgumentList.Add("run");
-        startInfo.ArgumentList.Add("--project");
-        startInfo.ArgumentList.Add(projectPath);
-        if (targetFramework is not null)
+        foreach (var arg in BuildArguments(projectPath, targetFramework, configuration, launchProfile))
         {
-            startInfo.ArgumentList.Add("--framework");
-            startInfo.ArgumentList.Add(targetFramework);
+            startInfo.ArgumentList.Add(arg);
         }
 
-        if (configuration is not null)
-        {
-            startInfo.ArgumentList.Add("--configuration");
-            startInfo.ArgumentList.Add(configuration);
-        }
-
-        // `dotnet run` already resolves launchSettings.json's env vars/URLs itself - the only thing
-        // missing versus Visual Studio's F5 is opening a browser, so that's all this adds.
-        var launchProfile = LaunchSettingsLoader.Load(projectPath);
         var browserLaunched = false;
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -95,5 +88,43 @@ public sealed class RunService
         {
             process.Kill(entireProcessTree: true);
         }
+    }
+
+    /// <summary>Pure assembly of the `dotnet run` argument list, split out from <see cref="Start"/> so
+    /// it's testable without spawning a real process. --launch-profile is only meaningful for
+    /// commandName "Project" profiles; commandLineArgs are appended after a literal "--" so they reach
+    /// the launched app rather than being parsed as `dotnet run`'s own arguments.</summary>
+    public static List<string> BuildArguments(
+        string projectPath,
+        string? targetFramework,
+        string? configuration,
+        LaunchProfile? launchProfile)
+    {
+        var arguments = new List<string> { "run", "--project", projectPath };
+        if (targetFramework is not null)
+        {
+            arguments.Add("--framework");
+            arguments.Add(targetFramework);
+        }
+
+        if (configuration is not null)
+        {
+            arguments.Add("--configuration");
+            arguments.Add(configuration);
+        }
+
+        if (launchProfile is { CommandName: "Project" })
+        {
+            arguments.Add("--launch-profile");
+            arguments.Add(launchProfile.Name);
+        }
+
+        if (launchProfile is { CommandLineArgs.Count: > 0 })
+        {
+            arguments.Add("--");
+            arguments.AddRange(launchProfile.CommandLineArgs);
+        }
+
+        return arguments;
     }
 }

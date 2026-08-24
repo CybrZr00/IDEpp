@@ -53,10 +53,11 @@ public sealed class DebugSessionManager
         string debugAdapterExecutablePath,
         string programPath,
         string workingDirectory,
-        IReadOnlyDictionary<string, string>? environmentVariables = null)
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
+        IReadOnlyList<string>? commandLineArgs = null)
     {
         var session = CreateSession();
-        await session.StartAsync(debugAdapterExecutablePath, programPath, workingDirectory, environmentVariables);
+        await session.StartAsync(debugAdapterExecutablePath, programPath, workingDirectory, environmentVariables, commandLineArgs);
         AddSession(session);
         return session;
     }
