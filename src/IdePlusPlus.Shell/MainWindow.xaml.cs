@@ -103,6 +103,10 @@ public partial class MainWindow : Window
         ApplyDockingTheme(themeService.IsDark);
         themeService.Changed += () => ApplyDockingTheme(themeService.IsDark);
 
+        // The Git pane is easy to miss tabbed behind Solution Explorer - bring it to the front
+        // automatically when a newly opened solution's repo actually has something to show.
+        viewModel.SourceControl.PendingChangesDetected += () => SourceControlAnchorable.IsActive = true;
+
         // Attaches every tool window a plugin has registered by the time this runs, plus (via the
         // event) any registered afterward - see OnPluginToolWindowRegistered's doc comment for why
         // this can't just add straight into the XAML-declared pane.

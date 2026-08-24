@@ -147,6 +147,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBox Grid.Column="0"
                          Text="{Binding CommitMessage, UpdateSourceTrigger=PropertyChanged}"
@@ -154,7 +155,18 @@
                          TextWrapping="Wrap"
                          MaxHeight="50"
                          FontSize="11" />
-                <Button Grid.Column="1" Content="Commit" Command="{Binding CommitCommand}" Margin="4,0,0,0" Padding="8,0" />
+                <Button Grid.Column="1"
+                        Content="Commit All"
+                        Command="{Binding CommitAllCommand}"
+                        Margin="4,0,0,0"
+                        Padding="8,0"
+                        ToolTip="Stage every change and commit, without staging files individually first - like Visual Studio's Git Changes window." />
+                <Button Grid.Column="2"
+                        Content="Commit"
+                        Command="{Binding CommitCommand}"
+                        Margin="4,0,0,0"
+                        Padding="8,0"
+                        ToolTip="Commit only what's already staged." />
             </Grid>
 
             <TextBlock Grid.Row="7"

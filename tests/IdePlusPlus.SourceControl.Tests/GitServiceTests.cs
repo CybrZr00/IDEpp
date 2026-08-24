@@ -90,6 +90,21 @@ public sealed class GitServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task StageAllAsync_StagesEveryTrackedAndUntrackedChange()
+    {
+        CommitInitialFile();
+        WriteFile("hello.txt", "modified content");
+        WriteFile("new.txt", "brand new");
+
+        var result = await _gitService.StageAllAsync(_repositoryDirectory);
+
+        result.Success.ShouldBeTrue();
+        var status = await _gitService.GetStatusAsync(_repositoryDirectory);
+        status.Unstaged.ShouldBeEmpty();
+        status.Staged.Select(c => c.Path).ShouldBe(["hello.txt", "new.txt"], ignoreOrder: true);
+    }
+
+    [Fact]
     public async Task UnstageAsync_MovesFileBackToUnstaged()
     {
         WriteFile("hello.txt", "hello");

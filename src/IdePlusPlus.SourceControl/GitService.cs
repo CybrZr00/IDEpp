@@ -29,6 +29,12 @@ public sealed class GitService
     public Task<GitCommandResult> StageAsync(string repositoryDirectory, string relativePath, CancellationToken cancellationToken = default) =>
         RunAsync(repositoryDirectory, ["add", "--", relativePath], cancellationToken);
 
+    /// <summary>Stages every pending change (tracked and untracked) in one call - backs "Commit All",
+    /// which mirrors Visual Studio's Git Changes window: type a message, stage-and-commit everything
+    /// in one step, without requiring the file-by-file Stage click first.</summary>
+    public Task<GitCommandResult> StageAllAsync(string repositoryDirectory, CancellationToken cancellationToken = default) =>
+        RunAsync(repositoryDirectory, ["add", "-A"], cancellationToken);
+
     // `git restore --staged` requires HEAD to exist and fails with "fatal: could not resolve 'HEAD'"
     // in a brand-new repo with no commits yet - `git reset --` unstages correctly in both cases.
     public Task<GitCommandResult> UnstageAsync(string repositoryDirectory, string relativePath, CancellationToken cancellationToken = default) =>
