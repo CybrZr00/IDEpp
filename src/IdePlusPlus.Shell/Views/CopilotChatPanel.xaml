@@ -238,13 +238,13 @@
                 <ComboBox ItemsSource="{Binding AvailableModels}"
                           Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
                           IsEditable="True"
-                          Width="120"
+                          Width="190"
                           FontSize="11"
-                          Margin="4,0,0,0" />
+                          Margin="4,0,0,0"
+                          ToolTip="Model to chat with. Type to filter, or enter any model id the provider accepts - the list shows tool-capable models, since editing files needs tool support." />
                 <Button Content="⟳"
-                        Command="{Binding RefreshLmStudioModelsCommand}"
-                        Visibility="{Binding IsLmStudioProvider, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
-                        ToolTip="Refresh model list from LM Studio"
+                        Command="{Binding RefreshModelsCommand}"
+                        ToolTip="Refresh the model list from the selected provider"
                         Width="24"
                         Margin="4,0,0,0"
                         Padding="0" />

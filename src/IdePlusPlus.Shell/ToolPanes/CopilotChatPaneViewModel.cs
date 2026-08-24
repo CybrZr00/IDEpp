@@ -122,26 +122,19 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         isAutoMode = bool.TryParse(_appSettingsStore.Get(AutoModeSettingKey), out var savedAutoMode) && savedAutoMode;
         isPlanMode = bool.TryParse(_appSettingsStore.Get(PlanModeSettingKey), out var savedPlanMode) && savedPlanMode;
 
-        AvailableModels = new ObservableCollection<string>(
-            selectedProvider == ProviderLmStudio ? [] : OpenRouterModels);
+        AvailableModels = [];
 
-        if (selectedProvider == ProviderLmStudio)
-        {
-            _ = RefreshLmStudioModelsAsync();
-        }
+        // Fire-and-forget for both providers: the picker fills in a moment later, and the current
+        // SelectedModel (restored from settings) stays usable meanwhile since the combo is editable.
+        _ = RefreshModelsAsync();
     }
 
-    public ObservableCollection<ObservableObject> Messages { get; } = [];
+    public ObservableCollection<ObservableObject> Messages { get; }  = [];
 
-    private static readonly string[] OpenRouterModels =
-    [
-        "anthropic/claude-sonnet-4.5",
-        "openai/gpt-5",
-        "deepseek/deepseek-v4-pro",
-        "google/gemini-3-pro",
-    ];
-
-    /// <summary>The model picker's dropdown contents - the fixed OpenRouter list, or whatever LM Studio's /v1/models last reported.</summary>
+    /// <summary>The model picker's dropdown contents - whatever the current provider's /models
+    /// endpoint last reported. Previously a hardcoded four-model list for OpenRouter, which went
+    /// stale as models shipped and were retired (by the time it was replaced, one of the four no
+    /// longer existed on OpenRouter at all, so picking it could only fail).</summary>
     public ObservableCollection<string> AvailableModels { get; }
 
     public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio];
@@ -171,8 +164,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     [ObservableProperty]
     private bool isRefreshingModels;
-
-    public bool IsLmStudioProvider => SelectedProvider == ProviderLmStudio;
 
     [ObservableProperty]
     private string inputText = "";
@@ -840,13 +831,41 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private static string DefaultModelFor(string provider) => provider == ProviderLmStudio ? "" : "anthropic/claude-sonnet-4.5";
 
+    /// <summary>
+    /// Repopulates the model picker from the current provider's /models endpoint. OpenRouter's list
+    /// is filtered to tool-capable models: every edit this IDE makes goes through a tool call, so a
+    /// model that can't call tools can only ever narrate, which is indistinguishable from an IDE bug
+    /// unless the picker rules those models out up front.
+    ///
+    /// A failed fetch leaves the existing list alone rather than blanking it - the combo box is
+    /// editable, so a model id that's already selected (or typed by hand) keeps working with no
+    /// network round-trip at all.
+    /// </summary>
     [RelayCommand]
-    private async Task RefreshLmStudioModelsAsync()
+    private async Task RefreshModelsAsync()
     {
+        var provider = SelectedProvider;
         IsRefreshingModels = true;
         try
         {
-            var models = await _lmStudioClient.GetAvailableModelsAsync();
+            var models = provider == ProviderLmStudio
+                ? await _lmStudioClient.GetAvailableModelsAsync()
+                : await _openRouterClient.GetAvailableModelsAsync();
+
+            // The user can switch providers while a fetch is in flight; dropping the stale result
+            // avoids briefly showing (or auto-selecting) the other provider's models.
+            if (provider != SelectedProvider)
+            {
+                return;
+            }
+
+            if (models.Count == 0)
+            {
+                StatusMessage = provider == ProviderLmStudio
+                    ? "Couldn't reach LM Studio - check the base URL in Tools > Settings and that it's running."
+                    : "Couldn't fetch the model list from OpenRouter - you can still type a model id directly.";
+                return;
+            }
 
             AvailableModels.Clear();
             foreach (var model in models)
@@ -854,13 +873,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 AvailableModels.Add(model);
             }
 
-            if (models.Count == 0)
+            // Only pick for the user when what's selected isn't actually offered - otherwise a
+            // refresh would silently move them off the model they deliberately chose.
+            if (string.IsNullOrWhiteSpace(SelectedModel) || !models.Contains(SelectedModel))
             {
-                StatusMessage = "Couldn't reach LM Studio - check the base URL in Tools > Settings and that it's running.";
-            }
-            else if (string.IsNullOrWhiteSpace(SelectedModel) || !models.Contains(SelectedModel))
-            {
-                SelectedModel = models[0];
+                SelectedModel = models.Contains(DefaultModelFor(provider)) ? DefaultModelFor(provider) : models[0];
             }
         }
         finally
@@ -873,20 +890,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         _appSettingsStore.Set(ProviderSettingKey, value);
         SelectedModel = ModelSettingFor(value) ?? DefaultModelFor(value);
-        OnPropertyChanged(nameof(IsLmStudioProvider));
 
-        if (value == ProviderLmStudio)
-        {
-            _ = RefreshLmStudioModelsAsync();
-        }
-        else
-        {
-            AvailableModels.Clear();
-            foreach (var model in OpenRouterModels)
-            {
-                AvailableModels.Add(model);
-            }
-        }
+        AvailableModels.Clear();
+        _ = RefreshModelsAsync();
     }
 
     partial void OnSelectedModelChanged(string value) =>

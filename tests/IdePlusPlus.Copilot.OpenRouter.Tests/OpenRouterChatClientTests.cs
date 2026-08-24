@@ -215,6 +215,71 @@ public class OpenRouterChatClientTests
         error.Message.ShouldContain("invalid api key");
     }
 
+    // Mirrors the real GET /v1/models response shape: a "data" array whose entries carry "id" and a
+    // "supported_parameters" list that advertises "tools" only for tool-capable models.
+    private const string ModelsJson = """
+        {
+          "data": [
+            { "id": "zzz/last-alphabetically", "supported_parameters": ["tools", "temperature"] },
+            { "id": "anthropic/claude-sonnet-4.5", "supported_parameters": ["tools", "reasoning"] },
+            { "id": "some/text-only-model", "supported_parameters": ["temperature"] },
+            { "id": "some/no-parameters-listed" }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void ParseModelIds_ToolCapableOnly_ExcludesModelsWithoutToolSupport()
+    {
+        var ids = OpenRouterChatClient.ParseModelIds(ModelsJson, toolCapableOnly: true);
+
+        ids.ShouldBe(["anthropic/claude-sonnet-4.5", "zzz/last-alphabetically"]);
+    }
+
+    [Fact]
+    public void ParseModelIds_WithoutFiltering_IncludesEveryModel()
+    {
+        var ids = OpenRouterChatClient.ParseModelIds(ModelsJson, toolCapableOnly: false);
+
+        ids.Count.ShouldBe(4);
+        ids.ShouldContain("some/text-only-model");
+        ids.ShouldContain("some/no-parameters-listed");
+    }
+
+    [Fact]
+    public void ParseModelIds_SortsAlphabeticallySoTypeAheadIsPredictable()
+    {
+        var ids = OpenRouterChatClient.ParseModelIds(ModelsJson, toolCapableOnly: false);
+
+        ids.ShouldBe(ids.OrderBy(id => id, StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseModelIds_UnexpectedShape_ReturnsEmptyRatherThanThrowing()
+    {
+        OpenRouterChatClient.ParseModelIds("""{"error":"nope"}""", toolCapableOnly: true).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAvailableModelsAsync_OnHttpError_ReturnsEmptyRatherThanThrowing()
+    {
+        var client = new OpenRouterChatClient(
+            new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.InternalServerError, "boom")),
+            NewSettingsStoreWithApiKey());
+
+        (await client.GetAvailableModelsAsync()).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAvailableModelsAsync_ParsesIdsFromASuccessfulResponse()
+    {
+        var client = new OpenRouterChatClient(
+            new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, ModelsJson)),
+            NewSettingsStoreWithApiKey());
+
+        (await client.GetAvailableModelsAsync()).ShouldBe(["anthropic/claude-sonnet-4.5", "zzz/last-alphabetically"]);
+    }
+
     private static async Task<List<ChatStreamEvent>> CollectAsync(OpenRouterChatClient client)
     {
         var events = new List<ChatStreamEvent>();

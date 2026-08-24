@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Infrastructure;
 
@@ -11,6 +13,7 @@ public sealed class OpenRouterChatClient : IChatClient
     public const string ApiKeySettingName = "OpenRouterApiKey";
 
     private const string ChatCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions";
+    private const string ModelsUrl = "https://openrouter.ai/api/v1/models";
 
     private readonly HttpClient _httpClient;
     private readonly SecureSettingsStore _settingsStore;
@@ -51,6 +54,68 @@ public sealed class OpenRouterChatClient : IChatClient
                 yield return streamEvent;
             }
         }
+    }
+
+    /// <summary>
+    /// Lists model ids OpenRouter currently offers (GET /v1/models), so the chat panel can populate
+    /// its picker instead of relying on a hardcoded list that silently goes stale as models are
+    /// added and retired. No API key needed - the endpoint is public, so the picker works before one
+    /// is configured.
+    ///
+    /// <paramref name="toolCapableOnly"/> keeps only models whose supported_parameters advertise
+    /// "tools". Every edit this IDE makes goes through a tool call, so a model without tool support
+    /// cannot edit anything no matter how the request is phrased - offering those in the picker
+    /// would just produce failures that look like IDE bugs rather than model limitations.
+    ///
+    /// Returns an empty list rather than throwing if the network call or response shape disappoints,
+    /// matching LmStudioChatClient.GetAvailableModelsAsync - callers treat "no models" and
+    /// "couldn't reach it" the same way (keep the current list, fall back to manual entry).
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetAvailableModelsAsync(
+        bool toolCapableOnly = true, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await _httpClient.GetAsync(ModelsUrl, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return [];
+            }
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            return ParseModelIds(json, toolCapableOnly);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>Split out from the HTTP call so the response-shape handling is unit-testable.</summary>
+    public static IReadOnlyList<string> ParseModelIds(string json, bool toolCapableOnly)
+    {
+        var data = JsonNode.Parse(json)?["data"]?.AsArray() ?? [];
+
+        return data
+            .Where(model => !toolCapableOnly || SupportsTools(model))
+            .Select(model => model?["id"]?.GetValue<string>())
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Select(id => id!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Alphabetical so the editable combo box's type-ahead lands somewhere predictable in a
+            // list this long (OpenRouter currently offers a few hundred).
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool SupportsTools(JsonNode? model)
+    {
+        if (model?["supported_parameters"]?.AsArray() is not { } parameters)
+        {
+            return false;
+        }
+
+        return parameters.Any(p => p?.GetValue<string>() == "tools");
     }
 
     private async Task<(HttpResponseMessage? Response, string? Error)> TryConnectAsync(
