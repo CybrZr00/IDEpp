@@ -192,7 +192,11 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private void RefreshMcpServerStatuses()
     {
-        var statuses = _mcpServerManager.ServerStatuses.ToDictionary(s => s.Name);
+        // GroupBy+last rather than ToDictionary: a duplicate server name (e.g. two saved rows with
+        // the same name, or - previously - a race in McpServerManager.ReconnectAllAsync) must not
+        // crash the whole Settings dialog just to show connection status; last one wins, same
+        // "later entry overrides" rule McpConfigMerger already documents.
+        var statuses = _mcpServerManager.ServerStatuses.GroupBy(s => s.Name).ToDictionary(g => g.Key, g => g.Last());
         foreach (var row in McpServers)
         {
             row.StatusText = statuses.TryGetValue(row.Name, out var status)

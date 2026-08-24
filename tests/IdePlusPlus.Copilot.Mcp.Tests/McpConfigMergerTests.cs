@@ -50,4 +50,19 @@ public class McpConfigMergerTests
 
         merged.ShouldBe(projectLocal);
     }
+
+    [Fact]
+    public void Merge_DuplicateNameWithinGlobal_DoesNotThrow_LastOccurrenceWins()
+    {
+        var global = new[]
+        {
+            new McpServerConfig("playwright", "npx", ["-y", "@playwright/mcp@1.0"]),
+            new McpServerConfig("playwright", "npx", ["-y", "@playwright/mcp@2.0"]),
+        };
+
+        var merged = McpConfigMerger.Merge(global, []);
+
+        var config = merged.ShouldHaveSingleItem();
+        config.Args.ShouldBe(["-y", "@playwright/mcp@2.0"]);
+    }
 }

@@ -17,6 +17,15 @@ public sealed class McpServerManager
     private readonly McpServerConfigStore _configStore;
     private readonly List<McpServerConnection> _connections = [];
     private readonly object _connectionsLock = new();
+
+    // ReconnectAllAsync's clear-then-repopulate sequence isn't atomic across concurrent calls - e.g.
+    // App.xaml.cs kicks one off at startup for the global config, and MainWindowViewModel.LoadSolutionAsync
+    // kicks off another moments later once a reopened-on-startup solution finishes loading. Without this,
+    // two overlapping calls can each see the (already-cleared) list as empty and both AddRange their own
+    // connections in, leaving duplicate-named entries that crash ServerStatuses' ToDictionary lookup
+    // (SettingsViewModel.RefreshMcpServerStatuses) the next time Settings opens.
+    private readonly SemaphoreSlim _reconnectLock = new(1, 1);
+
     private string? _solutionDirectory;
 
     public McpServerManager(McpServerConfigStore configStore)
@@ -49,27 +58,35 @@ public sealed class McpServerManager
 
     public async Task ReconnectAllAsync()
     {
-        List<McpServerConnection> old;
-        lock (_connectionsLock)
+        await _reconnectLock.WaitAsync();
+        try
         {
-            old = _connections.ToList();
-            _connections.Clear();
-        }
+            List<McpServerConnection> old;
+            lock (_connectionsLock)
+            {
+                old = _connections.ToList();
+                _connections.Clear();
+            }
 
-        foreach (var connection in old)
+            foreach (var connection in old)
+            {
+                await connection.DisposeAsync();
+            }
+
+            var configs = LoadMergedConfigs();
+            var connected = await Task.WhenAll(configs.Select(ConnectOneAsync));
+
+            lock (_connectionsLock)
+            {
+                _connections.AddRange(connected);
+            }
+
+            Changed?.Invoke();
+        }
+        finally
         {
-            await connection.DisposeAsync();
+            _reconnectLock.Release();
         }
-
-        var configs = LoadMergedConfigs();
-        var connected = await Task.WhenAll(configs.Select(ConnectOneAsync));
-
-        lock (_connectionsLock)
-        {
-            _connections.AddRange(connected);
-        }
-
-        Changed?.Invoke();
     }
 
     private IReadOnlyList<McpServerConfig> LoadMergedConfigs()
