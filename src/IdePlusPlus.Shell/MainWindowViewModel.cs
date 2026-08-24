@@ -40,19 +40,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly Dispatcher _dispatcher;
 
-    private string? _runnableProjectPath;
-    private string? _runnableTargetFramework;
     private LaunchProfile? _currentLaunchProfile;
     private bool _debugBrowserLaunched;
     private SolutionTreeNode? _solutionRoot;
 
-    /// <summary>The checked-for-debug set of startup projects (F5 launches every one of these as its
-    /// own <see cref="DebugSession"/>). Deliberately separate from <see cref="_runnableProjectPath"/>,
-    /// which stays the single Run/F5-without-debugger target per the design's laterScope - Run does
-    /// not become multi-project. Every solution that has never used the multi-select checkbox UI has
-    /// exactly one entry here (mirroring today's single startup project), so the StartDebuggingAsync
-    /// loop below executes identically in substance to the old single-project code for that case.</summary>
-    private readonly List<string> _startupProjectPaths = [];
+    /// <summary>Every named startup configuration saved for the current solution (see
+    /// <see cref="StartupConfigurationStore"/>) - what the Startup Configuration Manager dialog edits.
+    /// Run/Start Debugging always act on <see cref="ActiveConfiguration"/>, never on this list directly.</summary>
+    private List<StartupConfiguration> _startupConfigurations = [];
+
+    private string? _activeConfigurationName;
+
+    /// <summary>Extra <see cref="RunService"/> instances for this launch's Action.StartWithoutDebugging
+    /// entries - separate from the DI-singleton <see cref="_runService"/> (which only ever tracks the
+    /// single quick-Run/Stop toolbar target) because more than one of these can run concurrently
+    /// alongside each other and alongside debug sessions. Entries remove themselves on process exit;
+    /// see StartDebuggingAsync/StopDebuggingAsync.</summary>
+    private readonly List<RunService> _multiProjectRunServices = [];
+
+    private StartupConfiguration? ActiveConfiguration => _startupConfigurations.FirstOrDefault(c => c.Name == _activeConfigurationName);
 
     public MainWindowViewModel(
         SolutionExplorerPaneViewModel solutionExplorer,
@@ -229,6 +235,57 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private string configuration = "Debug";
+
+    /// <summary>Names of every saved startup configuration for the current solution, for the
+    /// status-bar quick-switch ComboBox - kept in sync with <see cref="_startupConfigurations"/> by
+    /// <see cref="SyncStartupConfigurationNames"/>.</summary>
+    public ObservableCollection<string> StartupConfigurationNames { get; } = [];
+
+    /// <summary>Two-way bindable wrapper around <see cref="_activeConfigurationName"/> for the
+    /// status-bar quick-switch ComboBox - a hand-written property (not [ObservableProperty]) because
+    /// switching configurations has side effects (persist, rebold Solution Explorer, re-evaluate
+    /// Run/Start Debugging) beyond just raising PropertyChanged.</summary>
+    public string? ActiveStartupConfigurationName
+    {
+        get => _activeConfigurationName;
+        set
+        {
+            if (value is null || value == _activeConfigurationName || _startupConfigurations.All(c => c.Name != value))
+            {
+                return;
+            }
+
+            _activeConfigurationName = value;
+            OnPropertyChanged();
+
+            if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
+            {
+                StartupConfigurationStore.Save(solutionDirectory, _startupConfigurations, _activeConfigurationName);
+            }
+
+            if (_solutionRoot is not null)
+            {
+                foreach (var project in _solutionRoot.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project))
+                {
+                    project.IsStartupProject = IsStartupProject(project);
+                }
+            }
+
+            RunCommand.NotifyCanExecuteChanged();
+            StartDebuggingCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private void SyncStartupConfigurationNames()
+    {
+        StartupConfigurationNames.Clear();
+        foreach (var configurationName in _startupConfigurations.Select(c => c.Name))
+        {
+            StartupConfigurationNames.Add(configurationName);
+        }
+
+        OnPropertyChanged(nameof(ActiveStartupConfigurationName));
+    }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
@@ -429,30 +486,36 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 .ToList());
 
             var projects = root.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project).ToList();
-            var savedStartupPath = solutionDirectory is not null ? StartupProjectStore.Load(solutionDirectory) : null;
-            var startupProject = projects.FirstOrDefault(p => p.FullPath == savedStartupPath) ?? projects.FirstOrDefault();
 
-            if (startupProject is not null)
+            if (solutionDirectory is not null)
             {
-                startupProject.IsStartupProject = true;
+                var (configurations, activeName) = StartupConfigurationStore.Load(solutionDirectory);
+                _startupConfigurations = configurations.ToList();
+                _activeConfigurationName = activeName;
+            }
+            else
+            {
+                _startupConfigurations = [new StartupConfiguration(StartupConfigurationStore.DefaultConfigurationName, [])];
+                _activeConfigurationName = StartupConfigurationStore.DefaultConfigurationName;
             }
 
-            _runnableProjectPath = startupProject?.FullPath;
-            _runnableTargetFramework = startupProject?.TargetFramework;
+            SyncStartupConfigurationNames();
 
-            // The checked-for-debug set is independent of the single Run/F5-without-debugger target
-            // above. Falls back to just the single startup project when the new multi-select store is
-            // empty (a solution that has never used the checkbox UI) - this is the guarantee that a
-            // single-startup-project solution debug-launches its one project exactly as before.
-            _startupProjectPaths.Clear();
-            var savedStartupProjectPaths = solutionDirectory is not null ? StartupProjectsStore.Load(solutionDirectory) : [];
-            if (savedStartupProjectPaths.Count > 0)
+            // A solution that has never had a startup project set anywhere (no migrated legacy store
+            // either) defaults to the first project, the same way Visual Studio defaults an
+            // unconfigured multi-project solution's startup project.
+            if (ActiveConfiguration is { Entries.Count: 0 } && projects.FirstOrDefault() is { FullPath: { } firstProjectPath })
             {
-                _startupProjectPaths.AddRange(savedStartupProjectPaths);
+                ReplaceActiveConfiguration(ActiveConfiguration with
+                {
+                    Entries = [new StartupConfigurationEntry(firstProjectPath, StartupAction.Start, LaunchProfileName: null)],
+                });
             }
-            else if (_runnableProjectPath is not null)
+
+            foreach (var project in projects)
             {
-                _startupProjectPaths.Add(_runnableProjectPath);
+                project.IsStartupProject = project.FullPath is not null
+                    && ActiveConfiguration?.Entries.Any(e => e.ProjectPath == project.FullPath && e.Action != StartupAction.None) == true;
             }
 
             RunCommand.NotifyCanExecuteChanged();
@@ -530,59 +593,134 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>Marks a project as the one Run/Debug act on, persisting the choice for next time this solution opens.</summary>
+    /// <summary>Persists <paramref name="updated"/> as the active configuration (replacing it by name
+    /// in <see cref="_startupConfigurations"/>) and saves the whole set, mirroring how every mutator
+    /// below is really just "replace the active configuration's entries, then save".</summary>
+    private void ReplaceActiveConfiguration(StartupConfiguration updated)
+    {
+        var index = _startupConfigurations.FindIndex(c => c.Name == _activeConfigurationName);
+        if (index >= 0)
+        {
+            _startupConfigurations[index] = updated;
+        }
+        else
+        {
+            _startupConfigurations.Add(updated);
+            _activeConfigurationName = updated.Name;
+        }
+
+        SyncStartupConfigurationNames();
+
+        if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
+        {
+            StartupConfigurationStore.Save(solutionDirectory, _startupConfigurations, _activeConfigurationName!);
+        }
+    }
+
+    /// <summary>Mirrors Visual Studio's "Set as Startup Project": switches the active configuration to
+    /// a single Start entry for <paramref name="node"/>, discarding whatever other entries it had -
+    /// i.e. this always collapses back to single-project mode. Use the Startup Configuration Manager
+    /// (or the "Include in Startup Projects" checkbox, <see cref="ToggleStartupProject"/>) to build a
+    /// multi-project set instead.</summary>
     public void SetStartupProject(SolutionTreeNode node)
     {
-        if (node.Kind != SolutionTreeNodeKind.Project || node.FullPath is null || _solutionRoot is null)
+        if (node.Kind != SolutionTreeNodeKind.Project || node.FullPath is null || _solutionRoot is null || ActiveConfiguration is not { } active)
         {
             return;
         }
+
+        ReplaceActiveConfiguration(active with
+        {
+            Entries = [new StartupConfigurationEntry(node.FullPath, StartupAction.Start, LaunchProfileName: null)],
+        });
 
         foreach (var project in _solutionRoot.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project))
         {
             project.IsStartupProject = ReferenceEquals(project, node);
         }
 
-        _runnableProjectPath = node.FullPath;
-        _runnableTargetFramework = node.TargetFramework;
         RunCommand.NotifyCanExecuteChanged();
         StartDebuggingCommand.NotifyCanExecuteChanged();
-
-        if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
-        {
-            StartupProjectStore.Save(solutionDirectory, node.FullPath);
-        }
 
         Output.AppendLine($"Startup project set to {node.Name}.");
     }
 
-    /// <summary>Whether <paramref name="node"/> is in the checked-for-debug set - backs the "Include
-    /// in Startup Projects" checkbox in the Solution Explorer Project node's context menu.</summary>
+    /// <summary>Whether <paramref name="node"/> has a non-None Action in the active configuration -
+    /// backs the "Include in Startup Projects" checkbox in the Solution Explorer Project node's
+    /// context menu.</summary>
     public bool IsStartupProject(SolutionTreeNode node) =>
-        node.FullPath is not null && _startupProjectPaths.Contains(node.FullPath);
+        node.FullPath is not null && ActiveConfiguration?.Entries.Any(e => e.ProjectPath == node.FullPath && e.Action != StartupAction.None) == true;
 
-    /// <summary>Adds or removes <paramref name="node"/> from the checked-for-debug set, persisting the
-    /// choice for next time this solution opens. Independent of <see cref="SetStartupProject"/>'s
-    /// single Run target - a project can be in the multi-project debug set without being the Run
-    /// target, and vice versa.</summary>
+    /// <summary>Toggles <paramref name="node"/> between Action.None and Action.Start in the active
+    /// configuration (adding a new entry if it has none yet), persisting the choice. Independent of
+    /// <see cref="SetStartupProject"/>, which instead collapses to a single-project configuration.</summary>
     public void ToggleStartupProject(SolutionTreeNode node)
     {
-        if (node.Kind != SolutionTreeNodeKind.Project || node.FullPath is null)
+        if (node.Kind != SolutionTreeNodeKind.Project || node.FullPath is null || ActiveConfiguration is not { } active)
         {
             return;
         }
 
-        if (!_startupProjectPaths.Remove(node.FullPath))
+        var entries = active.Entries.ToList();
+        var existingIndex = entries.FindIndex(e => e.ProjectPath == node.FullPath);
+        if (existingIndex < 0)
         {
-            _startupProjectPaths.Add(node.FullPath);
+            entries.Add(new StartupConfigurationEntry(node.FullPath, StartupAction.Start, LaunchProfileName: null));
+        }
+        else
+        {
+            var isIncluded = entries[existingIndex].Action != StartupAction.None;
+            entries[existingIndex] = entries[existingIndex] with { Action = isIncluded ? StartupAction.None : StartupAction.Start };
         }
 
+        ReplaceActiveConfiguration(active with { Entries = entries });
+        node.IsStartupProject = IsStartupProject(node);
         StartDebuggingCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Shows the Startup Configuration Manager dialog and, on OK, persists whatever
+    /// configurations/active-selection the user ended up with.</summary>
+    [RelayCommand]
+    private void OpenStartupConfigurationManager()
+    {
+        if (_solutionRoot is null)
+        {
+            return;
+        }
+
+        var solutionProjects = _solutionRoot.Flatten()
+            .Where(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath is not null)
+            .Select(n => (Path: n.FullPath!, n.Name))
+            .ToList();
+
+        var dialogViewModel = new StartupConfigurationManagerViewModel(solutionProjects, _startupConfigurations, _activeConfigurationName ?? StartupConfigurationStore.DefaultConfigurationName);
+        var dialog = new StartupConfigurationManagerDialog(dialogViewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        _startupConfigurations = dialog.ResultConfigurations.ToList();
+        _activeConfigurationName = dialog.ResultActiveConfigurationName;
+        SyncStartupConfigurationNames();
 
         if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
         {
-            StartupProjectsStore.Save(solutionDirectory, _startupProjectPaths);
+            StartupConfigurationStore.Save(solutionDirectory, _startupConfigurations, _activeConfigurationName);
         }
+
+        foreach (var project in _solutionRoot.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project))
+        {
+            project.IsStartupProject = IsStartupProject(project);
+        }
+
+        RunCommand.NotifyCanExecuteChanged();
+        StartDebuggingCommand.NotifyCanExecuteChanged();
+        Output.AppendLine($"Active startup configuration: {_activeConfigurationName}.");
     }
 
     /// <summary>Called from the Solution Explorer Project node's "Manage NuGet Packages..." context
@@ -691,24 +829,41 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Output.AppendLine($"Rebuild finished with exit code {exitCode}.");
     }
 
-    private bool CanRun() => _runnableProjectPath is not null && !IsRunning;
+    /// <summary>The quick-Run/Stop toolbar button targets the first non-None entry in the active
+    /// configuration (Start or StartWithoutDebugging - Run never attaches a debugger regardless of
+    /// which Action the entry has). A solution with a single Start entry (the common case) behaves
+    /// exactly as before this feature existed.</summary>
+    private StartupConfigurationEntry? RunnableEntry =>
+        ActiveConfiguration?.Entries.FirstOrDefault(e => e.Action != StartupAction.None);
+
+    private bool CanRun() => RunnableEntry is not null && !IsRunning;
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private void Run()
     {
+        if (RunnableEntry is not { } entry)
+        {
+            return;
+        }
+
+        var targetFramework = _solutionRoot?.Flatten()
+            .FirstOrDefault(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath == entry.ProjectPath)
+            ?.TargetFramework;
+
         Output.Clear();
-        Output.AppendLine($"Running ({Configuration}): {_runnableProjectPath}");
+        Output.AppendLine($"Running ({Configuration}): {entry.ProjectPath}");
         IsRunning = true;
         _runService.Start(
-            _runnableProjectPath!,
+            entry.ProjectPath,
             line => _dispatcher.Invoke(() => Output.AppendLine(line)),
             exitCode => _dispatcher.Invoke(() =>
             {
                 Output.AppendLine($"Process exited with code {exitCode}.");
                 IsRunning = false;
             }),
-            _runnableTargetFramework,
-            Configuration);
+            targetFramework,
+            Configuration,
+            entry.LaunchProfileName);
     }
 
     [RelayCommand(CanExecute = nameof(IsRunning))]
@@ -788,41 +943,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    private bool CanStartDebugging() => _startupProjectPaths.Count > 0 && !IsDebugging;
+    private bool CanStartDebugging() =>
+        ActiveConfiguration?.Entries.Any(e => e.Action != StartupAction.None) == true
+        && !IsDebugging
+        && _multiProjectRunServices.Count == 0;
 
-    /// <summary>Launches every checked-for-debug startup project as its own <see cref="DebugSession"/>.
-    /// A solution that has never opted into multi-project debug has exactly one entry in
-    /// <see cref="_startupProjectPaths"/>, so this loop runs its body once and produces output
-    /// text identical to the old single-project implementation. A project that fails to build is
-    /// logged and skipped, not treated as fatal to the rest - each is an independent session.</summary>
+    private bool CanStopDebugging() => IsDebugging || _multiProjectRunServices.Count > 0;
+
+    /// <summary>Launches every non-None entry in the active configuration. Action.Start entries each
+    /// get their own <see cref="DebugSession"/> (built, then launched under netcoredbg).
+    /// Action.StartWithoutDebugging entries run via a dedicated <see cref="RunService"/> instance (see
+    /// <see cref="StartWithoutDebugging"/>) instead of the debug path. A solution with a single Start
+    /// entry (the common case - every solution before this feature existed) produces output identical
+    /// to the old single-project implementation. An entry that fails to build/start is logged and
+    /// skipped, not treated as fatal to the rest - each is independent.</summary>
     [RelayCommand(CanExecute = nameof(CanStartDebugging))]
     private async Task StartDebuggingAsync()
     {
         Output.Clear();
         ErrorList.ClearBuildDiagnostics();
 
-        var startupProjectPaths = _startupProjectPaths.ToList();
-        var isSingleProject = startupProjectPaths.Count == 1;
+        var entries = ActiveConfiguration?.Entries.Where(e => e.Action != StartupAction.None).ToList() ?? [];
+        var isSingleEntry = entries.Count == 1;
         _debugBrowserLaunched = false;
 
-        foreach (var projectPath in startupProjectPaths)
+        foreach (var entry in entries)
         {
-            Output.AppendLine(isSingleProject ? "Building for debug..." : $"Building for debug: {projectPath}...");
-
             var targetFramework = _solutionRoot?.Flatten()
-                .FirstOrDefault(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath == projectPath)
+                .FirstOrDefault(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath == entry.ProjectPath)
                 ?.TargetFramework;
 
-            var dllPath = await ResolveOutputDllAsync(projectPath, targetFramework);
-            if (dllPath is null)
+            if (entry.Action == StartupAction.StartWithoutDebugging)
             {
-                Output.AppendLine(isSingleProject
-                    ? "Build failed; cannot start debugging."
-                    : $"Build failed; cannot start debugging: {projectPath}");
+                StartWithoutDebugging(entry, targetFramework, isSingleEntry);
                 continue;
             }
 
-            _currentLaunchProfile = LaunchSettingsLoader.Load(projectPath);
+            Output.AppendLine(isSingleEntry ? "Building for debug..." : $"Building for debug: {entry.ProjectPath}...");
+
+            var dllPath = await ResolveOutputDllAsync(entry.ProjectPath, targetFramework);
+            if (dllPath is null)
+            {
+                Output.AppendLine(isSingleEntry
+                    ? "Build failed; cannot start debugging."
+                    : $"Build failed; cannot start debugging: {entry.ProjectPath}");
+                continue;
+            }
+
+            _currentLaunchProfile = LaunchSettingsLoader.Load(entry.ProjectPath, entry.LaunchProfileName);
 
             Output.AppendLine($"Starting debugger: {dllPath}");
             try
@@ -830,16 +998,61 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 await _debugSessionManager.StartAsync(
                     NetcoredbgPath,
                     dllPath,
-                    Path.GetDirectoryName(projectPath)!,
+                    Path.GetDirectoryName(entry.ProjectPath)!,
                     _currentLaunchProfile?.EnvironmentVariables,
                     _currentLaunchProfile?.CommandLineArgs);
             }
             catch (Exception ex)
             {
-                Output.AppendLine(isSingleProject
+                Output.AppendLine(isSingleEntry
                     ? $"Failed to start debugging: {ex.Message}"
-                    : $"Failed to start debugging {projectPath}: {ex.Message}");
+                    : $"Failed to start debugging {entry.ProjectPath}: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>Runs one Action.StartWithoutDebugging entry from a multi-entry launch via its own
+    /// <see cref="RunService"/> instance, tracked in <see cref="_multiProjectRunServices"/> and stopped
+    /// from <see cref="StopDebuggingAsync"/> - not through the DI-singleton <see cref="_runService"/>
+    /// used by the quick-Run toolbar button, since that one only ever tracks a single process and more
+    /// than one of these can run concurrently (alongside each other and alongside debug sessions).</summary>
+    private void StartWithoutDebugging(StartupConfigurationEntry entry, string? targetFramework, bool isSingleEntry)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(entry.ProjectPath);
+        Output.AppendLine(isSingleEntry ? "Running (no debugger)..." : $"Running (no debugger): {entry.ProjectPath}...");
+
+        var runService = new RunService();
+        _multiProjectRunServices.Add(runService);
+        StartDebuggingCommand.NotifyCanExecuteChanged();
+        StopDebuggingCommand.NotifyCanExecuteChanged();
+
+        void Cleanup()
+        {
+            _multiProjectRunServices.Remove(runService);
+            StartDebuggingCommand.NotifyCanExecuteChanged();
+            StopDebuggingCommand.NotifyCanExecuteChanged();
+        }
+
+        try
+        {
+            runService.Start(
+                entry.ProjectPath,
+                line => _dispatcher.Invoke(() => Output.AppendLine(isSingleEntry ? line : $"[{projectName}] {line}")),
+                exitCode => _dispatcher.Invoke(() =>
+                {
+                    Output.AppendLine(isSingleEntry
+                        ? $"Process exited with code {exitCode}."
+                        : $"[{projectName}] Process exited with code {exitCode}.");
+                    Cleanup();
+                }),
+                targetFramework,
+                Configuration,
+                entry.LaunchProfileName);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Failed to run {entry.ProjectPath}: {ex.Message}");
+            Cleanup();
         }
     }
 
@@ -903,14 +1116,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
             .FirstOrDefault();
     }
 
-    // Each of these acts on the active session only. The CanExecute guards (IsDebugging /
-    // IsStoppedAtBreakpoint) should already prevent a click reaching here with no active session in
-    // practice, but a session can end asynchronously between an enabled button and the click handler
-    // running, so every one of these null-guards defensively anyway.
+    // Continue/StepOver/StepInto/StepOut act on the active session only - a click reaching here with
+    // no active session in practice should already be prevented by the IsStoppedAtBreakpoint
+    // CanExecute guard, but a session can end asynchronously between an enabled button and the click
+    // handler running, so the null-guard is defensive anyway.
 
-    [RelayCommand(CanExecute = nameof(IsDebugging))]
-    private Task StopDebuggingAsync() =>
-        _debugSessionManager.ActiveSession is { } session ? _debugSessionManager.StopAsync(session) : Task.CompletedTask;
+    /// <summary>Stops everything the active configuration's last Start Debugging launched: the active
+    /// debug session (Continue/Step* only ever act on that one, but a multi-project launch's *other*
+    /// debug sessions are left running - deliberately out of scope for this pass, same as before this
+    /// feature existed) and every Action.StartWithoutDebugging process from that same launch.</summary>
+    [RelayCommand(CanExecute = nameof(CanStopDebugging))]
+    private async Task StopDebuggingAsync()
+    {
+        if (_debugSessionManager.ActiveSession is { } session)
+        {
+            await _debugSessionManager.StopAsync(session);
+        }
+
+        foreach (var runService in _multiProjectRunServices.ToList())
+        {
+            runService.Stop();
+        }
+    }
 
     [RelayCommand(CanExecute = nameof(IsStoppedAtBreakpoint))]
     private Task ContinueDebuggingAsync() => _debugSessionManager.ActiveSession?.ContinueAsync() ?? Task.CompletedTask;

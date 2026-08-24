@@ -444,6 +444,8 @@
                 <MenuItem Header="Sto_p Debugging" Command="{Binding StopDebuggingCommand}" />
                 <MenuItem Header="_Attach to Process..." Command="{Binding AttachToProcessCommand}" />
                 <Separator />
+                <MenuItem Header="_Startup Configurations..." Command="{Binding OpenStartupConfigurationManagerCommand}" />
+                <Separator />
                 <MenuItem Header="_Continue" InputGestureText="Ctrl+F5" Command="{Binding ContinueDebuggingCommand}" />
                 <MenuItem Header="Step _Over" InputGestureText="F10" Command="{Binding StepOverCommand}" />
                 <MenuItem Header="Step _Into" InputGestureText="F11" Command="{Binding StepIntoCommand}" />
@@ -579,6 +581,14 @@
                           Width="80"
                           FontSize="11"
                           ToolTip="Build/Run/Debug configuration" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <ComboBox ItemsSource="{Binding StartupConfigurationNames}"
+                          SelectedItem="{Binding ActiveStartupConfigurationName}"
+                          Margin="8,0,0,0"
+                          Width="120"
+                          FontSize="11"
+                          ToolTip="Active startup configuration - which projects Run/Start Debugging launch" />
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <StackPanel Orientation="Horizontal">
