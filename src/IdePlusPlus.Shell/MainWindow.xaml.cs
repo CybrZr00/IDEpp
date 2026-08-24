@@ -34,6 +34,24 @@ public partial class MainWindow : Window
         "IdePlusPlus",
         "window.json");
 
+    /// <summary>Every core (non-plugin, non-document) anchorable pane, with the ContentId of the pane
+    /// it should be re-homed alongside if a saved layout.xml doesn't mention it at all - see
+    /// EnsureCorePanesPresent's doc comment for why that can happen. Mirrors the actual XAML grouping:
+    /// Solution Explorer/Git/NuGet on the left, Output/Error List/Tests/Call Stack/Locals at the
+    /// bottom-center, Copilot Chat on the right.</summary>
+    private static readonly (string ContentId, string Title, string PreferredNeighborContentId)[] CoreAnchorablePanes =
+    [
+        (SolutionExplorerPaneViewModel.PaneContentId, "Solution Explorer", SolutionExplorerPaneViewModel.PaneContentId),
+        (SourceControlPaneViewModel.PaneContentId, "Git", SolutionExplorerPaneViewModel.PaneContentId),
+        (NuGetPaneViewModel.PaneContentId, "NuGet", SolutionExplorerPaneViewModel.PaneContentId),
+        (OutputPaneViewModel.PaneContentId, "Output", OutputPaneViewModel.PaneContentId),
+        (ErrorListPaneViewModel.PaneContentId, "Error List", OutputPaneViewModel.PaneContentId),
+        (TestExplorerPaneViewModel.PaneContentId, "Tests", OutputPaneViewModel.PaneContentId),
+        (CallStackPaneViewModel.PaneContentId, "Call Stack", OutputPaneViewModel.PaneContentId),
+        (LocalsPaneViewModel.PaneContentId, "Locals", OutputPaneViewModel.PaneContentId),
+        (CopilotChatPaneViewModel.PaneContentId, "Copilot Chat", CopilotChatPaneViewModel.PaneContentId),
+    ];
+
     private readonly Dictionary<string, object> _contentById;
     private readonly SecureSettingsStore _secureSettingsStore;
     private readonly AppSettingsStore _appSettingsStore;
@@ -104,8 +122,18 @@ public partial class MainWindow : Window
         themeService.Changed += () => ApplyDockingTheme(themeService.IsDark);
 
         // The Git pane is easy to miss tabbed behind Solution Explorer - bring it to the front
-        // automatically when a newly opened solution's repo actually has something to show.
-        viewModel.SourceControl.PendingChangesDetected += () => SourceControlAnchorable.IsActive = true;
+        // automatically when a newly opened solution's repo actually has something to show. Looked
+        // up fresh by ContentId, not via the SourceControlAnchorable field: RestoreLayout can replace
+        // DockManager.Layout with an entirely different tree (see its doc comment), which would leave
+        // that XAML x:Name field pointing at a stale, detached object.
+        viewModel.SourceControl.PendingChangesDetected += () =>
+        {
+            if (DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
+                .FirstOrDefault(a => a.ContentId == SourceControlPaneViewModel.PaneContentId) is { } anchorable)
+            {
+                anchorable.IsActive = true;
+            }
+        };
 
         // Attaches every tool window a plugin has registered by the time this runs, plus (via the
         // event) any registered afterward - see OnPluginToolWindowRegistered's doc comment for why
@@ -291,33 +319,80 @@ public partial class MainWindow : Window
 
     private void RestoreLayout()
     {
-        if (!File.Exists(LayoutFilePath))
+        if (File.Exists(LayoutFilePath))
         {
-            return;
+            var serializer = new XmlLayoutSerializer(DockManager);
+            serializer.LayoutSerializationCallback += (_, args) =>
+            {
+                if (args.Model.ContentId is { } contentId && _contentById.TryGetValue(contentId, out var content))
+                {
+                    args.Content = content;
+                }
+                else
+                {
+                    // Unknown content (e.g. a document pane from a previous session, or a stale
+                    // ContentId from an older build) — drop it rather than restoring a broken pane.
+                    args.Cancel = true;
+                }
+            };
+
+            try
+            {
+                serializer.Deserialize(LayoutFilePath);
+            }
+            catch (Exception)
+            {
+                // Corrupt/incompatible layout file from a previous version — keep the default XAML layout.
+            }
         }
 
-        var serializer = new XmlLayoutSerializer(DockManager);
-        serializer.LayoutSerializationCallback += (_, args) =>
-        {
-            if (args.Model.ContentId is { } contentId && _contentById.TryGetValue(contentId, out var content))
-            {
-                args.Content = content;
-            }
-            else
-            {
-                // Unknown content (e.g. a document pane from a previous session, or a stale
-                // ContentId from an older build) — drop it rather than restoring a broken pane.
-                args.Cancel = true;
-            }
-        };
+        EnsureCorePanesPresent();
+    }
 
-        try
+    /// <summary>
+    /// Re-adds any core anchorable pane missing from the just-restored layout - happens when a saved
+    /// layout.xml predates that pane's introduction (e.g. Git, NuGet, Error List, and Tests were all
+    /// added after some users' first layout.xml was written), which XmlLayoutSerializer.Deserialize's
+    /// wholesale tree replacement would otherwise silently drop forever: there is no in-app "reset
+    /// layout" command, so without this the only fix is deleting layout.xml by hand. A no-op when no
+    /// saved layout existed at all (DockManager.Layout is still the full default XAML tree) or every
+    /// core pane was already present. Mirrors AttachPluginToolWindowIfNotAlreadyPresent's identical
+    /// problem for plugin tool windows.
+    /// </summary>
+    private void EnsureCorePanesPresent()
+    {
+        var anchorablesByContentId = DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
+            .Where(a => a.ContentId is not null)
+            .ToDictionary(a => a.ContentId!, a => a);
+
+        foreach (var (contentId, title, preferredNeighborContentId) in CoreAnchorablePanes)
         {
-            serializer.Deserialize(LayoutFilePath);
-        }
-        catch (Exception)
-        {
-            // Corrupt/incompatible layout file from a previous version — keep the default XAML layout.
+            if (anchorablesByContentId.ContainsKey(contentId) || !_contentById.TryGetValue(contentId, out var content))
+            {
+                continue;
+            }
+
+            // The pane this one normally sits alongside may be missing too (e.g. a very old or
+            // hand-edited layout.xml) - fall back to Solution Explorer's pane, the one core
+            // anchorable guaranteed to exist in any layout the app itself ever saved.
+            var homePane = (anchorablesByContentId.TryGetValue(preferredNeighborContentId, out var neighbor)
+                ? neighbor.Parent as LayoutAnchorablePane
+                : null) ?? FindPluginToolWindowHomePane();
+
+            if (homePane is null)
+            {
+                continue; // defensive only
+            }
+
+            var restored = new LayoutAnchorable
+            {
+                Title = title,
+                ContentId = contentId,
+                CanClose = false,
+                Content = content,
+            };
+            homePane.Children.Add(restored);
+            anchorablesByContentId[contentId] = restored; // so a later entry in the loop can neighbor off this one too
         }
     }
 
