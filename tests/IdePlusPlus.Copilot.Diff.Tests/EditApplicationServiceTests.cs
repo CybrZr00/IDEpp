@@ -107,6 +107,63 @@ public class EditApplicationServiceTests
         result.ShouldBe("first");
     }
 
+    // --- ResolveWithinWorkspace: the write path's containment check ---
+
+    private static readonly string Root = Path.Combine(Path.GetTempPath(), "IdePlusPlusEditTests", "MySolution");
+
+    [Fact]
+    public void ResolveWithinWorkspace_RelativePathInsideTheSolution_Resolves()
+    {
+        var resolved = EditApplicationService.ResolveWithinWorkspace("src/Foo/Bar.cs", Root);
+
+        resolved.ShouldBe(Path.GetFullPath(Path.Combine(Root, "src/Foo/Bar.cs")));
+    }
+
+    [Fact]
+    public void ResolveWithinWorkspace_AbsolutePathInsideTheSolution_Resolves()
+    {
+        var absolute = Path.Combine(Root, "src", "Foo.cs");
+
+        EditApplicationService.ResolveWithinWorkspace(absolute, Root).ShouldBe(Path.GetFullPath(absolute));
+    }
+
+    [Fact]
+    public void ResolveWithinWorkspace_TraversalOutOfTheSolution_IsRefused()
+    {
+        EditApplicationService
+            .ResolveWithinWorkspace("../../../AppData/Local/IdePlusPlus/secrets.json", Root)
+            .ShouldBeNull();
+    }
+
+    [Fact]
+    public void ResolveWithinWorkspace_AbsolutePathOutsideTheSolution_IsRefused()
+    {
+        EditApplicationService
+            .ResolveWithinWorkspace(Path.Combine(Path.GetTempPath(), "Elsewhere", "Evil.cs"), Root)
+            .ShouldBeNull();
+    }
+
+    /// <summary>A sibling directory sharing a name prefix must not pass as inside the solution.</summary>
+    [Fact]
+    public void ResolveWithinWorkspace_SiblingDirectoryWithASharedNamePrefix_IsRefused()
+    {
+        EditApplicationService.ResolveWithinWorkspace("../MySolution.Backup/Foo.cs", Root).ShouldBeNull();
+    }
+
+    /// <summary>No solution open means no workspace to be inside of - refuse rather than falling
+    /// back to the process working directory, which is wherever the IDE happened to launch from.</summary>
+    [Fact]
+    public void ResolveWithinWorkspace_WithNoSolutionOpen_IsRefused()
+    {
+        EditApplicationService.ResolveWithinWorkspace("Foo.cs", null).ShouldBeNull();
+    }
+
+    [Fact]
+    public void ResolveWithinWorkspace_TheSolutionDirectoryItself_Resolves()
+    {
+        EditApplicationService.ResolveWithinWorkspace(".", Root).ShouldBe(Path.GetFullPath(Root));
+    }
+
     [Fact]
     public void ComputeResultingContent_ReplaceRange_PreservesATrailingBlankLine()
     {

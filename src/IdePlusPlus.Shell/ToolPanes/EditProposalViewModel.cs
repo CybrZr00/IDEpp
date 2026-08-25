@@ -11,6 +11,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
 
     private EditOperation? _operation;
     private string? _fullPath;
+    private string? _workspaceDirectory;
     private string? _originalContentSnapshot;
 
     public EditProposalViewModel(string toolCallId, EditApplicationService applicationService)
@@ -61,7 +62,22 @@ public sealed partial class EditProposalViewModel : ObservableObject
     {
         _operation = proposalEvent.Operation!;
         FilePath = _operation.FilePath;
-        _fullPath = _applicationService.ResolveFullPath(_operation.FilePath, baseDirectory);
+        _workspaceDirectory = baseDirectory;
+        _fullPath = EditApplicationService.ResolveWithinWorkspace(_operation.FilePath, baseDirectory);
+
+        // Refused outright rather than offered for review: reading the file to diff it would itself
+        // be the disclosure half of the problem, and an Accept button that must never be pressed is
+        // worse than no button. Decided-on-arrival leaves both commands disabled.
+        if (_fullPath is null)
+        {
+            IsComplete = true;
+            IsDecided = true;
+            DecisionText = baseDirectory is null
+                ? "Refused - no solution is open, so there is nowhere for this edit to go."
+                : "Refused - this path is outside the open solution.";
+            return;
+        }
+
         _originalContentSnapshot = _applicationService.GetCurrentContent(_fullPath);
 
         var resultingContent = EditApplicationService.ComputeResultingContent(_operation, _originalContentSnapshot);
@@ -74,12 +90,16 @@ public sealed partial class EditProposalViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanDecide))]
     private void Accept()
     {
-        var result = _applicationService.Apply(_operation!, _fullPath!, _originalContentSnapshot!);
+        var result = _applicationService.Apply(
+            _operation!, _fullPath!, _originalContentSnapshot!, _workspaceDirectory);
         WasApplied = result == ApplyResult.Applied;
         IsDecided = true;
-        DecisionText = WasApplied
-            ? "Accepted"
-            : "Couldn't apply - the file changed since this was proposed.";
+        DecisionText = result switch
+        {
+            ApplyResult.Applied => "Accepted",
+            ApplyResult.OutsideWorkspace => "Refused - this path is outside the open solution.",
+            _ => "Couldn't apply - the file changed since this was proposed.",
+        };
     }
 
     [RelayCommand(CanExecute = nameof(CanDecide))]

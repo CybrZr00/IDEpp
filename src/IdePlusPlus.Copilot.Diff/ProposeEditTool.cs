@@ -19,7 +19,7 @@ public static class ProposeEditTool
             {
               "type": "object",
               "properties": {
-                "file": { "type": "string", "description": "Path to the file, relative to the open solution's directory, or absolute." },
+                "file": { "type": "string", "description": "Path to the file, relative to the open solution's directory. An absolute path is accepted only when it resolves inside that directory - anything outside the open solution is refused." },
                 "mode": { "type": "string", "enum": ["whole_file", "replace_range"], "description": "replace_range replaces only start_line..end_line and is preferred for anything short of a full rewrite; whole_file replaces the entire file." },
                 "start_line": { "type": "integer", "description": "1-based first line to replace, as shown by read_file. Required when mode is replace_range." },
                 "end_line": { "type": "integer", "description": "1-based last line to replace, inclusive, as shown by read_file. Required when mode is replace_range. Use the same value as start_line to replace a single line; to insert without deleting, replace the line you are inserting after and include it in new_text." },

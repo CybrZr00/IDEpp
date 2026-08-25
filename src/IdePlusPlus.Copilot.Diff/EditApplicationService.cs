@@ -1,3 +1,4 @@
+using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Editor;
 
 namespace IdePlusPlus.Copilot.Diff;
@@ -6,6 +7,10 @@ public enum ApplyResult
 {
     Applied,
     Conflict,
+
+    /// <summary>The target resolved outside the open solution directory, or no solution is open.
+    /// Nothing was written.</summary>
+    OutsideWorkspace,
 }
 
 /// <summary>
@@ -21,15 +26,22 @@ public sealed class EditApplicationService
         _editorWorkspace = editorWorkspace;
     }
 
-    public string ResolveFullPath(string filePath, string? baseDirectory)
-    {
-        if (Path.IsPathRooted(filePath))
-        {
-            return Path.GetFullPath(filePath);
-        }
-
-        return Path.GetFullPath(Path.Combine(baseDirectory ?? Directory.GetCurrentDirectory(), filePath));
-    }
+    /// <summary>
+    /// Full path if the model's chosen path stays inside the open solution, otherwise null.
+    ///
+    /// The read side has always been contained (see WorkspaceFileReader, whose whole reason for
+    /// existing is that the model picks these paths); the write side was not, and propose_edit's
+    /// schema advertised absolute paths. Auto Mode applies edits with no human in the loop, so an
+    /// uncontained write path is a prompt-injection primitive, not a theoretical one. Containment
+    /// is delegated to WorkspaceFileReader.ResolveWithinRoot rather than reimplemented, so reads
+    /// and writes cannot drift apart on what "inside the solution" means.
+    ///
+    /// A null solution directory refuses rather than falling back to the process working directory
+    /// - with no solution open there is no workspace for an edit to be inside of, and read_file
+    /// already declines for the same reason.
+    /// </summary>
+    public static string? ResolveWithinWorkspace(string filePath, string? workspaceDirectory) =>
+        workspaceDirectory is null ? null : WorkspaceFileReader.ResolveWithinRoot(workspaceDirectory, filePath);
 
     public string GetCurrentContent(string fullPath)
     {
@@ -62,9 +74,18 @@ public sealed class EditApplicationService
     /// Applies the operation only if the file's content still matches what the diff was computed
     /// against - guards against the file having changed (e.g. the user kept typing) while the
     /// proposal was streaming or awaiting a decision.
+    ///
+    /// Containment is re-checked here rather than trusted from the caller: this is the method that
+    /// actually writes, and it is reachable from more than one place.
     /// </summary>
-    public ApplyResult Apply(EditOperation operation, string fullPath, string expectedOriginalContent)
+    public ApplyResult Apply(
+        EditOperation operation, string fullPath, string expectedOriginalContent, string? workspaceDirectory)
     {
+        if (ResolveWithinWorkspace(fullPath, workspaceDirectory) is null)
+        {
+            return ApplyResult.OutsideWorkspace;
+        }
+
         var currentContent = GetCurrentContent(fullPath);
         if (currentContent != expectedOriginalContent)
         {
