@@ -792,14 +792,49 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ErrorList.AddIfDiagnostic(line);
     });
 
+    /// <summary>
+    /// Shared shape for Build/Clean/Rebuild, and the place a refusal lands.
+    ///
+    /// BuildService now declines to start a second dotnet build over the same obj/bin while one is
+    /// running - previously nothing stopped a double-click (or the copilot's build tool racing the
+    /// toolbar) from spawning two. These commands are fire-and-forget AsyncRelayCommands, so an
+    /// unhandled refusal would become an unobserved task exception surfacing whenever the faulted
+    /// Task happened to be collected. It belongs in the Output pane instead.
+    ///
+    /// The already-running check comes before Output.Clear() so a refused second build doesn't wipe
+    /// the running one's output; the catch covers losing the race between the two.
+    /// </summary>
+    private async Task<int?> RunBuildVerbAsync(string label, Func<Task<int>> run)
+    {
+        if (_buildService.IsRunning)
+        {
+            Output.AppendLine($"{label} skipped - a build is already running.");
+            return null;
+        }
+
+        Output.Clear();
+        ErrorList.ClearBuildDiagnostics();
+        Output.AppendLine($"{label} started ({Configuration}): {CurrentSolutionPath}");
+
+        try
+        {
+            var exitCode = await run();
+            Output.AppendLine($"{label} finished with exit code {exitCode}.");
+            return exitCode;
+        }
+        catch (InvalidOperationException ex)
+        {
+            Output.AppendLine($"{label} skipped - {ex.Message}");
+            return null;
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private async Task BuildAsync()
     {
-        Output.Clear();
-        ErrorList.ClearBuildDiagnostics();
-        Output.AppendLine($"Build started ({Configuration}): {CurrentSolutionPath}");
-        var exitCode = await _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
-        Output.AppendLine($"Build finished with exit code {exitCode}.");
+        var exitCode = await RunBuildVerbAsync(
+            "Build",
+            () => _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
 
         if (exitCode == 0)
         {
@@ -810,24 +845,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(HasSolution))]
-    private async Task CleanAsync()
-    {
-        Output.Clear();
-        ErrorList.ClearBuildDiagnostics();
-        Output.AppendLine($"Clean started ({Configuration}): {CurrentSolutionPath}");
-        var exitCode = await _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
-        Output.AppendLine($"Clean finished with exit code {exitCode}.");
-    }
+    private Task CleanAsync() =>
+        RunBuildVerbAsync(
+            "Clean",
+            () => _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
 
     [RelayCommand(CanExecute = nameof(HasSolution))]
-    private async Task RebuildAsync()
-    {
-        Output.Clear();
-        ErrorList.ClearBuildDiagnostics();
-        Output.AppendLine($"Rebuild started ({Configuration}): {CurrentSolutionPath}");
-        var exitCode = await _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration);
-        Output.AppendLine($"Rebuild finished with exit code {exitCode}.");
-    }
+    private Task RebuildAsync() =>
+        RunBuildVerbAsync(
+            "Rebuild",
+            () => _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
 
     /// <summary>The quick-Run/Stop toolbar button targets the first non-None entry in the active
     /// configuration (Start or StartWithoutDebugging - Run never attaches a debugger regardless of
@@ -1086,7 +1113,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private async Task<string?> ResolveOutputDllAsync(string projectPath, string? targetFramework)
     {
-        var exitCode = await _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration);
+        int exitCode;
+        try
+        {
+            exitCode = await _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Output.AppendLine($"Cannot build {Path.GetFileName(projectPath)} - {ex.Message}");
+            return null;
+        }
+
         if (exitCode != 0)
         {
             return null;
