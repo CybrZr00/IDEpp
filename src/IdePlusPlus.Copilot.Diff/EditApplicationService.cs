@@ -111,6 +111,15 @@ public sealed class EditApplicationService
     {
         result = "";
 
+        if (FindElisionMarker(operation.NewText) is { } elision)
+        {
+            error = $"new_text contains what looks like a placeholder for omitted content: \"{elision}\". "
+                    + "Whatever you send is written to disk exactly as given, so this would delete the "
+                    + "code it stands in for. Send the real content, or use replace_text to change only "
+                    + "the part you mean to change.";
+            return false;
+        }
+
         if (operation.IsWholeFile)
         {
             result = operation.NewText;
@@ -210,6 +219,46 @@ public sealed class EditApplicationService
             normalizedContent.AsSpan(index + oldText.Length));
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// The line that looks like "... rest of file unchanged ...", or null.
+    ///
+    /// Models abbreviate long files this way, and every mode here writes new_text verbatim, so the
+    /// placeholder replaces the code it stands for. Both halves are required - a comment marker with
+    /// an ellipsis AND a phrase about omitted content - because either alone is ordinary prose that
+    /// appears in real source. A legitimate deletion is expressed by leaving the content out, never
+    /// by describing it.
+    /// </summary>
+    private static string? FindElisionMarker(string newText)
+    {
+        string[] commentStarts = ["//", "#", "<!--", "/*", "*", "--", "'", ";"];
+        string[] phrases =
+        [
+            "rest of", "unchanged", "omitted", "remains the same", "same as before",
+            "existing code", "previous code", "as above", "snip",
+        ];
+
+        foreach (var rawLine in newText.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (!line.Contains("...", StringComparison.Ordinal) && !line.Contains('…'))
+            {
+                continue;
+            }
+
+            if (!commentStarts.Any(c => line.StartsWith(c, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            if (phrases.Any(p => line.Contains(p, StringComparison.OrdinalIgnoreCase)))
+            {
+                return line.Length > 80 ? line[..80] + "..." : line;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Counts overlapping occurrences too - an anchor that matches "aa" twice inside "aaa"

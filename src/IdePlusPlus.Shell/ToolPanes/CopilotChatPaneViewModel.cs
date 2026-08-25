@@ -923,7 +923,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         if (proposalEvent.Status == EditProposalStatus.Complete)
         {
             proposal.Complete(proposalEvent, _solutionDirectory);
-            if (IsAutoMode)
+
+            // Auto Mode applies edits with nobody looking, which is fine for the ordinary case and
+            // not fine for an edit that removes most of a file - the exact shape silent truncation
+            // takes. Held for a human instead: the proposal stays undecided with its Accept button
+            // live, so confirming is one click rather than a re-run, and the model is told why.
+            if (IsAutoMode && !proposal.IsLargeDeletion)
             {
                 proposal.AcceptCommand.Execute(null);
             }

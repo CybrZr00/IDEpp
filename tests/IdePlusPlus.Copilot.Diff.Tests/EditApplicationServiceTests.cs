@@ -130,6 +130,55 @@ public class EditApplicationServiceTests
         result.ShouldBe("first");
     }
 
+    // --- Elision guard ---
+
+    /// <summary>The canonical way an LLM shortens a long file. Every mode writes new_text verbatim,
+    /// so the placeholder would replace the code it stands for.</summary>
+    [Theory]
+    [InlineData("// ... rest of file unchanged ...")]
+    [InlineData("    // ... existing code ...")]
+    [InlineData("# ... rest of the file remains the same")]
+    [InlineData("<!-- ... unchanged ... -->")]
+    [InlineData("/* ... previous code omitted ... */")]
+    [InlineData("// \u2026 rest of file unchanged \u2026")]
+    public void TryComputeResultingContent_WhenNewTextElidesContent_IsRefused(string elision)
+    {
+        Refuse(WholeFile($"class Foo\n{{\n{elision}\n}}"), "class Foo\n{\n  int x;\n}")
+            .ShouldContain("placeholder");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_TheElisionRefusal_QuotesTheOffendingLine()
+    {
+        Refuse(WholeFile("a\n// ... rest of file unchanged ...\nb"), "a\nx\nb")
+            .ShouldContain("rest of file unchanged");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ElisionInAReplaceRange_IsAlsoRefused()
+    {
+        Refuse(ReplaceRange(2, 2, "// ... existing code ..."), "a\nb\nc").ShouldContain("placeholder");
+    }
+
+    /// <summary>Both an ellipsis and an omission phrase are required, because either alone shows up
+    /// in ordinary source and a false positive here blocks a legitimate edit.</summary>
+    [Theory]
+    [InlineData("var range = list[1...5];")]
+    [InlineData("// TODO: handle the rest of the queue")]
+    [InlineData("Console.WriteLine(\"Loading...\");")]
+    [InlineData("// unchanged since 2019")]
+    [InlineData("var ellipsis = \"...\";")]
+    public void TryComputeResultingContent_OrdinaryCodeThatLooksVaguelySimilar_IsNotRefused(string line)
+    {
+        Compute(WholeFile($"class Foo\n{{\n{line}\n}}"), "old").ShouldContain(line);
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ADeliberateDeletion_IsNotMistakenForElision()
+    {
+        Compute(ReplaceRange(2, 4, ""), "a\nb\nc\nd\ne").ShouldBe("a\n\ne");
+    }
+
     // --- replace_text: the anchored mode that cannot go stale ---
 
     [Fact]

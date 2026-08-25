@@ -142,9 +142,13 @@ public sealed partial class EditProposalViewModel : ObservableObject
         ChangeSummary = $"+{_addedLines} -{_removedLines} ({_linesBefore} -> {_linesAfter} lines)";
         IsLargeDeletion = _linesBefore > 0 && _linesAfter * 2 < _linesBefore;
 
-        ToolResultText =
-            $"Waiting for the user to accept or reject this edit to {_operation.FilePath}. "
-            + "Nothing has been written yet.";
+        ToolResultText = IsLargeDeletion
+            ? $"Not applied yet: this edit removes most of {_operation.FilePath} "
+              + $"({_linesBefore} lines down to {_linesAfter}), so it is waiting for the user to "
+              + "confirm rather than being applied automatically. If that much deletion was not "
+              + "what you intended, say so and propose a smaller edit."
+            : $"Waiting for the user to accept or reject this edit to {_operation.FilePath}. "
+              + "Nothing has been written yet.";
 
         IsComplete = true;
     }

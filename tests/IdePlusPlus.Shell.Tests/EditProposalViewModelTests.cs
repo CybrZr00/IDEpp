@@ -148,6 +148,31 @@ public class EditProposalViewModelTests : IDisposable
         proposal.ToolResultText.ShouldContain("now 1 line(s) long (was 400)");
     }
 
+    /// <summary>Auto Mode applies edits with nobody looking. Before it does, the model is told that
+    /// a mass deletion is being held back and why - so it can say "that was not what I meant"
+    /// rather than waiting silently.</summary>
+    [Fact]
+    public void Complete_WithAMassDeletion_TellsTheModelItIsHeldForConfirmation()
+    {
+        WriteFile("Big.cs", string.Join("\n", Enumerable.Range(1, 400).Select(i => $"line {i}")));
+
+        var proposal = Complete(ReplaceRange("Big.cs", 1, 400, "line 1"), _root);
+
+        proposal.IsLargeDeletion.ShouldBeTrue();
+        proposal.IsDecided.ShouldBeFalse();
+        proposal.AcceptCommand.CanExecute(null).ShouldBeTrue();
+        proposal.ToolResultText.ShouldContain("Not applied yet");
+        proposal.ToolResultText.ShouldContain("400 lines down to 1");
+    }
+
+    [Fact]
+    public void Complete_WithAnOrdinaryEdit_IsNotFlaggedAsALargeDeletion()
+    {
+        WriteFile("Foo.cs", "a\nb\nc\nd\ne");
+
+        Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root).IsLargeDeletion.ShouldBeFalse();
+    }
+
     [Fact]
     public void Accept_WhenTheFileChangedAfterTheProposal_ReportsTheConflict()
     {
