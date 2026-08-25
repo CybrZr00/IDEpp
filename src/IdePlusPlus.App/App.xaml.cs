@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows;
@@ -101,6 +102,8 @@ public partial class App : Application
         var dispatcher = Dispatcher;
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
         mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        mcpServerManager.ProjectTrustPrompt = request =>
+            dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
         _ = mcpServerManager.ReconnectAllAsync();
 
         mainWindow.Show();
@@ -108,6 +111,40 @@ public partial class App : Application
         // Fire-and-forget, same as MCP reconnect above - a large solution shouldn't delay the
         // window appearing.
         _ = _serviceProvider.GetRequiredService<MainWindowViewModel>().TryReopenLastSolutionOnStartupAsync();
+    }
+
+    /// <summary>
+    /// Asks before running the servers a solution ships in its own MCP config. The commands are
+    /// listed in full rather than summarized: "this repository wants to run three MCP servers" is
+    /// not something anyone can meaningfully consent to, whereas the actual command lines are.
+    /// Defaults to No, and a dismissed dialog is a No.
+    /// </summary>
+    private static bool ConfirmProjectMcpServers(Window owner, McpProjectTrustRequest request)
+    {
+        var commands = string.Join(
+            Environment.NewLine,
+            request.Servers.Select(s => $"    {s.Name}:  {s.Command} {string.Join(' ', s.Args)}".TrimEnd()));
+
+        var result = MessageBox.Show(
+            owner,
+            $"""
+             This solution ships its own MCP server configuration:
+
+             {request.ConfigPath}
+
+             Opening it would run these commands on your machine:
+
+             {commands}
+
+             Only allow this if you trust the source of this solution. You will be asked again if
+             the file changes.
+             """,
+            "IDE++ - run this solution's MCP servers?",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        return result == MessageBoxResult.Yes;
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -186,6 +223,7 @@ public partial class App : Application
         services.AddSingleton<OpenRouterChatClient>();
         services.AddSingleton<LmStudioChatClient>();
         services.AddSingleton<McpServerConfigStore>();
+        services.AddSingleton<McpProjectTrustStore>();
         services.AddSingleton<McpServerManager>();
         services.AddSingleton<DeepSeekFimClient>();
         services.AddSingleton<EditApplicationService>();
