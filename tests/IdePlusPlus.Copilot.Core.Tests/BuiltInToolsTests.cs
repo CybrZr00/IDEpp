@@ -32,6 +32,7 @@ public class BuiltInToolsTests
         names.ShouldContain(GitTools.StatusToolName);
         names.ShouldContain(BuildTools.BuildToolName);
         names.ShouldContain(TestTools.RunTestsToolName);
+        names.ShouldContain(DiagnosticTools.GetDiagnosticsToolName);
     }
 
     [Fact]

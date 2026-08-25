@@ -15,6 +15,7 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.TestRunner;
@@ -113,6 +114,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly GitService _gitService;
     private readonly BuildService _buildService;
     private readonly TestRunService _testRunService;
+    private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
@@ -135,7 +137,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         PluginChatToolRegistry pluginChatToolRegistry,
         GitService gitService,
         BuildService buildService,
-        TestRunService testRunService)
+        TestRunService testRunService,
+        RoslynWorkspaceService roslynWorkspaceService)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -151,6 +154,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _gitService = gitService;
         _buildService = buildService;
         _testRunService = testRunService;
+        _roslynWorkspaceService = roslynWorkspaceService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -599,6 +603,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
+            case DiagnosticTools.GetDiagnosticsToolName:
+                var diagnosticFile = arguments?["file"]?.GetValue<string>();
+                return diagnosticFile is null
+                    ? (true, "get_diagnostics requires a 'file' argument.")
+                    : await RunGetDiagnosticsAsync(diagnosticFile, cancellationToken);
+
             case TestTools.RunTestsToolName:
                 return await RunTestsAsync(
                     arguments?["project"]?.GetValue<string>(),
@@ -722,6 +732,83 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
+    }
+
+    /// <summary>
+    /// Compiler errors and warnings for one file, from the already-loaded Roslyn semantic model.
+    ///
+    /// Reads the editor's buffer rather than disk where the file is open, so a file edited but not
+    /// saved is analysed as it stands - the same reason read_file does. Unlike build_solution this
+    /// deliberately does not save anything: it is meant to be cheap enough to call after every edit,
+    /// and writing to disk as a side effect of a read-only question would be a surprise.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunGetDiagnosticsAsync(
+        string file, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is nothing to analyse.");
+        }
+
+        if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, file) is not { } fullPath)
+        {
+            return (true, $"Refused: '{file}' resolves outside the open solution directory.");
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            return (true, $"File not found: {file}");
+        }
+
+        if (!_roslynWorkspaceService.IsAnalysed(fullPath))
+        {
+            return (true,
+                $"{file} is not part of the loaded C# solution, so it has no compiler diagnostics. "
+                + "This covers non-C# files, and C# files added since the solution was opened. "
+                + "Use build_solution instead.");
+        }
+
+        var unsavedText = _editApplicationService.TryGetUnsavedText(fullPath);
+
+        IReadOnlyList<LiveDiagnostic> diagnostics;
+        try
+        {
+            diagnostics = await _roslynWorkspaceService.GetDiagnosticsAsync(fullPath, unsavedText, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Could not analyse {file}: {ex.Message}");
+        }
+
+        var errors = diagnostics.Where(d => d.Severity == "Error").ToList();
+        var warnings = diagnostics.Where(d => d.Severity == "Warning").ToList();
+
+        if (errors.Count == 0 && warnings.Count == 0)
+        {
+            return (false, $"{file}: no errors or warnings."
+                           + (unsavedText is null ? "" : " (Analysed with your unsaved changes.)"));
+        }
+
+        var report = new StringBuilder($"{file}: {errors.Count} error(s), {warnings.Count} warning(s).");
+        if (unsavedText is not null)
+        {
+            report.Append(" Analysed with your unsaved changes.");
+        }
+
+        foreach (var diagnostic in errors.Concat(warnings).Take(DiagnosticTools.MaxReportedDiagnostics))
+        {
+            report.Append(
+                $"\n({diagnostic.Line},{diagnostic.Column}): "
+                + $"{diagnostic.Severity.ToLowerInvariant()} {diagnostic.Code}: {diagnostic.Message}");
+        }
+
+        var total = errors.Count + warnings.Count;
+        if (total > DiagnosticTools.MaxReportedDiagnostics)
+        {
+            report.Append($"\n\n[{total - DiagnosticTools.MaxReportedDiagnostics} more not shown]");
+        }
+
+        return (false, report.ToString());
     }
 
     /// <summary>

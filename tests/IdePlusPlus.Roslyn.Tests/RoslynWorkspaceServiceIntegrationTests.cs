@@ -81,4 +81,98 @@ public sealed class RoslynWorkspaceServiceIntegrationTests
             _fixture.WorkspaceService.DiagnosticsChanged -= Handler;
         }
     }
+
+    // --- GetDiagnosticsAsync: the pull API behind the copilot's get_diagnostics tool ---
+
+    /// <summary>
+    /// The push path announces diagnostics after a debounce, which suits a pane watching the screen
+    /// and not a caller that wants an answer. Same semantic model, asked directly.
+    /// </summary>
+    [Fact]
+    public async Task GetDiagnosticsAsync_WithUnsavedTextContainingARealError_ReturnsIt()
+    {
+        const string broken = """
+            namespace ScratchLib;
+            public class Class1
+            {
+                public void M() { string s = 1; }
+            }
+            """;
+
+        var diagnostics = await _fixture.WorkspaceService.GetDiagnosticsAsync(_fixture.ClassFilePath, broken);
+
+        diagnostics.ShouldContain(d => d.Code == "CS0029" && d.Severity == "Error");
+    }
+
+    [Fact]
+    public async Task GetDiagnosticsAsync_ReportsOneBasedLineAndColumn()
+    {
+        const string broken = """
+            namespace ScratchLib;
+            public class Class1
+            {
+                public void M() { string s = 1; }
+            }
+            """;
+
+        var diagnostics = await _fixture.WorkspaceService.GetDiagnosticsAsync(_fixture.ClassFilePath, broken);
+
+        var error = diagnostics.First(d => d.Code == "CS0029");
+        error.Line.ShouldBe(4);
+        error.Column.ShouldBeGreaterThan(1);
+    }
+
+    [Fact]
+    public async Task GetDiagnosticsAsync_WithValidUnsavedText_ReturnsNoErrors()
+    {
+        const string valid = """
+            namespace ScratchLib;
+            public class Class1
+            {
+                public void M() { string s = "ok"; System.Console.WriteLine(s); }
+            }
+            """;
+
+        var diagnostics = await _fixture.WorkspaceService.GetDiagnosticsAsync(_fixture.ClassFilePath, valid);
+
+        diagnostics.ShouldNotContain(d => d.Severity == "Error");
+    }
+
+    /// <summary>A file the workspace never loaded must not come back as a clean bill of health -
+    /// the caller needs to be able to say "not analysed" instead.</summary>
+    [Fact]
+    public async Task GetDiagnosticsAsync_ForAFileTheWorkspaceNeverLoaded_ReturnsEmpty()
+    {
+        var path = Path.Combine(_fixture.Directory, "NotInTheSolution.cs");
+
+        (await _fixture.WorkspaceService.GetDiagnosticsAsync(path, "class Nope { int x = ; }")).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void IsAnalysed_DistinguishesLoadedFilesFromEverythingElse()
+    {
+        _fixture.WorkspaceService.IsAnalysed(_fixture.ClassFilePath).ShouldBeTrue();
+        _fixture.WorkspaceService
+            .IsAnalysed(Path.Combine(_fixture.Directory, "NotInTheSolution.cs"))
+            .ShouldBeFalse();
+    }
+
+    /// <summary>Omitting the text argument reads whatever the workspace currently holds, rather
+    /// than requiring the caller to supply a buffer it may not have.</summary>
+    [Fact]
+    public async Task GetDiagnosticsAsync_WithoutUnsavedText_AnalysesTheCurrentSnapshot()
+    {
+        const string valid = """
+            namespace ScratchLib;
+            public class Class1
+            {
+                public void M() { System.Console.WriteLine("ok"); }
+            }
+            """;
+        await _fixture.WorkspaceService.GetDiagnosticsAsync(_fixture.ClassFilePath, valid);
+
+        var diagnostics = await _fixture.WorkspaceService.GetDiagnosticsAsync(_fixture.ClassFilePath);
+
+        diagnostics.ShouldNotContain(d => d.Severity == "Error");
+    }
 }

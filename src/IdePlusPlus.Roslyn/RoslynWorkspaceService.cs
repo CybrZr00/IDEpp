@@ -174,6 +174,66 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
         }
     }
 
+    /// <summary>
+    /// Diagnostics for one file, computed now rather than announced later.
+    ///
+    /// Everything else here is push-shaped: an edit arrives, a debounce elapses, DiagnosticsChanged
+    /// fires, and the Error List pane redraws. That works for a pane watching the screen and not at
+    /// all for a caller that wants an answer - which is what the copilot's get_diagnostics tool
+    /// needs. Same semantic model and the same LiveDiagnosticMapper as the push path, so the two
+    /// cannot disagree about what the compiler thinks.
+    ///
+    /// <paramref name="unsavedText"/> layers the editor's current buffer over what MSBuildWorkspace
+    /// loaded from disk, so a file with unsaved changes is analysed as the user sees it. Returns an
+    /// empty list for a path this workspace never loaded - a file outside the solution, or one added
+    /// since it was opened.
+    /// </summary>
+    public async Task<IReadOnlyList<LiveDiagnostic>> GetDiagnosticsAsync(
+        string filePath, string? unsavedText = null, CancellationToken cancellationToken = default)
+    {
+        if (!_documentIdsByPath.TryGetValue(filePath, out var documentId))
+        {
+            return [];
+        }
+
+        Document? document;
+        if (unsavedText is not null)
+        {
+            document = await GetDocumentWithTextAsync(filePath, unsavedText, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                document = _currentSolution.GetDocument(documentId);
+            }
+            finally
+            {
+                _workspaceLock.Release();
+            }
+        }
+
+        if (document is null)
+        {
+            return [];
+        }
+
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel is null)
+        {
+            return [];
+        }
+
+        return semanticModel.GetDiagnostics(cancellationToken: cancellationToken)
+            .Select(d => LiveDiagnosticMapper.ToLiveDiagnostic(d, filePath))
+            .ToList();
+    }
+
+    /// <summary>Whether a solution has been loaded and this file is part of it - lets a caller say
+    /// "not analysed" rather than reporting a clean bill of health for a file nobody looked at.</summary>
+    public bool IsAnalysed(string filePath) => _documentIdsByPath.ContainsKey(filePath);
+
     private void ScheduleDiagnostics(string filePath, string text)
     {
         if (!_documentIdsByPath.ContainsKey(filePath))
