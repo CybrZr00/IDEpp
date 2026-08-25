@@ -88,7 +88,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly McpServerManager _mcpServerManager;
     private readonly PluginChatToolRegistry _pluginChatToolRegistry;
-    private readonly WorkspaceFileReader _workspaceFileReader = new();
+    private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
     private string? _solutionDirectory;
@@ -111,6 +111,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _lmStudioClient = lmStudioClient;
         _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
+        _workspaceFileReader = new WorkspaceFileReader(_editApplicationService.TryGetUnsavedText);
         _projectMemoryStore = projectMemoryStore;
         _chatHistoryStore = chatHistoryStore;
         _codebaseIndexService = codebaseIndexService;

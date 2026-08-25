@@ -47,6 +47,18 @@ public sealed class EditApplicationService
     public static string? ResolveWithinWorkspace(string filePath, string? workspaceDirectory) =>
         workspaceDirectory is null ? null : WorkspaceFileReader.ResolveWithinRoot(workspaceDirectory, filePath);
 
+    /// <summary>
+    /// The editor's text for a file open with unsaved changes, otherwise null - so a caller outside
+    /// this assembly (WorkspaceFileReader, which cannot reference the editor) can show the model
+    /// the same content an edit would be applied to.
+    ///
+    /// Applying an edit to an open file mutates its buffer and never writes to disk, so disk and
+    /// buffer diverge the moment the first edit lands. A file that is open but clean is skipped:
+    /// its buffer and the file on disk are the same text.
+    /// </summary>
+    public string? TryGetUnsavedText(string fullPath) =>
+        FindOpenDocument(fullPath) is { IsDirty: true } document ? document.TextDocument.Text : null;
+
     public string GetCurrentContent(string fullPath)
     {
         var openDocument = FindOpenDocument(fullPath);

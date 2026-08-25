@@ -145,4 +145,87 @@ public sealed class WorkspaceFileReaderTests : IDisposable
     {
         WorkspaceFileReader.ResolveWithinRoot(_root, ".").ShouldNotBeNull();
     }
+
+    // --- Unsaved editor content ---
+
+    /// <summary>An edit applied to an open file only touches the editor buffer, so disk goes stale
+    /// the moment the first edit lands. Reading disk back would hand the model its own pre-edit
+    /// content and make a successful edit look like it never happened.</summary>
+    [Fact]
+    public void ReadFile_WhenTheFileIsOpenWithUnsavedChanges_ShowsTheEditorsContent()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "STALE_DISK_CONTENT");
+        var reader = new WorkspaceFileReader(_ => "in the editor");
+
+        var result = reader.ReadFile(root, "Foo.cs");
+
+        result.ShouldContain("in the editor");
+        result.ShouldNotContain("STALE_DISK_CONTENT");
+    }
+
+    [Fact]
+    public void ReadFile_WhenTheFileIsOpenWithUnsavedChanges_SaysWhichCopyItIs()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "on disk");
+
+        new WorkspaceFileReader(_ => "in the editor")
+            .ReadFile(root, "Foo.cs")
+            .ShouldContain("unsaved changes");
+    }
+
+    [Fact]
+    public void ReadFile_WhenNothingIsUnsaved_ReadsFromDiskAndSaysNothingExtra()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "on disk");
+
+        var result = new WorkspaceFileReader(_ => null).ReadFile(root, "Foo.cs");
+
+        result.ShouldContain("on disk");
+        result.ShouldNotContain("unsaved changes");
+    }
+
+    [Fact]
+    public void ReadFile_WithNoProviderAtAll_StillReadsFromDisk()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "on disk");
+
+        new WorkspaceFileReader().ReadFile(root, "Foo.cs").ShouldContain("on disk");
+    }
+
+    /// <summary>A file that exists only in an editor buffer is still "not found" - the provider
+    /// supplies content for a file, it does not conjure one into existence.</summary>
+    [Fact]
+    public void ReadFile_ForAFileThatIsNotOnDisk_IsStillNotFound()
+    {
+        var root = NewTempDirectory();
+
+        new WorkspaceFileReader(_ => "in the editor")
+            .ReadFile(root, "Missing.cs")
+            .ShouldContain("File not found");
+    }
+
+    [Fact]
+    public void ReadFile_UnsavedContentPastTheCap_IsTruncatedAndStillFlagged()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "small");
+        var big = new string('x', WorkspaceFileReader.MaxFileChars + 500);
+
+        var result = new WorkspaceFileReader(_ => big).ReadFile(root, "Foo.cs");
+
+        result.ShouldContain("truncated");
+        result.ShouldContain("unsaved changes");
+    }
+
+    private static string NewTempDirectory()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(), "IdePlusPlusWfrTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
 }

@@ -13,6 +13,18 @@ public sealed class WorkspaceFileReader
 
     private static readonly string[] ExcludedDirectoryNames = ["bin", "obj", ".git", ".vs", "node_modules", ".ideplusplus"];
 
+    private readonly Func<string, string?>? _unsavedContentProvider;
+
+    /// <param name="unsavedContentProvider">Given a full path, returns the editor's text for a file
+    /// open with unsaved changes, or null. An applied edit to an open file only touches that
+    /// buffer - EditApplicationService never writes it out - so without this, a model that edits an
+    /// open file and re-reads it gets its own pre-edit content back and concludes the edit did not
+    /// land. Optional so the reader stays usable without an editor attached.</param>
+    public WorkspaceFileReader(Func<string, string?>? unsavedContentProvider = null)
+    {
+        _unsavedContentProvider = unsavedContentProvider;
+    }
+
     public string ReadFile(string? solutionDirectory, string relativePath)
     {
         if (solutionDirectory is null)
@@ -32,16 +44,26 @@ public sealed class WorkspaceFileReader
 
         try
         {
-            var text = File.ReadAllText(fullPath);
+            var unsavedText = _unsavedContentProvider?.Invoke(fullPath);
+            var text = unsavedText ?? File.ReadAllText(fullPath);
+
+            // Said explicitly rather than left implicit: the model is about to compute an edit
+            // against this text, and it needs to know which copy it is looking at.
+            var unsavedNote = unsavedText is null
+                ? ""
+                : "\n\n[open in the editor with unsaved changes - shown above is the editor's "
+                  + "content, which is what an edit will apply to. The copy on disk is older.]";
+
             if (text.Length <= MaxFileChars)
             {
-                return WithLineNumbers(text);
+                return WithLineNumbers(text) + unsavedNote;
             }
 
             // Length captured from the original text, not the truncated copy - the notice is only
             // useful if it reports how much the file actually holds.
             return WithLineNumbers(text[..MaxFileChars])
-                   + $"\n\n[truncated - file is {text.Length} chars, showing first {MaxFileChars}]";
+                   + $"\n\n[truncated - file is {text.Length} chars, showing first {MaxFileChars}]"
+                   + unsavedNote;
         }
         catch (IOException ex)
         {
