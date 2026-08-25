@@ -17,6 +17,7 @@ using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
+using IdePlusPlus.TestRunner;
 using Serilog;
 
 namespace IdePlusPlus.Shell.ToolPanes;
@@ -77,6 +78,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// doesn't hold the conversation open indefinitely.</summary>
     private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary>Longer than the build timeout: a whole-solution run legitimately takes minutes, and
+    /// killing a nearly-finished suite wastes more than it saves.</summary>
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(10);
+
     private const int CodebaseSearchTopK = 5;
 
     // Raised from 8 once iterations started doing verification work. Eight was sized for a loop
@@ -107,6 +112,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly PluginChatToolRegistry _pluginChatToolRegistry;
     private readonly GitService _gitService;
     private readonly BuildService _buildService;
+    private readonly TestRunService _testRunService;
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
@@ -114,6 +120,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private string? _solutionPath;
     private Func<string>? _currentConfiguration;
     private IReadOnlyList<string> _indexableFiles = [];
+    private IReadOnlyList<string> _testProjectPaths = [];
     private CancellationTokenSource? _streamCancellation;
 
     public CopilotChatPaneViewModel(
@@ -127,7 +134,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         McpServerManager mcpServerManager,
         PluginChatToolRegistry pluginChatToolRegistry,
         GitService gitService,
-        BuildService buildService)
+        BuildService buildService,
+        TestRunService testRunService)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -142,6 +150,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _pluginChatToolRegistry = pluginChatToolRegistry;
         _gitService = gitService;
         _buildService = buildService;
+        _testRunService = testRunService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -300,6 +309,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         _chatHistoryStore.Save(_solutionDirectory, stored);
     }
+
+    /// <summary>The solution's test projects, so run_tests can default to all of them. Detected
+    /// during solution load (see TestProjectDetector); the chat pane never sees the solution tree
+    /// itself.</summary>
+    public void SetTestProjects(IReadOnlyList<string> projectPaths) => _testProjectPaths = projectPaths;
 
     public void SetIndexableFiles(IReadOnlyList<string> filePaths)
     {
@@ -585,6 +599,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
+            case TestTools.RunTestsToolName:
+                return await RunTestsAsync(
+                    arguments?["project"]?.GetValue<string>(),
+                    arguments?["filter"]?.GetValue<string>(),
+                    cancellationToken);
+
             default:
                 return (true, $"Unknown built-in tool '{call.Name}'.");
         }
@@ -702,6 +722,120 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
+    }
+
+    /// <summary>
+    /// Runs the tests and reports the failures.
+    ///
+    /// Documents are saved first for the same reason a build saves them - `dotnet test` builds from
+    /// disk, so an unsaved edit would be tested in its pre-edit form and pass or fail for the wrong
+    /// reasons.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunTestsAsync(
+        string? project, string? filter, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there are no tests to run.");
+        }
+
+        IReadOnlyList<string> projects;
+        if (!string.IsNullOrWhiteSpace(project))
+        {
+            if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, project) is not { } projectPath)
+            {
+                return (true, $"Refused: '{project}' resolves outside the open solution directory.");
+            }
+
+            if (!File.Exists(projectPath))
+            {
+                return (true, $"Project not found: {project}");
+            }
+
+            projects = [projectPath];
+        }
+        else
+        {
+            if (_testProjectPaths.Count == 0)
+            {
+                return (true, "No test projects were found in this solution.");
+            }
+
+            projects = _testProjectPaths;
+        }
+
+        if (_testRunService.IsRunning)
+        {
+            return (true, "A test run is already in progress - wait for it to finish before starting another.");
+        }
+
+        _dispatcher.Invoke(_editApplicationService.SaveDirtyDocuments);
+
+        var filters = string.IsNullOrWhiteSpace(filter) ? null : new[] { filter };
+        var report = new StringBuilder();
+        var totals = (Passed: 0, Failed: 0, Skipped: 0);
+        var failures = new List<TestResult>();
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TestTimeout);
+
+        foreach (var projectPath in projects)
+        {
+            IReadOnlyList<TestResult> results;
+            try
+            {
+                results = await _testRunService.RunAsync(projectPath, filters, _ => { }, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return (true,
+                    $"The test run was still going after {TestTimeout.TotalMinutes:0} minutes and was stopped. "
+                    + "Narrow it with 'project' or 'filter'.");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return (true, ex.Message);
+            }
+
+            var name = Path.GetFileNameWithoutExtension(projectPath);
+            if (results.Count == 0)
+            {
+                report.Append($"\n{name}: no tests ran (the project may have failed to build, or the filter matched nothing).");
+                continue;
+            }
+
+            var passed = results.Count(r => r.Outcome == TestOutcome.Passed);
+            var failed = results.Count(r => r.Outcome == TestOutcome.Failed);
+            var skipped = results.Count(r => r.Outcome == TestOutcome.Skipped);
+            totals = (totals.Passed + passed, totals.Failed + failed, totals.Skipped + skipped);
+            failures.AddRange(results.Where(r => r.Outcome == TestOutcome.Failed));
+
+            report.Append($"\n{name}: {passed} passed, {failed} failed, {skipped} skipped.");
+        }
+
+        var headline = totals.Failed == 0
+            ? $"All {totals.Passed} test(s) passed."
+            : $"{totals.Failed} test(s) FAILED, {totals.Passed} passed.";
+        if (totals.Skipped > 0)
+        {
+            headline += $" {totals.Skipped} skipped.";
+        }
+
+        foreach (var failure in failures.Take(TestTools.MaxReportedFailures))
+        {
+            report.Append($"\n\nFAILED {failure.FullyQualifiedName}");
+            if (failure.ErrorMessage is { Length: > 0 } message)
+            {
+                report.Append($"\n{Cap(message, TestTools.MaxFailureMessageChars, "message")}");
+            }
+        }
+
+        if (failures.Count > TestTools.MaxReportedFailures)
+        {
+            report.Append($"\n\n[{failures.Count - TestTools.MaxReportedFailures} more failure(s) not shown]");
+        }
+
+        return (false, headline + report);
     }
 
     private static string FormatBuildReport(

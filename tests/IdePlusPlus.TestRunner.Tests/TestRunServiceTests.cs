@@ -79,6 +79,77 @@ public sealed class TestRunServiceTests : IDisposable
         result.Outcome.ShouldBe(TestOutcome.Passed);
     }
 
+    /// <summary>
+    /// The Test Explorer button used to be the only caller, so the window between the IsRunning
+    /// check and _process being assigned never mattered. It does once the copilot's run_tests tool
+    /// can start a run too - two `dotnet test` processes over the same bin/obj is the same race
+    /// BuildService had.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhileAnotherRunIsInFlight_Throws()
+    {
+        var runTask = _runService.RunAsync(
+            _project.CsprojPath,
+            filterFullyQualifiedNames: ["ScratchRunTests.SampleTests.SlowTest"],
+            onOutputLine: _ => { });
+
+        try
+        {
+            await Should.ThrowAsync<InvalidOperationException>(() => _runService.RunAsync(
+                _project.CsprojPath,
+                filterFullyQualifiedNames: ["ScratchRunTests.SampleTests.PassingTest"],
+                onOutputLine: _ => { }));
+        }
+        finally
+        {
+            _runService.Cancel();
+            await runTask;
+        }
+    }
+
+    /// <summary>
+    /// WaitForExitAsync only stops awaiting, so a cancelled token used to leave `dotnet test`
+    /// running - callers had to know to call Cancel() themselves, which a timeout path is exactly
+    /// the sort of place to forget. Same wall-clock proof as the Cancel() test: SlowTest sleeps for
+    /// eight seconds, so finishing well inside that means the process really was killed.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenTheTokenIsCancelled_KillsTheProcessRatherThanLeavingItRunning()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var stopwatch = Stopwatch.StartNew();
+
+        var runTask = _runService.RunAsync(
+            _project.CsprojPath,
+            filterFullyQualifiedNames: ["ScratchRunTests.SampleTests.SlowTest"],
+            onOutputLine: _ => { },
+            ct: cancellation.Token);
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        _runService.IsRunning.ShouldBeTrue();
+
+        await cancellation.CancelAsync();
+
+        var completed = await Task.WhenAny(runTask, Task.Delay(TimeSpan.FromSeconds(5)));
+        completed.ShouldBe(runTask, "cancelling the token should have terminated the process.");
+
+        stopwatch.Stop();
+        stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(7));
+        _runService.IsRunning.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task RunAsync_WithAnAlreadyCancelledToken_DoesNotStartAnything()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => _runService.RunAsync(
+            _project.CsprojPath, filterFullyQualifiedNames: null, onOutputLine: _ => { }, ct: cancellation.Token));
+
+        _runService.IsRunning.ShouldBeFalse();
+    }
+
     [Fact]
     public async Task Cancel_DuringAnInFlightRun_TerminatesTheProcessWellBeforeTheSlowTestWouldFinishNaturally()
     {

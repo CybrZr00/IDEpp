@@ -480,6 +480,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // Picks up a project-local .ideplusplus/copilot/mcp-servers.json, if the solution has one.
             _mcpServerManager.SetSolutionDirectory(solutionDirectory);
             _ = _mcpServerManager.ReconnectAllAsync();
+            CopilotChat.SetTestProjects(root.Flatten()
+                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, FullPath: not null })
+                .Select(n => n.FullPath!)
+                .ToList());
             CopilotChat.SetIndexableFiles(root.Flatten()
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)
