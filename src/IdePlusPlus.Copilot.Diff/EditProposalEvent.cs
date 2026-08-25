@@ -20,4 +20,8 @@ public sealed class EditProposalEvent
 
     /// <summary>Only set once Status is Complete - the fully parsed, authoritative operation.</summary>
     public EditOperation? Operation { get; init; }
+
+    /// <summary>The accumulated arguments JSON, so the completed call can be replayed into chat
+    /// history as a real tool call - which is what lets its outcome come back as a tool result.</summary>
+    public string? ArgumentsJson { get; init; }
 }

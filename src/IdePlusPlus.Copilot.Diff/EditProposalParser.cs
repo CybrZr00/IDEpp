@@ -41,7 +41,13 @@ public sealed class EditProposalParser
         var operation = TryParseComplete(accumulated);
         if (operation is not null)
         {
-            return new EditProposalEvent { ToolCallId = toolCallId, Status = EditProposalStatus.Complete, Operation = operation };
+            return new EditProposalEvent
+            {
+                ToolCallId = toolCallId,
+                Status = EditProposalStatus.Complete,
+                Operation = operation,
+                ArgumentsJson = accumulated,
+            };
         }
 
         return new EditProposalEvent

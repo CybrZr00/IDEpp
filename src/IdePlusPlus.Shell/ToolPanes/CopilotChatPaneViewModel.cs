@@ -363,10 +363,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     ///
     /// A propose_plan call always ends the loop - a plan needs an explicit human Approve click no
     /// matter what. A propose_edit call ends the loop too, UNLESS Auto Mode is on and every edit
-    /// proposed in that turn actually applied, in which case a synthetic note is appended to
-    /// history (nothing else records that the edit happened - see below) and the loop continues, so
-    /// an auto-accepted edit doesn't just silently end the conversation. In manual mode a proposal
-    /// remains terminal until the user decides it, same as always.
+    /// proposed in that turn actually applied, in which case the loop continues so an auto-accepted
+    /// edit doesn't just silently end the conversation. In manual mode a proposal remains terminal
+    /// until the user decides it, same as always.
     /// </summary>
     private async Task RunAssistantTurnsAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
     {
@@ -380,12 +379,22 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             {
                 var turn = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
 
-                if (turn.Calls.Count > 0)
+                // propose_edit is replayed here alongside the read-only and MCP calls, so the
+                // model sees its own edits as tool calls with tool results. Before this, an
+                // edit-only iteration recorded nothing at all - not even the assistant's own
+                // narration, since this whole block was gated on turn.Calls.Count - and the model
+                // was told only "- Applied edit to {path}." by a synthetic user message. It could
+                // not tell an edit that landed from one that was refused, nor notice that it had
+                // just removed most of a file.
+                if (turn.Calls.Count > 0 || turn.EditProposals.Count > 0)
                 {
-                    history.Add(new ChatMessage(
-                        ChatRole.Assistant,
-                        assistantMessage.Text,
-                        ToolCalls: turn.Calls.Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString())).ToList()));
+                    var toolCalls = turn.Calls
+                        .Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString()))
+                        .Concat(turn.EditProposals.Select(p => new ChatToolCall(
+                            p.ToolCallId, ProposeEditTool.ToolName, p.ArgumentsJson ?? "{}")))
+                        .ToList();
+
+                    history.Add(new ChatMessage(ChatRole.Assistant, assistantMessage.Text, ToolCalls: toolCalls));
 
                     foreach (var call in turn.Calls)
                     {
@@ -402,6 +411,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                         history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
                     }
 
+                    // Every replayed call needs an answer or the next request is malformed, so this
+                    // runs for refused and undecided proposals too - ToolResultText always says
+                    // something true about where the edit got to.
+                    foreach (var proposal in turn.EditProposals)
+                    {
+                        history.Add(new ChatMessage(
+                            ChatRole.Tool, proposal.ToolResultText, ToolCallId: proposal.ToolCallId));
+                    }
+
                     _dispatcher.Invoke(() => CurrentActivity = "Thinking...");
                 }
 
@@ -415,17 +433,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 if (action == AssistantTurnAction.Stop)
                 {
                     break;
-                }
-
-                if (action == AssistantTurnAction.ContinueWithAppliedEditsNote)
-                {
-                    // Nothing in `history` records the propose_edit call itself (it's rendered to
-                    // Messages, never replayed as a tool call/tool result) - without this, the model
-                    // has no way to know its edit actually landed, and no prompt to keep going.
-                    var summary = string.Join("\n", turn.EditProposals.Select(p => $"- Applied edit to {p.FilePath}."));
-                    history.Add(new ChatMessage(
-                        ChatRole.User,
-                        $"{summary}\n\nContinue with the rest of the task if there's more to do, or let the user know you're finished."));
                 }
 
                 // The assistant text and tool results from this iteration are now final - checkpoint

@@ -7,13 +7,8 @@ public enum AssistantTurnAction
     Stop,
 
     /// <summary>Loop again without telling the model anything extra - it already has everything it
-    /// needs in the tool results just appended to history.</summary>
+    /// needs in the tool results just appended to history, edit outcomes included.</summary>
     ContinueSilently,
-
-    /// <summary>Loop again, but first tell the model what just happened - nothing else records that
-    /// an edit proposal was auto-accepted (see CopilotChatPaneViewModel's HandleToolCallDelta), so
-    /// without this note the model has no way to know its edit actually landed.</summary>
-    ContinueWithAppliedEditsNote,
 }
 
 /// <summary>
@@ -50,6 +45,9 @@ public static class AssistantTurnPolicy
             return AssistantTurnAction.Stop; // plain text reply, nothing pending
         }
 
-        return autoAcceptedAllEdits ? AssistantTurnAction.ContinueWithAppliedEditsNote : AssistantTurnAction.ContinueSilently;
+        // Auto-accepted edits used to need a synthetic note here, because nothing recorded that the
+        // edit had happened. propose_edit is now replayed into history as a real tool call with a
+        // real tool result, so there is nothing left to tell the model separately.
+        return AssistantTurnAction.ContinueSilently;
     }
 }

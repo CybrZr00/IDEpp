@@ -13,6 +13,10 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private string? _fullPath;
     private string? _workspaceDirectory;
     private string? _originalContentSnapshot;
+    private int _addedLines;
+    private int _removedLines;
+    private int _linesBefore;
+    private int _linesAfter;
 
     public EditProposalViewModel(string toolCallId, EditApplicationService applicationService)
     {
@@ -58,6 +62,23 @@ public sealed partial class EditProposalViewModel : ObservableObject
     /// decide whether it's safe to let the model keep going past this proposal.</summary>
     public bool WasApplied { get; private set; }
 
+    /// <summary>The raw arguments the model sent, replayed into chat history so this appears as a
+    /// real propose_edit tool call rather than something that happened off to the side.</summary>
+    public string? ArgumentsJson { get; private set; }
+
+    /// <summary>
+    /// What the model is told came of this edit. Every propose_edit call gets one: it is the tool
+    /// result for the replayed call, so omitting one would leave a tool call unanswered and make
+    /// the next request malformed.
+    ///
+    /// Applied results carry the line counts deliberately. A model that removed 380 lines it did
+    /// not mean to remove has no other way to notice, and the reminder that line numbers have moved
+    /// is what stops the next edit in the same turn being computed against a file that no longer
+    /// looks like that.
+    /// </summary>
+    public string ToolResultText { get; private set; } =
+        "This edit was cut off before it was complete, so nothing was written. Send it again.";
+
     public void UpdateStreaming(EditProposalEvent proposalEvent)
     {
         if (proposalEvent.FilePathPreview is { } filePathPreview)
@@ -74,6 +95,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
     public void Complete(EditProposalEvent proposalEvent, string? baseDirectory)
     {
         _operation = proposalEvent.Operation!;
+        ArgumentsJson = proposalEvent.ArgumentsJson;
         FilePath = _operation.FilePath;
         _workspaceDirectory = baseDirectory;
         _fullPath = EditApplicationService.ResolveWithinWorkspace(_operation.FilePath, baseDirectory);
@@ -88,6 +110,10 @@ public sealed partial class EditProposalViewModel : ObservableObject
             DecisionText = baseDirectory is null
                 ? "Refused - no solution is open, so there is nowhere for this edit to go."
                 : "Refused - this path is outside the open solution.";
+            ToolResultText = baseDirectory is null
+                ? "Not applied: no solution is open, so there is nowhere for this edit to go."
+                : $"Not applied: {_operation.FilePath} is outside the open solution directory. "
+                  + "Only files inside the open solution can be edited.";
             return;
         }
 
@@ -102,19 +128,23 @@ public sealed partial class EditProposalViewModel : ObservableObject
             IsComplete = true;
             IsDecided = true;
             DecisionText = $"Refused - {rangeError}";
+            ToolResultText = $"Not applied to {_operation.FilePath}: {rangeError}";
             return;
         }
 
         var diff = DiffComputer.Compute(_originalContentSnapshot, resultingContent);
         DiffLines = new ObservableCollection<DiffLine>(diff);
 
-        var before = CountLines(_originalContentSnapshot);
-        var after = CountLines(resultingContent);
-        ChangeSummary =
-            $"+{diff.Count(l => l.Kind == DiffLineKind.Added)} "
-            + $"-{diff.Count(l => l.Kind == DiffLineKind.Removed)} "
-            + $"({before} -> {after} lines)";
-        IsLargeDeletion = before > 0 && after * 2 < before;
+        _addedLines = diff.Count(l => l.Kind == DiffLineKind.Added);
+        _removedLines = diff.Count(l => l.Kind == DiffLineKind.Removed);
+        _linesBefore = CountLines(_originalContentSnapshot);
+        _linesAfter = CountLines(resultingContent);
+        ChangeSummary = $"+{_addedLines} -{_removedLines} ({_linesBefore} -> {_linesAfter} lines)";
+        IsLargeDeletion = _linesBefore > 0 && _linesAfter * 2 < _linesBefore;
+
+        ToolResultText =
+            $"Waiting for the user to accept or reject this edit to {_operation.FilePath}. "
+            + "Nothing has been written yet.";
 
         IsComplete = true;
     }
@@ -138,6 +168,22 @@ public sealed partial class EditProposalViewModel : ObservableObject
             ApplyResult.InvalidRange => "Refused - the line range no longer fits the file.",
             _ => "Couldn't apply - the file changed since this was proposed.",
         };
+        ToolResultText = result switch
+        {
+            ApplyResult.Applied =>
+                $"Applied to {FilePath}. {_addedLines} line(s) added, {_removedLines} removed; the "
+                + $"file is now {_linesAfter} line(s) long (was {_linesBefore}). Every line number "
+                + "below the edit has moved, so re-read the file before using start_line/end_line "
+                + "on it again.",
+            ApplyResult.OutsideWorkspace =>
+                $"Not applied: {FilePath} is outside the open solution directory.",
+            ApplyResult.InvalidRange =>
+                $"Not applied to {FilePath}: the line range no longer fits the file. Re-read it for "
+                + "current line numbers.",
+            _ =>
+                $"Not applied to {FilePath}: the file changed after this edit was proposed. Re-read "
+                + "it and send the edit again against its current contents.",
+        };
     }
 
     [RelayCommand(CanExecute = nameof(CanDecide))]
@@ -145,6 +191,9 @@ public sealed partial class EditProposalViewModel : ObservableObject
     {
         IsDecided = true;
         DecisionText = "Rejected";
+        ToolResultText =
+            $"The user rejected this edit to {FilePath}; nothing was written. Do not apply it again "
+            + "unless they ask for it.";
     }
 
     partial void OnIsCompleteChanged(bool value)

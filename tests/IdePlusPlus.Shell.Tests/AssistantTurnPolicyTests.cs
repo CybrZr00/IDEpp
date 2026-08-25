@@ -49,11 +49,11 @@ public class AssistantTurnPolicyTests
     }
 
     [Fact]
-    public void EditProposal_AutoModeOnAndApplied_ContinuesWithNote()
+    public void EditProposal_AutoModeOnAndApplied_ContinuesSilently()
     {
         // The bug: this used to Stop unconditionally, making Auto Mode's raised iteration cap inert.
         Decide(toolCalls: 0, editProposals: 1, allApplied: true, plan: false, autoMode: true)
-            .ShouldBe(AssistantTurnAction.ContinueWithAppliedEditsNote);
+            .ShouldBe(AssistantTurnAction.ContinueSilently);
     }
 
     [Fact]
@@ -99,13 +99,13 @@ public class AssistantTurnPolicyTests
     }
 
     [Fact]
-    public void ToolCallsAndAnAppliedEditInTheSameTurn_AutoMode_ContinuesWithNote()
+    public void ToolCallsAndAnAppliedEditInTheSameTurn_AutoMode_ContinuesSilently()
     {
         // The model called a read-only tool AND proposed an edit in one turn - both should be
         // honored: the tool result is already in history by the time this is decided, and Auto Mode
         // resolving the edit should still let the model keep going.
         Decide(toolCalls: 1, editProposals: 1, allApplied: true, plan: false, autoMode: true)
-            .ShouldBe(AssistantTurnAction.ContinueWithAppliedEditsNote);
+            .ShouldBe(AssistantTurnAction.ContinueSilently);
     }
 
     [Fact]
