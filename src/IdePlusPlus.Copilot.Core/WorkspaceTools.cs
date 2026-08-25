@@ -27,12 +27,16 @@ public static class WorkspaceTools
                      "never guess at a file's contents. Each line is returned prefixed with its 1-based line number " +
                      "followed by ': '. Those prefixes are NOT part of the file - use them for propose_edit's " +
                      "start_line/end_line, and never copy them into propose_edit's new_text. A file you have already " +
-                     "read this conversation does not need re-reading unless you have since changed it.",
+                     "read this conversation does not need re-reading unless you have since changed it - but "
+                     + "if you have changed it, do re-read, because the line numbers below your edit have moved. "
+                     + "Long files come back a page at a time; the reply says how to read the rest.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
               "properties": {
-                "file": { "type": "string", "description": "Path relative to the solution directory, e.g. src/Foo/Bar.cs" }
+                "file": { "type": "string", "description": "Path relative to the solution directory, e.g. src/Foo/Bar.cs" },
+                "offset": { "type": "integer", "description": "1-based line to start from. Use this to continue reading a file whose reply said it was truncated. Omit to start at the beginning." },
+                "limit": { "type": "integer", "description": "Maximum number of lines to return. Omit to get as many as fit." }
               },
               "required": ["file"]
             }

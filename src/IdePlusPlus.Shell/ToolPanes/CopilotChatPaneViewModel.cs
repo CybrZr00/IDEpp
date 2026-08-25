@@ -534,7 +534,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 var file = arguments?["file"]?.GetValue<string>();
                 return file is null
                     ? (true, "read_file requires a 'file' argument.")
-                    : (false, _workspaceFileReader.ReadFile(_solutionDirectory, file));
+                    : (false, _workspaceFileReader.ReadFile(
+                        _solutionDirectory,
+                        file,
+                        arguments?["offset"]?.GetValue<int>(),
+                        arguments?["limit"]?.GetValue<int>()));
 
             case WorkspaceTools.ListFilesToolName:
                 var directory = arguments?["directory"]?.GetValue<string>();

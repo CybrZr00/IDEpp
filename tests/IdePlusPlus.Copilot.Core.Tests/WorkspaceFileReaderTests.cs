@@ -146,6 +146,116 @@ public sealed class WorkspaceFileReaderTests : IDisposable
         WorkspaceFileReader.ResolveWithinRoot(_root, ".").ShouldNotBeNull();
     }
 
+    // --- Paging ---
+
+    /// <summary>Without paging, a file past the character cap simply could not be read to the end -
+    /// leaving the model to guess at the tail, which is the one thing it must not do before an edit.</summary>
+    [Fact]
+    public void ReadFile_WithAnOffset_StartsThereAndNumbersFromThere()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "a\nb\nc\nd\ne");
+
+        var result = new WorkspaceFileReader().ReadFile(root, "Foo.cs", offset: 3);
+
+        result.ShouldContain("     3: c");
+        result.ShouldNotContain(": a");
+        result.ShouldContain("showing lines 3-5 of 5");
+    }
+
+    [Fact]
+    public void ReadFile_WithALimit_StopsAfterThatManyLines()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "a\nb\nc\nd\ne");
+
+        var result = new WorkspaceFileReader().ReadFile(root, "Foo.cs", limit: 2);
+
+        result.ShouldContain("     1: a");
+        result.ShouldContain("     2: b");
+        result.ShouldNotContain(": c");
+        result.ShouldContain("Read on with offset: 3");
+    }
+
+    [Fact]
+    public void ReadFile_WithOffsetAndLimitTogether_ReturnsThatWindow()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "a\nb\nc\nd\ne");
+
+        var result = new WorkspaceFileReader().ReadFile(root, "Foo.cs", offset: 2, limit: 2);
+
+        result.ShouldContain("     2: b");
+        result.ShouldContain("     3: c");
+        result.ShouldNotContain(": d");
+    }
+
+    [Fact]
+    public void ReadFile_ReadingToTheEnd_DoesNotClaimToBeTruncated()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "a\nb\nc");
+
+        new WorkspaceFileReader().ReadFile(root, "Foo.cs", offset: 2).ShouldNotContain("truncated");
+    }
+
+    [Fact]
+    public void ReadFile_WithAnOffsetPastTheEnd_SaysHowLongTheFileIs()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Foo.cs"), "a\nb\nc");
+
+        new WorkspaceFileReader().ReadFile(root, "Foo.cs", offset: 99).ShouldContain("has 3 line(s)");
+    }
+
+    /// <summary>The hint has to be a real line number, or following it skips or repeats content.</summary>
+    [Fact]
+    public void ReadFile_TheOfferedOffset_ResumesExactlyWhereItLeftOff()
+    {
+        var root = NewTempDirectory();
+        var lines = Enumerable.Range(1, 4000).Select(i => new string('x', 40) + i).ToArray();
+        File.WriteAllText(Path.Combine(root, "Big.cs"), string.Join("\n", lines));
+        var reader = new WorkspaceFileReader();
+
+        var first = reader.ReadFile(root, "Big.cs");
+        var match = System.Text.RegularExpressions.Regex.Match(first, @"Read on with offset: (\d+)");
+        match.Success.ShouldBeTrue();
+
+        var next = int.Parse(match.Groups[1].Value);
+        first.ShouldContain($"{next - 1,6}: {lines[next - 2]}");
+        reader.ReadFile(root, "Big.cs", offset: next).ShouldContain($"{next,6}: {lines[next - 1]}");
+    }
+
+    /// <summary>A cut never lands mid-line, so a page always ends on a line the model can trust.</summary>
+    [Fact]
+    public void ReadFile_WhenCappedByLength_CutsOnALineBoundary()
+    {
+        var root = NewTempDirectory();
+        var line = new string('x', 1000);
+        File.WriteAllText(Path.Combine(root, "Big.cs"), string.Join("\n", Enumerable.Repeat(line, 200)));
+
+        var result = new WorkspaceFileReader().ReadFile(root, "Big.cs");
+
+        result.ShouldContain("truncated");
+        foreach (var rendered in result.Split('\n').Where(l => l.Contains(": x")))
+        {
+            rendered.TrimEnd().Length.ShouldBe(8 + 1000);
+        }
+    }
+
+    /// <summary>A minified bundle on one line would otherwise return nothing at all.</summary>
+    [Fact]
+    public void ReadFile_WithASingleLineLongerThanTheBudget_CutsItAndSaysSo()
+    {
+        var root = NewTempDirectory();
+        File.WriteAllText(Path.Combine(root, "bundle.js"), new string('x', WorkspaceFileReader.MaxFileChars + 5000));
+
+        var result = new WorkspaceFileReader().ReadFile(root, "bundle.js");
+
+        result.ShouldContain("unusually long");
+        result.Length.ShouldBeLessThan(WorkspaceFileReader.MaxFileChars + 200);
+    }
+
     // --- Unsaved editor content ---
 
     /// <summary>An edit applied to an open file only touches the editor buffer, so disk goes stale

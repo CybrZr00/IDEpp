@@ -25,7 +25,9 @@ public sealed class WorkspaceFileReader
         _unsavedContentProvider = unsavedContentProvider;
     }
 
-    public string ReadFile(string? solutionDirectory, string relativePath)
+    /// <param name="offset">1-based first line to return. Omit for the start of the file.</param>
+    /// <param name="limit">Maximum number of lines to return. Omit for as many as fit.</param>
+    public string ReadFile(string? solutionDirectory, string relativePath, int? offset = null, int? limit = null)
     {
         if (solutionDirectory is null)
         {
@@ -54,16 +56,39 @@ public sealed class WorkspaceFileReader
                 : "\n\n[open in the editor with unsaved changes - shown above is the editor's "
                   + "content, which is what an edit will apply to. The copy on disk is older.]";
 
-            if (text.Length <= MaxFileChars)
+            var allLines = text.Replace("\r\n", "\n").Split('\n');
+            var firstLine = Math.Max(1, offset ?? 1);
+            if (firstLine > allLines.Length)
             {
-                return WithLineNumbers(text) + unsavedNote;
+                return $"offset {firstLine} is past the end of {relativePath}, which has {allLines.Length} line(s).";
             }
 
-            // Length captured from the original text, not the truncated copy - the notice is only
-            // useful if it reports how much the file actually holds.
-            return WithLineNumbers(text[..MaxFileChars])
-                   + $"\n\n[truncated - file is {text.Length} chars, showing first {MaxFileChars}]"
-                   + unsavedNote;
+            var requested = limit is > 0
+                ? Math.Min(limit.Value, allLines.Length - (firstLine - 1))
+                : allLines.Length - (firstLine - 1);
+
+            var (shown, cutMidLine) = TakeWithinBudget(allLines, firstLine, requested);
+            var lastLine = firstLine + shown.Count - 1;
+
+            // Sizes are reported from the original text, never the trimmed copy - the notice is
+            // only useful if it says how much the file actually holds.
+            var notice = "";
+            if (cutMidLine)
+            {
+                notice = $"\n\n[truncated - cut at {MaxFileChars} chars; file is {text.Length} chars. "
+                         + $"Line {firstLine} is unusually long.]";
+            }
+            else if (lastLine < allLines.Length)
+            {
+                notice = $"\n\n[truncated - showing lines {firstLine}-{lastLine} of {allLines.Length}; "
+                         + $"file is {text.Length} chars. Read on with offset: {lastLine + 1}]";
+            }
+            else if (firstLine > 1)
+            {
+                notice = $"\n\n[showing lines {firstLine}-{lastLine} of {allLines.Length}]";
+            }
+
+            return WithLineNumbers(string.Join("\n", shown), firstLine) + notice + unsavedNote;
         }
         catch (IOException ex)
         {
@@ -80,10 +105,45 @@ public sealed class WorkspaceFileReader
     /// The "N: " prefix is not part of the file; both tool descriptions say so explicitly, because a
     /// model that echoes the prefixes back inside new_text would corrupt the file it's editing.
     /// </summary>
-    public static string WithLineNumbers(string text)
+    public static string WithLineNumbers(string text, int firstLineNumber = 1)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n');
-        return string.Join("\n", lines.Select((line, index) => $"{index + 1,6}: {line}"));
+        return string.Join("\n", lines.Select((line, index) => $"{firstLineNumber + index,6}: {line}"));
+    }
+
+    /// <summary>
+    /// Takes whole lines until the character budget runs out, so a cut never lands mid-line and the
+    /// "read on with offset" hint is always a real line number.
+    ///
+    /// The one exception is a single line longer than the entire budget - a minified bundle, say -
+    /// where returning nothing at all would be worse than returning a cut line, so the first line is
+    /// cut and flagged.
+    /// </summary>
+    private static (List<string> Shown, bool CutMidLine) TakeWithinBudget(
+        string[] allLines, int firstLine, int count)
+    {
+        var shown = new List<string>();
+        var budget = MaxFileChars;
+
+        for (var i = 0; i < count; i++)
+        {
+            var line = allLines[firstLine - 1 + i];
+            if (line.Length + 1 > budget)
+            {
+                if (shown.Count > 0)
+                {
+                    return (shown, false);
+                }
+
+                shown.Add(line[..Math.Min(line.Length, MaxFileChars)]);
+                return (shown, true);
+            }
+
+            shown.Add(line);
+            budget -= line.Length + 1;
+        }
+
+        return (shown, false);
     }
 
     public string ListFiles(string? solutionDirectory, string? relativeDirectory, bool recursive)
