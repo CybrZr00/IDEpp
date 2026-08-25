@@ -60,6 +60,12 @@ public static class SolutionLoader
         var solutionName = Path.GetFileNameWithoutExtension(solutionPath);
         var root = new SolutionTreeNode(solutionName, solutionPath, SolutionTreeNodeKind.Solution);
 
+        // Its own collection rather than ProjectCollection.GlobalProjectCollection. The global one
+        // is process-wide mutable state: two loads at once, or a load racing anything else that
+        // evaluates a project, mutate the same object. Scoping it to this call also removes the
+        // per-project UnloadProject dance - disposing the collection releases everything in it.
+        using var projectCollection = new Microsoft.Build.Evaluation.ProjectCollection();
+
         var solutionFile = Microsoft.Build.Construction.SolutionFile.Parse(solutionPath);
         foreach (var projectInSolution in solutionFile.ProjectsInOrder)
         {
@@ -68,65 +74,59 @@ public static class SolutionLoader
                 continue;
             }
 
-            root.Children.Add(LoadProject(projectInSolution.ProjectName, projectInSolution.AbsolutePath));
+            root.Children.Add(LoadProject(
+                projectInSolution.ProjectName, projectInSolution.AbsolutePath, projectCollection));
         }
 
         return root;
     }
 
-    private static SolutionTreeNode LoadProject(string projectName, string projectPath)
+    private static SolutionTreeNode LoadProject(
+        string projectName, string projectPath, Microsoft.Build.Evaluation.ProjectCollection projectCollection)
     {
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
 
         var evaluated = Microsoft.Build.Evaluation.Project.FromFile(
             projectPath,
-            new Microsoft.Build.Definition.ProjectOptions());
+            new Microsoft.Build.Definition.ProjectOptions { ProjectCollection = projectCollection });
 
-        SolutionTreeNode projectNode;
-        try
+        // Multi-targeted projects (MAUI's TargetFrameworks, plural) declare no single
+        // $(TargetFramework) - reading the plural property here is safe even without mobile
+        // workloads installed, since this is the "outer" cross-targeting evaluation, which
+        // doesn't import any platform-specific SDK targets (those only load per-TFM, at build
+        // time for a chosen $(TargetFramework)).
+        var targetFrameworks = evaluated.GetPropertyValue("TargetFrameworks");
+        var windowsTargetFramework = string.IsNullOrWhiteSpace(targetFrameworks)
+            ? null
+            : targetFrameworks
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(tfm => tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase));
+
+        var isTestProject = TestProjectDetector.IsTestProject(evaluated);
+
+        var projectNode = new SolutionTreeNode(projectName, projectPath, SolutionTreeNodeKind.Project)
         {
-            // Multi-targeted projects (MAUI's TargetFrameworks, plural) declare no single
-            // $(TargetFramework) - reading the plural property here is safe even without mobile
-            // workloads installed, since this is the "outer" cross-targeting evaluation, which
-            // doesn't import any platform-specific SDK targets (those only load per-TFM, at build
-            // time for a chosen $(TargetFramework)).
-            var targetFrameworks = evaluated.GetPropertyValue("TargetFrameworks");
-            var windowsTargetFramework = string.IsNullOrWhiteSpace(targetFrameworks)
-                ? null
-                : targetFrameworks
-                    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .FirstOrDefault(tfm => tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase));
+            TargetFramework = windowsTargetFramework,
+            IsTestProject = isTestProject,
+        };
 
-            var isTestProject = TestProjectDetector.IsTestProject(evaluated);
+        var visibleItemTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Compile", "None", "Content", "Page", "ApplicationDefinition", "EmbeddedResource",
+        };
 
-            projectNode = new SolutionTreeNode(projectName, projectPath, SolutionTreeNodeKind.Project)
+        foreach (var item in evaluated.Items.Where(i => visibleItemTypes.Contains(i.ItemType)))
+        {
+            var relativePath = item.EvaluatedInclude.Replace('/', Path.DirectorySeparatorChar);
+            var parts = relativePath.Split(Path.DirectorySeparatorChar);
+            var fileName = parts[^1];
+            var folder = projectNode.GetOrCreateFolder(parts[..^1]);
+
+            if (!folder.Children.Any(c => c.Kind == SolutionTreeNodeKind.File && c.Name == fileName))
             {
-                TargetFramework = windowsTargetFramework,
-                IsTestProject = isTestProject,
-            };
-
-            var visibleItemTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "Compile", "None", "Content", "Page", "ApplicationDefinition", "EmbeddedResource",
-            };
-
-            foreach (var item in evaluated.Items.Where(i => visibleItemTypes.Contains(i.ItemType)))
-            {
-                var relativePath = item.EvaluatedInclude.Replace('/', Path.DirectorySeparatorChar);
-                var parts = relativePath.Split(Path.DirectorySeparatorChar);
-                var fileName = parts[^1];
-                var folder = projectNode.GetOrCreateFolder(parts[..^1]);
-
-                if (!folder.Children.Any(c => c.Kind == SolutionTreeNodeKind.File && c.Name == fileName))
-                {
-                    var fullPath = Path.GetFullPath(Path.Combine(projectDirectory, relativePath));
-                    folder.Children.Add(new SolutionTreeNode(fileName, fullPath, SolutionTreeNodeKind.File));
-                }
+                var fullPath = Path.GetFullPath(Path.Combine(projectDirectory, relativePath));
+                folder.Children.Add(new SolutionTreeNode(fileName, fullPath, SolutionTreeNodeKind.File));
             }
-        }
-        finally
-        {
-            Microsoft.Build.Evaluation.ProjectCollection.GlobalProjectCollection.UnloadProject(evaluated);
         }
 
         return projectNode;

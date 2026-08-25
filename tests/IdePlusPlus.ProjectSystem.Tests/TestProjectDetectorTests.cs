@@ -71,19 +71,17 @@ public sealed class TestProjectDetectorTests : IDisposable
         AssertIsTestProject(csprojPath, expected: false);
     }
 
+    /// <summary>Evaluates into its own ProjectCollection, mirroring SolutionLoader. The global
+    /// collection is process-wide, and xUnit runs this class in parallel with SolutionLoaderTests -
+    /// which used to mean both were loading and unloading projects in the same object at once.</summary>
     private static void AssertIsTestProject(string csprojPath, bool expected)
     {
+        using var projectCollection = new Microsoft.Build.Evaluation.ProjectCollection();
         var evaluated = Microsoft.Build.Evaluation.Project.FromFile(
             csprojPath,
-            new Microsoft.Build.Definition.ProjectOptions());
-        try
-        {
-            TestProjectDetector.IsTestProject(evaluated).ShouldBe(expected);
-        }
-        finally
-        {
-            Microsoft.Build.Evaluation.ProjectCollection.GlobalProjectCollection.UnloadProject(evaluated);
-        }
+            new Microsoft.Build.Definition.ProjectOptions { ProjectCollection = projectCollection });
+
+        TestProjectDetector.IsTestProject(evaluated).ShouldBe(expected);
     }
 
     private string WriteCsproj(string fileName, string content)
