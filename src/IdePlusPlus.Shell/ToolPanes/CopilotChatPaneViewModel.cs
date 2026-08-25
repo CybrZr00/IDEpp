@@ -52,8 +52,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// </summary>
     private const string DefaultSystemPrompt =
         "You are the AI coding assistant built into the IDE++ IDE, working on the user's open solution. " +
-        "You can read files, list directories, search the indexed codebase, and edit files directly in " +
-        "the user's editor, plus use any MCP or plugin tools currently connected.\n\n" +
+        "You can read files, list directories, search the indexed codebase, edit files directly in the " +
+        "user's editor, build the solution, and inspect git - plus use any MCP or plugin tools " +
+        "currently connected.\n\n" +
         "How to work:\n" +
         "- Investigate with read_file/list_files/search_codebase, then act in the same turn. Never finish " +
         "a turn having only described an edit: a plan written as chat text changes nothing, and the turn " +
@@ -66,6 +67,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "Whatever you send is written to disk exactly as given.\n" +
         "- Don't re-read a file you already read in this conversation unless you've changed it since - " +
         "and if you have changed it, do re-read it, because every line number below the edit has moved.\n" +
+        "- After changing code, check it: build_solution tells you whether it compiles, and git_diff " +
+        "shows what your edits actually did. An edit result telling you it applied is not the same as " +
+        "the change being correct. If the build fails, fix it and build again rather than handing back " +
+        "something you know is broken.\n" +
         "- Keep narration short. One line on what you're doing beats a paragraph on what you're about to do.";
 
     /// <summary>Long enough for a cold build of a large solution, short enough that a wedged one
@@ -73,7 +78,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(5);
 
     private const int CodebaseSearchTopK = 5;
-    private const int MaxToolLoopIterations = 8;
+
+    // Raised from 8 once iterations started doing verification work. Eight was sized for a loop
+    // whose only tools read files; a single "build, read the errors, fix, build again" cycle spends
+    // four or five on its own, and running out mid-fix leaves the code worse than not having tried.
+    // An edit proposal still ends the turn in manual mode, so this only bounds read/build/git calls.
+    private const int MaxToolLoopIterations = 20;
 
     // A rough, tokenizer-free heuristic (not an exact token count) purely to warn before a request
     // is likely to hit a provider's context limit - 4 chars/token is the commonly-cited rule of
