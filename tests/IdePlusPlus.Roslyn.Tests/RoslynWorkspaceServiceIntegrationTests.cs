@@ -175,4 +175,64 @@ public sealed class RoslynWorkspaceServiceIntegrationTests
 
         diagnostics.ShouldNotContain(d => d.Severity == "Error");
     }
+
+    // --- Symbol search: the compiler-accurate alternative to search_codebase ---
+
+    [Fact]
+    public async Task FindSymbolsAsync_FindsATypeDeclaredInTheSolution()
+    {
+        var symbols = await _fixture.WorkspaceService.FindSymbolsAsync("Class1", 60);
+
+        symbols.ShouldContain(s => s.DisplayName.Contains("Class1") && s.FilePath == _fixture.ClassFilePath);
+    }
+
+    [Fact]
+    public async Task FindSymbolsAsync_ReportsAOneBasedLineAndTheSourceLine()
+    {
+        var symbol = (await _fixture.WorkspaceService.FindSymbolsAsync("Class1", 60))
+            .First(s => s.FilePath == _fixture.ClassFilePath);
+
+        symbol.Line.ShouldBeGreaterThan(0);
+        symbol.Column.ShouldBeGreaterThan(0);
+        symbol.LineText.ShouldContain("Class1");
+    }
+
+    /// <summary>Exact and case-sensitive, so the tool description does not promise otherwise.</summary>
+    [Fact]
+    public async Task FindSymbolsAsync_DoesNotMatchOnCaseOrSubstring()
+    {
+        (await _fixture.WorkspaceService.FindSymbolsAsync("class1", 60)).ShouldBeEmpty();
+        (await _fixture.WorkspaceService.FindSymbolsAsync("Class", 60)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task FindSymbolsAsync_ForSomethingThatDoesNotExist_ReturnsEmpty()
+    {
+        (await _fixture.WorkspaceService.FindSymbolsAsync("NoSuchSymbolAnywhere", 60)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task FindSymbolsAsync_RespectsTheResultCap()
+    {
+        (await _fixture.WorkspaceService.FindSymbolsAsync("Class1", 0)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task FindReferencesAsync_ReturnsTheDeclarationForAKnownType()
+    {
+        var (declarations, _, _) = await _fixture.WorkspaceService.FindReferencesAsync("Class1", 60);
+
+        declarations.ShouldContain(d => d.FilePath == _fixture.ClassFilePath);
+    }
+
+    [Fact]
+    public async Task FindReferencesAsync_ForSomethingThatDoesNotExist_ReturnsNothing()
+    {
+        var (declarations, references, total) =
+            await _fixture.WorkspaceService.FindReferencesAsync("NoSuchSymbolAnywhere", 60);
+
+        declarations.ShouldBeEmpty();
+        references.ShouldBeEmpty();
+        total.ShouldBe(0);
+    }
 }

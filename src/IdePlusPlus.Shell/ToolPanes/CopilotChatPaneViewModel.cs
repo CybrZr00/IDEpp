@@ -603,6 +603,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
+            case SymbolTools.FindSymbolToolName:
+                var symbolName = arguments?["name"]?.GetValue<string>();
+                return symbolName is null
+                    ? (true, "find_symbol requires a 'name' argument.")
+                    : await RunFindSymbolAsync(symbolName, cancellationToken);
+
+            case SymbolTools.FindReferencesToolName:
+                var referenceName = arguments?["name"]?.GetValue<string>();
+                return referenceName is null
+                    ? (true, "find_references requires a 'name' argument.")
+                    : await RunFindReferencesAsync(referenceName, cancellationToken);
+
             case DiagnosticTools.GetDiagnosticsToolName:
                 var diagnosticFile = arguments?["file"]?.GetValue<string>();
                 return diagnosticFile is null
@@ -733,6 +745,102 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
     }
+
+    private async Task<(bool IsError, string Text)> RunFindSymbolAsync(
+        string name, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there are no symbols to search.");
+        }
+
+        IReadOnlyList<SymbolLocation> symbols;
+        try
+        {
+            symbols = await _roslynWorkspaceService.FindSymbolsAsync(name, SymbolTools.MaxResults, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Symbol search failed: {ex.Message}");
+        }
+
+        if (symbols.Count == 0)
+        {
+            return (false,
+                $"No C# symbol named '{name}' was found. The match is exact and case-sensitive on the "
+                + "symbol's own name; try search_codebase if you are not sure what it is called.");
+        }
+
+        return (false, $"{symbols.Count} declaration(s) of '{name}':\n" + FormatSymbols(symbols));
+    }
+
+    private async Task<(bool IsError, string Text)> RunFindReferencesAsync(
+        string name, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there are no references to search.");
+        }
+
+        IReadOnlyList<SymbolLocation> declarations;
+        IReadOnlyList<SymbolLocation> references;
+        int totalReferences;
+        try
+        {
+            (declarations, references, totalReferences) =
+                await _roslynWorkspaceService.FindReferencesAsync(name, SymbolTools.MaxResults, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Reference search failed: {ex.Message}");
+        }
+
+        if (declarations.Count == 0)
+        {
+            return (false, $"No C# symbol named '{name}' was found, so it has no references.");
+        }
+
+        // More than one declaration means more than one symbol shares this name - an overload set,
+        // or unrelated types with a same-named member. Picking one would answer a question the
+        // caller did not ask.
+        if (references.Count == 0 && totalReferences == 0 && declarations.Count > 1)
+        {
+            return (false,
+                $"'{name}' is ambiguous - {declarations.Count} declarations share that name, so references "
+                + "were not resolved. Narrow it down from these:\n" + FormatSymbols(declarations));
+        }
+
+        if (totalReferences == 0)
+        {
+            return (false,
+                $"'{name}' is declared but never referenced:\n" + FormatSymbols(declarations));
+        }
+
+        var report = new StringBuilder($"'{name}' has {totalReferences} reference(s).\n\nDeclared at:\n");
+        report.Append(FormatSymbols(declarations));
+        report.Append("\n\nReferenced at:\n");
+        report.Append(FormatSymbols(references));
+
+        if (totalReferences > references.Count)
+        {
+            report.Append($"\n\n[{totalReferences - references.Count} more reference(s) not shown]");
+        }
+
+        return (false, report.ToString());
+    }
+
+    /// <summary>Paths are made relative to the solution so they can be handed straight back to
+    /// read_file, and the source line is included so a list of hits is readable without opening
+    /// every one of them.</summary>
+    private string FormatSymbols(IReadOnlyList<SymbolLocation> symbols) =>
+        string.Join("\n", symbols.Select(s =>
+        {
+            var path = _solutionDirectory is null
+                ? s.FilePath
+                : Path.GetRelativePath(_solutionDirectory, s.FilePath).Replace('\\', '/');
+            return $"  {path}:{s.Line}:{s.Column}  {s.Kind} {s.DisplayName}"
+                   + (s.LineText.Length > 0 ? $"\n      {s.LineText}" : "");
+        }));
 
     /// <summary>
     /// Compiler errors and warnings for one file, from the already-loaded Roslyn semantic model.

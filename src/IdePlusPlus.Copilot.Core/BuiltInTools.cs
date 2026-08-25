@@ -19,6 +19,7 @@ public static class BuiltInTools
         .. BuildTools.All,
         .. TestTools.All,
         .. DiagnosticTools.All,
+        .. SymbolTools.All,
     ];
 
     private static readonly HashSet<string> Names = All.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);

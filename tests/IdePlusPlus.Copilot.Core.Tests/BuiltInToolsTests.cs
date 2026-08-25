@@ -33,6 +33,8 @@ public class BuiltInToolsTests
         names.ShouldContain(BuildTools.BuildToolName);
         names.ShouldContain(TestTools.RunTestsToolName);
         names.ShouldContain(DiagnosticTools.GetDiagnosticsToolName);
+        names.ShouldContain(SymbolTools.FindSymbolToolName);
+        names.ShouldContain(SymbolTools.FindReferencesToolName);
     }
 
     [Fact]

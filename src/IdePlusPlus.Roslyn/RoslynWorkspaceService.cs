@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using IdePlusPlus.Editor;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
 
@@ -228,6 +229,119 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
         return semanticModel.GetDiagnostics(cancellationToken: cancellationToken)
             .Select(d => LiveDiagnosticMapper.ToLiveDiagnostic(d, filePath))
             .ToList();
+    }
+
+    /// <summary>
+    /// Declarations whose name matches <paramref name="name"/>, anywhere in the loaded solution.
+    ///
+    /// Matches the symbol's own name, not its fully-qualified one - "GetStatusAsync", not
+    /// "IdePlusPlus.SourceControl.GitService.GetStatusAsync" - because a caller looking for a symbol
+    /// usually knows what it is called and not where it lives. That is the whole reason to ask.
+    /// </summary>
+    public async Task<IReadOnlyList<SymbolLocation>> FindSymbolsAsync(
+        string name, int maxResults, CancellationToken cancellationToken = default)
+    {
+        var solution = await GetSolutionSnapshotAsync(cancellationToken).ConfigureAwait(false);
+
+        var symbols = await SymbolFinder
+            .FindSourceDeclarationsAsync(solution, name, ignoreCase: false, cancellationToken)
+            .ConfigureAwait(false);
+
+        return symbols
+            .SelectMany(symbol => symbol.Locations
+                .Where(l => l.IsInSource)
+                .Select(location => ToSymbolLocation(symbol.Kind.ToString(), Describe(symbol), location)))
+            .Where(l => l is not null)
+            .Select(l => l!)
+            .Take(maxResults)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Every reference to the named symbol.
+    ///
+    /// Returns the matching declarations too, and leaves it to the caller what to do when there is
+    /// more than one: overload sets and same-named members on unrelated types are both common, and
+    /// silently picking the first would answer a question nobody asked. Both lists are capped by
+    /// <paramref name="maxResults"/> - "used in 400 places" is a fact worth having, but 400 file
+    /// positions are not.
+    /// </summary>
+    public async Task<(IReadOnlyList<SymbolLocation> Declarations, IReadOnlyList<SymbolLocation> References, int TotalReferences)>
+        FindReferencesAsync(string name, int maxResults, CancellationToken cancellationToken = default)
+    {
+        var solution = await GetSolutionSnapshotAsync(cancellationToken).ConfigureAwait(false);
+
+        var symbols = (await SymbolFinder
+            .FindSourceDeclarationsAsync(solution, name, ignoreCase: false, cancellationToken)
+            .ConfigureAwait(false)).ToList();
+
+        var declarations = symbols
+            .SelectMany(symbol => symbol.Locations
+                .Where(l => l.IsInSource)
+                .Select(location => ToSymbolLocation(symbol.Kind.ToString(), Describe(symbol), location)))
+            .Where(l => l is not null)
+            .Select(l => l!)
+            .ToList();
+
+        if (symbols.Count != 1)
+        {
+            return (declarations, [], 0);
+        }
+
+        var references = new List<SymbolLocation>();
+        foreach (var referenced in await SymbolFinder.FindReferencesAsync(symbols[0], solution, cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var location in referenced.Locations)
+            {
+                if (ToSymbolLocation("Reference", Describe(symbols[0]), location.Location) is { } mapped)
+                {
+                    references.Add(mapped);
+                }
+            }
+        }
+
+        return (declarations, references.Take(maxResults).ToList(), references.Count);
+    }
+
+    private async Task<Solution> GetSolutionSnapshotAsync(CancellationToken cancellationToken)
+    {
+        // Solution is an immutable snapshot, so the lock only has to cover reading the field - the
+        // search itself runs outside it and cannot be disturbed by a concurrent edit push.
+        await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return _currentSolution;
+        }
+        finally
+        {
+            _workspaceLock.Release();
+        }
+    }
+
+    private static string Describe(ISymbol symbol) =>
+        symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+
+    /// <summary>Null when the location has no source file or its line cannot be read - a symbol
+    /// from metadata, or a generated tree with no path.</summary>
+    private static SymbolLocation? ToSymbolLocation(string kind, string displayName, Location location)
+    {
+        if (location.SourceTree?.FilePath is not { Length: > 0 } filePath)
+        {
+            return null;
+        }
+
+        var span = location.GetLineSpan();
+        var lineIndex = span.StartLinePosition.Line;
+
+        var lineText = "";
+        var text = location.SourceTree.GetText();
+        if (lineIndex >= 0 && lineIndex < text.Lines.Count)
+        {
+            lineText = text.Lines[lineIndex].ToString().Trim();
+        }
+
+        return new SymbolLocation(
+            kind, displayName, filePath, lineIndex + 1, span.StartLinePosition.Character + 1, lineText);
     }
 
     /// <summary>Whether a solution has been loaded and this file is part of it - lets a caller say
