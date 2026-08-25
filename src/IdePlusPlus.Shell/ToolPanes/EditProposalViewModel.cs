@@ -40,6 +40,19 @@ public sealed partial class EditProposalViewModel : ObservableObject
     [ObservableProperty]
     private string? decisionText;
 
+    /// <summary>Line counts before and after, shown above the diff. The diff itself is scrollable
+    /// but only ever shows a window onto a long file, so a rewrite that quietly drops most of a
+    /// file looks much like any other edit until you scroll to where the content used to be. This
+    /// puts the magnitude on screen without scrolling.</summary>
+    [ObservableProperty]
+    private string changeSummary = "";
+
+    /// <summary>Set when the edit removes more than half the file, which is the shape silent
+    /// truncation takes. Highlights the summary rather than blocking anything - large deletions
+    /// are sometimes exactly what was asked for.</summary>
+    [ObservableProperty]
+    private bool isLargeDeletion;
+
     /// <summary>True only once Accept() has actually written the change - false for Reject, and
     /// false for a conflict (the file changed since this was proposed). Auto Mode uses this to
     /// decide whether it's safe to let the model keep going past this proposal.</summary>
@@ -92,9 +105,22 @@ public sealed partial class EditProposalViewModel : ObservableObject
             return;
         }
 
-        DiffLines = new ObservableCollection<DiffLine>(DiffComputer.Compute(_originalContentSnapshot, resultingContent));
+        var diff = DiffComputer.Compute(_originalContentSnapshot, resultingContent);
+        DiffLines = new ObservableCollection<DiffLine>(diff);
+
+        var before = CountLines(_originalContentSnapshot);
+        var after = CountLines(resultingContent);
+        ChangeSummary =
+            $"+{diff.Count(l => l.Kind == DiffLineKind.Added)} "
+            + $"-{diff.Count(l => l.Kind == DiffLineKind.Removed)} "
+            + $"({before} -> {after} lines)";
+        IsLargeDeletion = before > 0 && after * 2 < before;
+
         IsComplete = true;
     }
+
+    private static int CountLines(string text) =>
+        text.Length == 0 ? 0 : text.Replace("\r\n", "\n").Split('\n').Length;
 
     private bool CanDecide() => IsComplete && !IsDecided;
 

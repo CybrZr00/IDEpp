@@ -135,9 +135,36 @@
                                MaxHeight="120"
                                Visibility="{Binding IsComplete, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
 
-                    <ItemsControl ItemsSource="{Binding DiffLines}"
-                                  Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
-                                  MaxHeight="240" />
+                    <TextBlock Text="{Binding ChangeSummary}"
+                               Margin="0,2,0,4"
+                               Padding="3,1"
+                               FontFamily="Consolas"
+                               FontSize="11"
+                               Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsLargeDeletion}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource DiffRemovedBackgroundBrush}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+                                        <Setter Property="FontWeight" Value="Bold" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
+                    <!-- ItemsControl has no ScrollViewer in its default template, so a bare
+                         MaxHeight clipped the diff instead of scrolling it - for any file longer
+                         than a few lines the changed region sat below the clip, which made this
+                         review gate unable to show the very thing it exists to catch. -->
+                    <ScrollViewer MaxHeight="240"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <ItemsControl ItemsSource="{Binding DiffLines}" />
+                    </ScrollViewer>
 
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,6,0,0"
