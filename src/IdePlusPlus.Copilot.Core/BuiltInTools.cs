@@ -22,7 +22,15 @@ public static class BuiltInTools
         .. SymbolTools.All,
     ];
 
-    private static readonly HashSet<string> Names = All.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+    /// <summary>
+    /// Tools the IDE implements but does not always offer. run_command is opt-in per session, so it
+    /// is absent from <see cref="All"/> - but routing must still recognise it, or a call made while
+    /// it was enabled would be forwarded to MCP as an unknown tool.
+    /// </summary>
+    public static IReadOnlyList<ToolDefinition> OptIn { get; } = [.. ShellTools.All];
+
+    private static readonly HashSet<string> Names =
+        All.Concat(OptIn).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
     public static bool IsBuiltIn(string toolName) => Names.Contains(toolName);
 }

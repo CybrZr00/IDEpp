@@ -104,6 +104,9 @@ public partial class App : Application
         mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
+
+        _serviceProvider.GetRequiredService<CopilotChatPaneViewModel>().ShellCommandApprovalPrompt =
+            (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
         _ = mcpServerManager.ReconnectAllAsync();
 
         mainWindow.Show();
@@ -140,6 +143,33 @@ public partial class App : Application
              the file changes.
              """,
             "IDE++ - run this solution's MCP servers?",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        return result == MessageBoxResult.Yes;
+    }
+
+    /// <summary>
+    /// Asks before the copilot runs a shell command. The command line is shown verbatim and never
+    /// summarized: the exact text is the only thing worth consenting to, and a paraphrase of it is
+    /// precisely how something unwanted gets waved through. Defaults to No.
+    /// </summary>
+    private static bool ConfirmShellCommand(Window owner, string command, string reason)
+    {
+        var result = MessageBox.Show(
+            owner,
+            $"""
+             The AI assistant wants to run a command on your machine:
+
+             {command}
+
+             Its reason: {reason}
+
+             It runs as you, in the solution directory, with your permissions. Only allow it if the
+             command above is something you would be willing to run yourself.
+             """,
+            "IDE++ - run this command?",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);

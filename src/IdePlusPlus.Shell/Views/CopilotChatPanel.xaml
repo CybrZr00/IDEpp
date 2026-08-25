@@ -321,6 +321,12 @@
                           FontSize="11"
                           Margin="12,0,0,0"
                           ToolTip="Accepts edit proposals automatically instead of waiting for Accept/Reject" />
+                <CheckBox Content="Shell"
+                          IsChecked="{Binding AreShellCommandsEnabled}"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Margin="12,0,0,0"
+                          ToolTip="Lets the assistant propose PowerShell commands. You confirm each distinct command before it runs." />
             </StackPanel>
             <TextBlock Text="📝 Plan Mode is on - investigating and proposing a plan, no edits yet"
                        FontSize="10"
@@ -334,6 +340,12 @@
                        Margin="0,2,0,0"
                        TextWrapping="Wrap"
                        Visibility="{Binding IsAutoMode, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+            <TextBlock Text="⚠ Shell is on - the assistant can propose commands to run on this machine. You confirm each one."
+                       FontSize="10"
+                       Foreground="OrangeRed"
+                       Margin="0,2,0,0"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding AreShellCommandsEnabled, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
 
             <!-- The one thing that actually answers "is it still working, or has it silently died?" -
                  an indeterminate spinner plus what it's doing right now, visible for the whole

@@ -35,6 +35,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const string LmStudioModelSettingKey = "LmStudioChatModel";
     private const string EffortSettingKey = "ChatEffort";
     private const string AutoModeSettingKey = "ChatAutoMode";
+    private const string ShellCommandsSettingKey = "ChatShellCommands";
     private const string PlanModeSettingKey = "ChatPlanMode";
 
     /// <summary>Public so SettingsViewModel can read/write the same key - re-read fresh on every
@@ -83,6 +84,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// killing a nearly-finished suite wastes more than it saves.</summary>
     private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(10);
 
+    /// <summary>Shorter than the build and test timeouts on purpose: those are known-slow
+    /// operations, an ad-hoc command that runs for two minutes is usually one that is stuck.</summary>
+    private static readonly TimeSpan ShellCommandTimeout = TimeSpan.FromMinutes(2);
+
     private const int CodebaseSearchTopK = 5;
 
     // Raised from 8 once iterations started doing verification work. Eight was sized for a loop
@@ -115,6 +120,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly BuildService _buildService;
     private readonly TestRunService _testRunService;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
+    private readonly ShellCommandRunner _shellCommandRunner = new();
+
+    /// <summary>Commands the user has already approved this session, so an agentic loop that runs
+    /// the same command twice asks once. Keyed on the exact command text - a different command is a
+    /// different decision.</summary>
+    private readonly HashSet<string> _approvedCommands = new(StringComparer.Ordinal);
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
@@ -163,6 +174,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             ? savedEffort
             : ChatEffort.None;
         isAutoMode = bool.TryParse(_appSettingsStore.Get(AutoModeSettingKey), out var savedAutoMode) && savedAutoMode;
+        areShellCommandsEnabled =
+            bool.TryParse(_appSettingsStore.Get(ShellCommandsSettingKey), out var savedShell) && savedShell;
         isPlanMode = bool.TryParse(_appSettingsStore.Get(PlanModeSettingKey), out var savedPlanMode) && savedPlanMode;
 
         AvailableModels = [];
@@ -198,6 +211,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// not gated.</summary>
     [ObservableProperty]
     private bool isAutoMode;
+
+    /// <summary>Off unless the user turns it on, and reset is their call - this is the only tool
+    /// that can run arbitrary code, so it should never be on because it was on last time by
+    /// accident. Persisted like the other toggles, but see the warning banner beside it.</summary>
+    [ObservableProperty]
+    private bool areShellCommandsEnabled;
 
     /// <summary>When on, the model gets propose_plan instead of propose_edit and is instructed to
     /// investigate and present a plan rather than touch any files - propose_edit only becomes
@@ -249,6 +268,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     public string TokenUsageText => TotalPromptTokens + TotalCompletionTokens > 0
         ? $"Tokens: {TotalPromptTokens:N0} in / {TotalCompletionTokens:N0} out"
         : "";
+
+    /// <summary>
+    /// Asked before each distinct run_command, with the exact command line and the model's stated
+    /// reason. Unset, nothing runs - an unattended process must not approve arbitrary code on the
+    /// user's behalf, the same rule McpServerManager's project-trust prompt follows.
+    /// </summary>
+    public Func<string, string, Task<bool>>? ShellCommandApprovalPrompt { get; set; }
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
@@ -603,6 +629,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
+            case ShellTools.RunCommandToolName:
+                return await RunShellCommandAsync(
+                    arguments?["command"]?.GetValue<string>(),
+                    arguments?["reason"]?.GetValue<string>(),
+                    cancellationToken);
+
             case SymbolTools.FindSymbolToolName:
                 var symbolName = arguments?["name"]?.GetValue<string>();
                 return symbolName is null
@@ -744,6 +776,74 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
+    }
+
+    /// <summary>
+    /// Runs an arbitrary command, once the user has said so.
+    ///
+    /// The confirmation is the whole safety model, so it is per distinct command rather than a
+    /// blanket "shell: on". A model that reads a hostile README can propose anything it likes; what
+    /// it cannot do is run it without the exact command line being shown to a person first.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunShellCommandAsync(
+        string? command, string? reason, CancellationToken cancellationToken)
+    {
+        if (!AreShellCommandsEnabled)
+        {
+            return (true, "Shell commands are turned off. The user can enable them in the Copilot Chat pane.");
+        }
+
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return (true, "run_command requires a 'command' argument.");
+        }
+
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is no directory to run a command in.");
+        }
+
+        if (!_approvedCommands.Contains(command))
+        {
+            if (ShellCommandApprovalPrompt is not { } prompt)
+            {
+                return (true, "Shell commands cannot be approved in this session, so nothing was run.");
+            }
+
+            if (!await prompt(command, reason ?? "(no reason given)"))
+            {
+                return (true,
+                    "The user declined to run that command. Do not try to run it again, or work around "
+                    + "the refusal with a different command that does the same thing - explain what you "
+                    + "wanted it for instead.");
+            }
+
+            _approvedCommands.Add(command);
+        }
+
+        ShellCommandResult result;
+        try
+        {
+            result = await _shellCommandRunner.RunAsync(
+                command, _solutionDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Could not run the command: {ex.Message}");
+        }
+
+        if (result.TimedOut)
+        {
+            return (true,
+                $"The command was still running after {ShellCommandTimeout.TotalMinutes:0} minute(s) and was "
+                + $"stopped.{(result.Output.Length > 0 ? $" Output so far:\n{result.Output}" : "")}");
+        }
+
+        var header = result.ExitCode == 0
+            ? "Command succeeded (exit code 0)."
+            : $"Command FAILED with exit code {result.ExitCode}.";
+
+        return (false, result.Output.Length > 0 ? $"{header}\n\n{result.Output}" : $"{header} (no output)");
     }
 
     private async Task<(bool IsError, string Text)> RunFindSymbolAsync(
@@ -1124,6 +1224,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
         tools.AddRange(BuiltInTools.All);
+        if (AreShellCommandsEnabled)
+        {
+            tools.AddRange(BuiltInTools.OptIn);
+        }
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
         tools.AddRange(_pluginChatToolRegistry.GetToolDefinitions());
 
@@ -1474,6 +1578,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     partial void OnSelectedEffortChanged(ChatEffort value) => _appSettingsStore.Set(EffortSettingKey, value.ToString());
 
     partial void OnIsAutoModeChanged(bool value) => _appSettingsStore.Set(AutoModeSettingKey, value.ToString());
+
+    partial void OnAreShellCommandsEnabledChanged(bool value)
+    {
+        _appSettingsStore.Set(ShellCommandsSettingKey, value.ToString());
+
+        // Turning it off drops the approvals too, so re-enabling later starts from a clean slate
+        // rather than silently inheriting decisions made in a different context.
+        if (!value)
+        {
+            _approvedCommands.Clear();
+        }
+    }
 
     partial void OnIsPlanModeChanged(bool value) => _appSettingsStore.Set(PlanModeSettingKey, value.ToString());
 

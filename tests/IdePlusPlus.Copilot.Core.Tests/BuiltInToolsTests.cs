@@ -56,6 +56,27 @@ public class BuiltInToolsTests
         names.ShouldNotContain("propose_plan");
     }
 
+    /// <summary>run_command is opt-in, so it must be absent from the always-offered list but still
+    /// route as built-in - otherwise a call made while it was enabled would be forwarded to MCP as
+    /// an unknown tool.</summary>
+    [Fact]
+    public void OptInTools_AreRoutableButNotAlwaysOffered()
+    {
+        BuiltInTools.All.ShouldNotContain(t => t.Name == ShellTools.RunCommandToolName);
+        BuiltInTools.OptIn.ShouldContain(t => t.Name == ShellTools.RunCommandToolName);
+        BuiltInTools.IsBuiltIn(ShellTools.RunCommandToolName).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void OptInTools_HaveDescriptionsAndObjectSchemasToo()
+    {
+        foreach (var tool in BuiltInTools.OptIn)
+        {
+            tool.Description.ShouldNotBeNullOrWhiteSpace();
+            tool.ParametersSchema["type"]!.GetValue<string>().ShouldBe("object");
+        }
+    }
+
     [Fact]
     public void IsBuiltIn_ForAnMcpStyleQualifiedName_IsFalse()
     {
