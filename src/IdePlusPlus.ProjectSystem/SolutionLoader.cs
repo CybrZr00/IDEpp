@@ -4,23 +4,47 @@ namespace IdePlusPlus.ProjectSystem;
 
 public static class SolutionLoader
 {
+    private static readonly object RegistrationLock = new();
     private static bool _msBuildRegistered;
 
     /// <summary>
     /// Must run before any code in the process touches a Microsoft.Build.* type — the CLR
     /// resolves a method's referenced assemblies when that method is first JIT'd, which for
     /// unrelated code can happen before this call if it isn't made early (e.g. as the first
-    /// line of App.OnStartup). Safe to call more than once.
+    /// line of App.OnStartup). Safe to call more than once, and from more than one thread.
+    ///
+    /// <para>The thread-safety is not incidental. RegisterDefaults throws if MSBuild is already
+    /// registered, and the previous check-then-set had no lock: two callers could both read the
+    /// flag as false and the loser would take an InvalidOperationException. That is reachable
+    /// wherever two threads can reach this at once - xUnit runs test classes in parallel, and more
+    /// than one of them calls in here - and it fails intermittently, which is the worst way for it
+    /// to fail.</para>
+    ///
+    /// <para>IsRegistered is checked as well as the local flag because registration is process-wide
+    /// while the flag is per-class: another component (RoslynScratchSolutionFixture keeps its own
+    /// equivalent bool) may have registered already, and this must not throw because of it.</para>
     /// </summary>
     public static void EnsureMSBuildRegistered()
     {
-        if (_msBuildRegistered)
+        if (Volatile.Read(ref _msBuildRegistered))
         {
             return;
         }
 
-        MSBuildLocator.RegisterDefaults();
-        _msBuildRegistered = true;
+        lock (RegistrationLock)
+        {
+            if (_msBuildRegistered)
+            {
+                return;
+            }
+
+            if (!MSBuildLocator.IsRegistered)
+            {
+                MSBuildLocator.RegisterDefaults();
+            }
+
+            Volatile.Write(ref _msBuildRegistered, true);
+        }
     }
 
     public static SolutionTreeNode Load(string solutionPath)
