@@ -474,7 +474,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
 
             var solutionDirectory = Path.GetDirectoryName(solutionPath);
-            CopilotChat.SetSolutionDirectory(solutionDirectory);
+            CopilotChat.SetSolutionContext(solutionPath, solutionDirectory, () => Configuration);
             _ = SourceControl.SetRepositoryDirectoryAsync(solutionDirectory);
 
             // Picks up a project-local .ideplusplus/copilot/mcp-servers.json, if the solution has one.

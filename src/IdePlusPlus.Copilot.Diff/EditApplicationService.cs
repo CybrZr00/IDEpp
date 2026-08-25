@@ -59,6 +59,27 @@ public sealed class EditApplicationService
     public string? TryGetUnsavedText(string fullPath) =>
         FindOpenDocument(fullPath) is { IsDirty: true } document ? document.TextDocument.Text : null;
 
+    /// <summary>
+    /// Writes every open document with unsaved changes to disk, returning the paths written.
+    ///
+    /// An applied edit to an open file only mutates its buffer - nothing here writes it out - but a
+    /// build compiles disk. Without this, a build started straight after an edit reports errors
+    /// against source the agent has already fixed, and misses the ones it has just introduced,
+    /// which is worse than no build feedback at all. Untitled documents are skipped: there is
+    /// nowhere to write them and they are not part of any project.
+    /// </summary>
+    public IReadOnlyList<string> SaveDirtyDocuments()
+    {
+        var saved = new List<string>();
+        foreach (var document in _editorWorkspace.OpenDocuments.Where(d => d is { IsDirty: true, FilePath: not null }).ToList())
+        {
+            _editorWorkspace.Save(document);
+            saved.Add(document.FilePath!);
+        }
+
+        return saved;
+    }
+
     public string GetCurrentContent(string fullPath)
     {
         var openDocument = FindOpenDocument(fullPath);

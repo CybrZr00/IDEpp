@@ -21,7 +21,7 @@ public class BuiltInToolsTests
     }
 
     [Fact]
-    public void All_IncludesBothTheWorkspaceAndGitTools()
+    public void All_IncludesTheWorkspaceGitAndBuildTools()
     {
         var names = BuiltInTools.All.Select(t => t.Name).ToList();
 
@@ -30,6 +30,7 @@ public class BuiltInToolsTests
         names.ShouldContain(WorkspaceTools.SearchCodebaseToolName);
         names.ShouldContain(GitTools.DiffToolName);
         names.ShouldContain(GitTools.StatusToolName);
+        names.ShouldContain(BuildTools.BuildToolName);
     }
 
     [Fact]

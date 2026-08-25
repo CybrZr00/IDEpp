@@ -1,12 +1,13 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Diff;
-using IdePlusPlus.SourceControl;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Mcp;
@@ -15,6 +16,7 @@ using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Shell;
+using IdePlusPlus.SourceControl;
 using Serilog;
 
 namespace IdePlusPlus.Shell.ToolPanes;
@@ -66,6 +68,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "and if you have changed it, do re-read it, because every line number below the edit has moved.\n" +
         "- Keep narration short. One line on what you're doing beats a paragraph on what you're about to do.";
 
+    /// <summary>Long enough for a cold build of a large solution, short enough that a wedged one
+    /// doesn't hold the conversation open indefinitely.</summary>
+    private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(5);
+
     private const int CodebaseSearchTopK = 5;
     private const int MaxToolLoopIterations = 8;
 
@@ -90,10 +96,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly McpServerManager _mcpServerManager;
     private readonly PluginChatToolRegistry _pluginChatToolRegistry;
     private readonly GitService _gitService;
+    private readonly BuildService _buildService;
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
     private string? _solutionDirectory;
+    private string? _solutionPath;
+    private Func<string>? _currentConfiguration;
     private IReadOnlyList<string> _indexableFiles = [];
     private CancellationTokenSource? _streamCancellation;
 
@@ -107,7 +116,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         CodebaseIndexService codebaseIndexService,
         McpServerManager mcpServerManager,
         PluginChatToolRegistry pluginChatToolRegistry,
-        GitService gitService)
+        GitService gitService,
+        BuildService buildService)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -121,6 +131,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _mcpServerManager = mcpServerManager;
         _pluginChatToolRegistry = pluginChatToolRegistry;
         _gitService = gitService;
+        _buildService = buildService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -218,8 +229,17 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
-    public void SetSolutionDirectory(string? directory)
+    /// <summary>
+    /// The open solution, as the copilot's tools need to see it.
+    ///
+    /// A directory alone was enough while every tool only read files. Building needs the solution
+    /// file itself, and the configuration the user has selected - which they can change at any
+    /// time, hence a callback rather than a snapshot taken at solution load.
+    /// </summary>
+    public void SetSolutionContext(string? solutionPath, string? directory, Func<string>? currentConfiguration)
     {
+        _solutionPath = solutionPath;
+        _currentConfiguration = currentConfiguration;
         _solutionDirectory = directory;
         if (directory is not null)
         {
@@ -548,6 +568,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case GitTools.StatusToolName:
                 return await RunGitStatusAsync(cancellationToken);
 
+            case BuildTools.BuildToolName:
+                return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
+
             default:
                 return (true, $"Unknown built-in tool '{call.Name}'.");
         }
@@ -599,6 +622,125 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return (false, output.Length == 0 ? "Working tree clean." : Cap(output, GitTools.MaxOutputChars, "status"));
+    }
+
+    /// <summary>
+    /// Builds and reports back what the compiler said.
+    ///
+    /// Unsaved documents are written out first. An applied edit to an open file only touches its
+    /// buffer, and the compiler reads disk - so without saving, the build describes source the
+    /// agent has already changed. That is worse than no build at all, because it looks authoritative.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunBuildAsync(
+        string? project, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null || _solutionPath is null)
+        {
+            return (true, "No solution is open, so there is nothing to build.");
+        }
+
+        var target = _solutionPath;
+        if (!string.IsNullOrWhiteSpace(project))
+        {
+            if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, project) is not { } projectPath)
+            {
+                return (true, $"Refused: '{project}' resolves outside the open solution directory.");
+            }
+
+            if (!File.Exists(projectPath))
+            {
+                return (true, $"Project not found: {project}");
+            }
+
+            target = projectPath;
+        }
+
+        if (_buildService.IsRunning)
+        {
+            return (true, "A build is already running - wait for it to finish before starting another.");
+        }
+
+        var saved = _dispatcher.Invoke(_editApplicationService.SaveDirtyDocuments);
+
+        var configuration = _currentConfiguration?.Invoke() ?? "Debug";
+        var outputLines = new List<string>();
+
+        // The tool loop's only cancellation is the Stop button, so a wedged build would otherwise
+        // hang the conversation indefinitely. Safe to enforce now that cancelling actually kills
+        // the process tree.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(BuildTimeout);
+
+        int exitCode;
+        try
+        {
+            exitCode = await _buildService.BuildAsync(
+                target, line => { lock (outputLines) { outputLines.Add(line); } },
+                configuration: configuration, cancellationToken: timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return (true, $"The build was still running after {BuildTimeout.TotalMinutes:0} minutes and was stopped.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (true, ex.Message);
+        }
+
+        return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
+    }
+
+    private static string FormatBuildReport(
+        int exitCode, string configuration, IReadOnlyList<string> saved, List<string> outputLines)
+    {
+        var diagnostics = outputLines
+            .Select(BuildDiagnosticParser.TryParse)
+            .OfType<BuildDiagnostic>()
+            .ToList();
+
+        var errors = diagnostics.Where(d => d.Severity == BuildDiagnosticSeverity.Error).ToList();
+        var warnings = diagnostics.Where(d => d.Severity == BuildDiagnosticSeverity.Warning).ToList();
+
+        var report = new StringBuilder();
+        report.Append(exitCode == 0 ? $"Build succeeded ({configuration})." : $"Build FAILED ({configuration}), exit code {exitCode}.");
+        report.Append($" {errors.Count} error(s), {warnings.Count} warning(s).");
+
+        if (saved.Count > 0)
+        {
+            report.Append($" Saved {saved.Count} file(s) with unsaved changes first.");
+        }
+
+        // Errors first and in full; warnings only fill whatever room is left, since a build that
+        // failed is about its errors.
+        var reported = errors.Concat(warnings).Take(BuildTools.MaxReportedDiagnostics).ToList();
+        foreach (var diagnostic in reported)
+        {
+            var severity = diagnostic.Severity == BuildDiagnosticSeverity.Error ? "error" : "warning";
+            report.Append(
+                $"\n{diagnostic.FilePath}({diagnostic.Line},{diagnostic.Column}): {severity} {diagnostic.Code}: {diagnostic.Message}");
+        }
+
+        if (diagnostics.Count > reported.Count)
+        {
+            report.Append($"\n\n[{diagnostics.Count - reported.Count} more diagnostic(s) not shown]");
+        }
+
+        // BuildDiagnosticParser only matches MSBuild's "path(line,col): severity CODE:" form, so a
+        // failure from MSBuild itself (MSB####), the SDK (NETSDK####), or a missing project parses
+        // to nothing at all. Falling back to the raw tail is what keeps those from being reported
+        // as "0 errors" on a failed build.
+        if (exitCode != 0 && errors.Count == 0)
+        {
+            var raw = string.Join("\n", outputLines.TakeLast(60));
+            if (raw.Length > BuildTools.MaxRawOutputChars)
+            {
+                raw = raw[^BuildTools.MaxRawOutputChars..];
+            }
+
+            report.Append($"\n\nNo compiler diagnostics were parsed. Raw build output (tail):\n{raw}");
+        }
+
+        return report.ToString();
     }
 
     /// <summary>Length reported from the original text, not the cut copy, so the notice says how

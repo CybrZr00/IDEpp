@@ -12,7 +12,8 @@ namespace IdePlusPlus.Copilot.Core;
 /// </summary>
 public static class BuiltInTools
 {
-    public static IReadOnlyList<ToolDefinition> All { get; } = [.. WorkspaceTools.All, .. GitTools.All];
+    public static IReadOnlyList<ToolDefinition> All { get; } =
+        [.. WorkspaceTools.All, .. GitTools.All, .. BuildTools.All];
 
     private static readonly HashSet<string> Names = All.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
