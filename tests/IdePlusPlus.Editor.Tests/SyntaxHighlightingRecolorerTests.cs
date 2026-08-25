@@ -11,10 +11,19 @@ namespace IdePlusPlus.Editor.Tests;
 /// a third-party library (that a built-in HighlightingColor's Foreground can be reassigned after the
 /// definition is loaded). If that assumption is ever wrong, this is what will catch it, rather than
 /// the app silently falling back to the original low-contrast palette at runtime.
+///
+/// Because that shared definition really is process-wide state, each test snapshots the shipped
+/// palette on construction and restores it on disposal - see BuiltInHighlightingPalette - so no test
+/// here observes another's recoloring as its own starting point.
 /// </summary>
-public sealed class SyntaxHighlightingRecolorerTests
+[Collection(BuiltInHighlightingCollection.Name)]
+public sealed class SyntaxHighlightingRecolorerTests : IDisposable
 {
     private static readonly Color DarkEditorBackground = Color.FromRgb(30, 30, 30);
+
+    private readonly BuiltInHighlightingPalette shippedPalette = BuiltInHighlightingPalette.Capture();
+
+    public void Dispose() => shippedPalette.Restore();
 
     [Fact]
     public void ApplyTheme_OnDarkBackground_RecolorsAtLeastOneBuiltInCSharpToken()
