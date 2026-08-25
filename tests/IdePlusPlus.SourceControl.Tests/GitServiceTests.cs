@@ -248,6 +248,126 @@ public sealed class GitServiceTests : IDisposable
         log.Trim().ShouldBe(message);
     }
 
+    // --- Diff and short status: what the copilot uses to check its own edits ---
+
+    [Fact]
+    public async Task GetDiffAsync_ForAModifiedTrackedFile_ShowsTheChange()
+    {
+        CommitInitialFile();
+        WriteFile("hello.txt", "changed content");
+
+        var (success, output) = await _gitService.GetDiffAsync(_repositoryDirectory);
+
+        success.ShouldBeTrue();
+        output.ShouldContain("-committed content");
+        output.ShouldContain("+changed content");
+    }
+
+    [Fact]
+    public async Task GetDiffAsync_WithNoChanges_SucceedsWithEmptyOutput()
+    {
+        CommitInitialFile();
+
+        var (success, output) = await _gitService.GetDiffAsync(_repositoryDirectory);
+
+        success.ShouldBeTrue();
+        output.ShouldBeEmpty();
+    }
+
+    /// <summary>The distinction GetStatusAsync cannot make: an empty diff and a failed diff must
+    /// not look the same, or the model reads "git is broken" as "nothing changed".</summary>
+    [Fact]
+    public async Task GetDiffAsync_OutsideARepository_FailsRatherThanReturningEmpty()
+    {
+        var notARepository = Path.Combine(Path.GetTempPath(), $"ideplusplus-notgit-{Guid.NewGuid()}");
+        Directory.CreateDirectory(notARepository);
+        _extraDirectoriesToClean.Add(notARepository);
+
+        var (success, output) = await _gitService.GetDiffAsync(notARepository);
+
+        success.ShouldBeFalse();
+        output.ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public async Task GetDiffAsync_LimitedToAPath_ExcludesOtherFiles()
+    {
+        CommitInitialFile();
+        WriteFile("other.txt", "other");
+        RunGit("add", "other.txt");
+        RunGit("commit", "-m", "Add other");
+        WriteFile("hello.txt", "changed content");
+        WriteFile("other.txt", "other changed");
+
+        var (_, output) = await _gitService.GetDiffAsync(_repositoryDirectory, "hello.txt");
+
+        output.ShouldContain("hello.txt");
+        output.ShouldNotContain("other.txt");
+    }
+
+    [Fact]
+    public async Task GetDiffAsync_Unstaged_DoesNotShowStagedChanges()
+    {
+        CommitInitialFile();
+        WriteFile("hello.txt", "changed content");
+        RunGit("add", "hello.txt");
+
+        var (_, unstaged) = await _gitService.GetDiffAsync(_repositoryDirectory);
+        var (_, staged) = await _gitService.GetDiffAsync(_repositoryDirectory, staged: true);
+
+        unstaged.ShouldBeEmpty();
+        staged.ShouldContain("+changed content");
+    }
+
+    /// <summary>Worth pinning because it is the one blind spot the tool description has to warn
+    /// about: a brand-new file the model just created shows up nowhere in a diff.</summary>
+    [Fact]
+    public async Task GetDiffAsync_DoesNotShowUntrackedFiles()
+    {
+        CommitInitialFile();
+        WriteFile("brand-new.txt", "new file");
+
+        var (_, output) = await _gitService.GetDiffAsync(_repositoryDirectory);
+
+        output.ShouldNotContain("brand-new.txt");
+    }
+
+    [Fact]
+    public async Task GetShortStatusAsync_ListsModifiedAndUntrackedFiles()
+    {
+        CommitInitialFile();
+        WriteFile("hello.txt", "changed content");
+        WriteFile("brand-new.txt", "new file");
+
+        var (success, output) = await _gitService.GetShortStatusAsync(_repositoryDirectory);
+
+        success.ShouldBeTrue();
+        output.ShouldContain("hello.txt");
+        output.ShouldContain("brand-new.txt");
+    }
+
+    [Fact]
+    public async Task GetShortStatusAsync_IncludesTheBranchName()
+    {
+        CommitInitialFile();
+
+        var (_, output) = await _gitService.GetShortStatusAsync(_repositoryDirectory);
+
+        output.ShouldContain("main");
+    }
+
+    [Fact]
+    public async Task GetShortStatusAsync_OutsideARepository_Fails()
+    {
+        var notARepository = Path.Combine(Path.GetTempPath(), $"ideplusplus-notgit-{Guid.NewGuid()}");
+        Directory.CreateDirectory(notARepository);
+        _extraDirectoriesToClean.Add(notARepository);
+
+        var (success, _) = await _gitService.GetShortStatusAsync(notARepository);
+
+        success.ShouldBeFalse();
+    }
+
     private void CommitInitialFile()
     {
         WriteFile("hello.txt", "committed content");

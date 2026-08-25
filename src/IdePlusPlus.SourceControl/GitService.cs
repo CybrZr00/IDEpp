@@ -85,6 +85,47 @@ public sealed class GitService
         return success ? stdOut : "";
     }
 
+    /// <summary>
+    /// Unified diff of the working tree, or of the index against HEAD when <paramref name="staged"/>
+    /// is set. Optionally limited to one path.
+    ///
+    /// Returns the exit status alongside the output rather than swallowing failure the way
+    /// GetStatusAsync does - a caller cannot otherwise tell "no changes" from "git blew up", and
+    /// both come back as an empty string. Note that a diff never shows untracked files; use
+    /// GetShortStatusAsync to see those.
+    /// </summary>
+    public async Task<(bool Success, string Output)> GetDiffAsync(
+        string repositoryDirectory,
+        string? relativePath = null,
+        bool staged = false,
+        CancellationToken cancellationToken = default)
+    {
+        List<string> arguments = ["diff"];
+        if (staged)
+        {
+            arguments.Add("--staged");
+        }
+
+        if (!string.IsNullOrWhiteSpace(relativePath))
+        {
+            arguments.Add("--");
+            arguments.Add(relativePath);
+        }
+
+        var (success, stdOut, stdErr) = await RunRawAsync(repositoryDirectory, arguments, cancellationToken);
+        return (success, success ? stdOut : stdErr);
+    }
+
+    /// <summary>Short branch-and-changes summary, in git's own `status --short` form. Includes
+    /// untracked files, which a diff does not.</summary>
+    public async Task<(bool Success, string Output)> GetShortStatusAsync(
+        string repositoryDirectory, CancellationToken cancellationToken = default)
+    {
+        var (success, stdOut, stdErr) = await RunRawAsync(
+            repositoryDirectory, ["status", "--short", "--branch"], cancellationToken);
+        return (success, success ? stdOut : stdErr);
+    }
+
     private static async Task<GitCommandResult> RunAsync(
         string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {

@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.SourceControl;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Mcp;
@@ -88,6 +89,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly McpServerManager _mcpServerManager;
     private readonly PluginChatToolRegistry _pluginChatToolRegistry;
+    private readonly GitService _gitService;
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
@@ -104,7 +106,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         ChatHistoryStore chatHistoryStore,
         CodebaseIndexService codebaseIndexService,
         McpServerManager mcpServerManager,
-        PluginChatToolRegistry pluginChatToolRegistry)
+        PluginChatToolRegistry pluginChatToolRegistry,
+        GitService gitService)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -117,6 +120,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _codebaseIndexService = codebaseIndexService;
         _mcpServerManager = mcpServerManager;
         _pluginChatToolRegistry = pluginChatToolRegistry;
+        _gitService = gitService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -491,7 +495,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return (pluginResult.IsError, pluginResult.Text);
         }
 
-        if (!WorkspaceTools.IsWorkspaceTool(call.Name!))
+        // Routed off the same list that was sent to the model, so a built-in tool can never be
+        // advertised and then quietly forwarded to MCP as an unknown tool.
+        if (!BuiltInTools.IsBuiltIn(call.Name!))
         {
             var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), cancellationToken);
             return (mcpResult.IsError, mcpResult.Text);
@@ -533,10 +539,75 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     ? (false, "No matches found.")
                     : (false, string.Join("\n\n", hits.Select(c => $"// {c.FilePath}:{c.StartLine}-{c.EndLine}\n{c.Text}")));
 
+            case GitTools.DiffToolName:
+                return await RunGitDiffAsync(
+                    arguments?["path"]?.GetValue<string>(),
+                    arguments?["staged"]?.GetValue<bool>() ?? false,
+                    cancellationToken);
+
+            case GitTools.StatusToolName:
+                return await RunGitStatusAsync(cancellationToken);
+
             default:
-                return (true, $"Unknown workspace tool '{call.Name}'.");
+                return (true, $"Unknown built-in tool '{call.Name}'.");
         }
     }
+
+    private async Task<(bool IsError, string Text)> RunGitDiffAsync(
+        string? path, bool staged, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is no repository to diff.");
+        }
+
+        // The model chooses this path, so it gets the same containment treatment as a read.
+        if (path is not null && WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, path) is null)
+        {
+            return (true, $"Refused: '{path}' resolves outside the open solution directory.");
+        }
+
+        var (success, output) = await _gitService.GetDiffAsync(
+            _solutionDirectory, path, staged, cancellationToken);
+
+        if (!success)
+        {
+            return (true, $"git diff failed: {output}");
+        }
+
+        if (output.Length == 0)
+        {
+            return (false, staged
+                ? "No staged changes."
+                : "No unstaged changes. Note that a diff never lists untracked files - use git_status for those.");
+        }
+
+        return (false, Cap(output, GitTools.MaxOutputChars, "diff"));
+    }
+
+    private async Task<(bool IsError, string Text)> RunGitStatusAsync(CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is no repository to inspect.");
+        }
+
+        var (success, output) = await _gitService.GetShortStatusAsync(_solutionDirectory, cancellationToken);
+        if (!success)
+        {
+            return (true, $"git status failed: {output}");
+        }
+
+        return (false, output.Length == 0 ? "Working tree clean." : Cap(output, GitTools.MaxOutputChars, "status"));
+    }
+
+    /// <summary>Length reported from the original text, not the cut copy, so the notice says how
+    /// much there actually was.</summary>
+    private static string Cap(string text, int maxChars, string what) =>
+        text.Length <= maxChars
+            ? text
+            : text[..maxChars] + $"\n\n[truncated - the {what} is {text.Length} chars, showing the first {maxChars}. "
+                                 + "Pass a 'path' to narrow it down.]";
 
     /// <summary>Shared by both the plugin-tool and workspace-tool branches of <see cref="ExecuteToolAsync"/> -
     /// empty/whitespace arguments (a tool with no parameters) parse to null rather than failing.</summary>
@@ -567,7 +638,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var routeByIndex = new Dictionary<int, ToolCallRoute>();
 
         var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
-        tools.AddRange(WorkspaceTools.All);
+        tools.AddRange(BuiltInTools.All);
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
         tools.AddRange(_pluginChatToolRegistry.GetToolDefinitions());
 
