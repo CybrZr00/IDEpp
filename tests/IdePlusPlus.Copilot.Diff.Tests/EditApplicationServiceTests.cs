@@ -17,6 +17,9 @@ public class EditApplicationServiceTests
     private static EditOperation ReplaceRange(int? startLine, int? endLine, string newText) =>
         new("Foo.cs", "replace_range", startLine, endLine, newText);
 
+    private static EditOperation ReplaceText(string? oldText, string newText) =>
+        new("Foo.cs", "replace_text", null, null, newText, oldText);
+
     /// <summary>Asserts the operation is accepted and returns the resulting content.</summary>
     private static string Compute(EditOperation operation, string currentContent)
     {
@@ -125,6 +128,85 @@ public class EditApplicationServiceTests
         var result = Compute(ReplaceRange(1, 1, "first"), "");
 
         result.ShouldBe("first");
+    }
+
+    // --- replace_text: the anchored mode that cannot go stale ---
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_SwapsTheMatchedSnippet()
+    {
+        Compute(ReplaceText("var x = 1;", "var x = 2;"), "a\nvar x = 1;\nb")
+            .ShouldBe("a\nvar x = 2;\nb");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_CanSpanSeveralLines()
+    {
+        Compute(ReplaceText("b\nc", "B\nC\nD"), "a\nb\nc\nd").ShouldBe("a\nB\nC\nD\nd");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_CanReplaceAPartialLine()
+    {
+        Compute(ReplaceText("World", "There"), "Hello World!").ShouldBe("Hello There!");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_CanDeleteBySupplyingEmptyNewText()
+    {
+        Compute(ReplaceText("b\n", ""), "a\nb\nc").ShouldBe("a\nc");
+    }
+
+    /// <summary>Unlike a stale line range, a stale anchor fails visibly instead of deleting to the
+    /// end of the file. That difference is the entire point of this mode.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_WhenTheAnchorNoLongerMatches_IsRefused()
+    {
+        Refuse(ReplaceText("var x = 1;", "var x = 2;"), "a\nvar y = 9;\nb")
+            .ShouldContain("not found");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_WhenTheAnchorIsAmbiguous_IsRefused()
+    {
+        Refuse(ReplaceText("return;", "return null;"), "return;\nx\nreturn;")
+            .ShouldContain("2 times");
+    }
+
+    /// <summary>Overlapping matches are ambiguous too - counting non-overlapping only would let
+    /// "aa" against "aaa" through as a single confident match.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_CountsOverlappingMatchesAsAmbiguous()
+    {
+        Refuse(ReplaceText("aa", "b"), "aaa").ShouldContain("2 times");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_WithoutOldText_IsRefused()
+    {
+        Refuse(ReplaceText(null, "x"), "a\nb").ShouldContain("old_text");
+    }
+
+    /// <summary>An empty anchor matches at every position; treating it as "replace nothing" or
+    /// "replace everything" would both be guesses.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_WithEmptyOldText_IsRefused()
+    {
+        Refuse(ReplaceText("", "x"), "a\nb").ShouldContain("old_text");
+    }
+
+    /// <summary>The model sends LF; the file on disk may be CRLF. Matching must not depend on that.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_MatchesAcrossLineEndingStyles()
+    {
+        Compute(ReplaceText("b\nc", "X"), "a\r\nb\r\nc\r\nd").ShouldBe("a\nX\nd");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceText_RefusalMessageSaysHowToDisambiguate()
+    {
+        Refuse(ReplaceText("return;", "return null;"), "return;\nx\nreturn;")
+            .ShouldContain("more surrounding lines");
     }
 
     // --- Range validation: the paths that used to truncate silently ---

@@ -56,9 +56,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "a turn having only described an edit: a plan written as chat text changes nothing, and the turn " +
         "does not resume itself.\n" +
         "- Make changes by calling propose_edit - once per file, and several times in one turn when " +
-        "several files change. Prefer replace_range with the line numbers read_file shows over restating " +
-        "a whole file.\n" +
-        "- Don't re-read a file you already read in this conversation unless you've changed it since.\n" +
+        "several files change. Prefer mode replace_text, quoting the exact snippet to replace: it does " +
+        "not depend on line numbers, so it cannot be thrown off by an earlier edit. Use replace_range " +
+        "only with line numbers you know are current, and whole_file only for a file you are creating.\n" +
+        "- Never abbreviate a file with a placeholder such as \"... rest of file unchanged ...\". " +
+        "Whatever you send is written to disk exactly as given.\n" +
+        "- Don't re-read a file you already read in this conversation unless you've changed it since - " +
+        "and if you have changed it, do re-read it, because every line number below the edit has moved.\n" +
         "- Keep narration short. One line on what you're doing beats a paragraph on what you're about to do.";
 
     private const int CodebaseSearchTopK = 5;

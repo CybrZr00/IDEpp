@@ -85,7 +85,14 @@ public sealed class EditApplicationService
             return true;
         }
 
-        var lines = currentContent.Replace("\r\n", "\n").Split('\n').ToList();
+        var normalizedContent = currentContent.Replace("\r\n", "\n");
+
+        if (operation.IsReplaceText)
+        {
+            return TryReplaceText(operation, normalizedContent, out result, out error);
+        }
+
+        var lines = normalizedContent.Split('\n').ToList();
 
         if (operation.StartLine is not { } startLine || operation.EndLine is not { } endLine)
         {
@@ -122,6 +129,69 @@ public sealed class EditApplicationService
         result = string.Join("\n", lines);
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// Swaps one exact snippet for another, requiring it to appear exactly once.
+    ///
+    /// This is the mode that cannot go stale. Line numbers are a reference into a file that the
+    /// previous edit already moved, and nothing renumbers between edits in a turn - an anchor is a
+    /// reference into the content itself, so it either still matches or it visibly does not. Zero
+    /// matches and several matches are both refused rather than resolved by picking one: the whole
+    /// class of bug being fixed here is an edit that guessed and reported success.
+    /// </summary>
+    private static bool TryReplaceText(
+        EditOperation operation, string normalizedContent, out string result, out string? error)
+    {
+        result = "";
+
+        if (operation.OldText is not { Length: > 0 } rawOldText)
+        {
+            error = "replace_text requires a non-empty old_text: the exact snippet to replace, "
+                    + "copied from read_file without the line-number prefixes.";
+            return false;
+        }
+
+        var oldText = rawOldText.Replace("\r\n", "\n");
+        var occurrences = CountOccurrences(normalizedContent, oldText);
+
+        if (occurrences == 0)
+        {
+            error = "old_text was not found in the file. Copy it verbatim from read_file, without "
+                    + "the leading line-number prefixes, and check the file has not changed since "
+                    + "you read it.";
+            return false;
+        }
+
+        if (occurrences > 1)
+        {
+            error = $"old_text appears {occurrences} times in the file, so it is ambiguous. Include "
+                    + "more surrounding lines to make it match exactly one place.";
+            return false;
+        }
+
+        var index = normalizedContent.IndexOf(oldText, StringComparison.Ordinal);
+        result = string.Concat(
+            normalizedContent.AsSpan(0, index),
+            operation.NewText.Replace("\r\n", "\n"),
+            normalizedContent.AsSpan(index + oldText.Length));
+        error = null;
+        return true;
+    }
+
+    /// <summary>Counts overlapping occurrences too - an anchor that matches "aa" twice inside "aaa"
+    /// is ambiguous in exactly the way this needs to catch.</summary>
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0;
+             i = haystack.IndexOf(needle, i + 1, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>

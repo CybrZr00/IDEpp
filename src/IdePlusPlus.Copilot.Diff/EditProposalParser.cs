@@ -73,7 +73,8 @@ public sealed class EditProposalParser
 
             var startLine = node!["start_line"]?.GetValue<int>();
             var endLine = node["end_line"]?.GetValue<int>();
-            return new EditOperation(file, mode, startLine, endLine, newText);
+            var oldText = node["old_text"]?.GetValue<string>();
+            return new EditOperation(file, mode, startLine, endLine, newText, oldText);
         }
         catch (Exception)
         {
