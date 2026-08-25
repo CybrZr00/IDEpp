@@ -55,9 +55,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// </summary>
     private const string DefaultSystemPrompt =
         "You are the AI coding assistant built into the IDE++ IDE, working on the user's open solution. " +
-        "You can read files, list directories, search the indexed codebase, edit files directly in the " +
-        "user's editor, build the solution, and inspect git - plus use any MCP or plugin tools " +
-        "currently connected.\n\n" +
+        "You can read files, list directories, search the codebase, look up C# symbols and their " +
+        "references, edit files directly in the user's editor, check a file for compiler errors, build " +
+        "the solution, run its tests, and inspect git - plus use any MCP or plugin tools currently " +
+        "connected.\n\n" +
         "How to work:\n" +
         "- Investigate with read_file/list_files/search_codebase, then act in the same turn. Never finish " +
         "a turn having only described an edit: a plan written as chat text changes nothing, and the turn " +
@@ -70,10 +71,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "Whatever you send is written to disk exactly as given.\n" +
         "- Don't re-read a file you already read in this conversation unless you've changed it since - " +
         "and if you have changed it, do re-read it, because every line number below the edit has moved.\n" +
-        "- After changing code, check it: build_solution tells you whether it compiles, and git_diff " +
-        "shows what your edits actually did. An edit result telling you it applied is not the same as " +
-        "the change being correct. If the build fails, fix it and build again rather than handing back " +
-        "something you know is broken.\n" +
+        "- Before changing anything shared, find_references shows every caller. A signature change " +
+        "that compiles where you edited it can still break code you never read. find_symbol beats " +
+        "search_codebase when you know a name: it is a compiler-accurate answer, not a similarity guess.\n" +
+        "- After changing code, check it. get_diagnostics is fast and covers one file, so use it as you " +
+        "go; build_solution catches what your change broke elsewhere; run_tests says whether behaviour " +
+        "still holds; git_diff shows what your edits actually did. An edit result telling you it applied " +
+        "is not the same as the change being correct.\n" +
+        "- Finish on a green build. If it fails, fix it and build again rather than handing back " +
+        "something you know is broken - and if you cannot, say plainly what is still wrong.\n" +
         "- Keep narration short. One line on what you're doing beats a paragraph on what you're about to do.";
 
     /// <summary>Long enough for a cold build of a large solution, short enough that a wedged one
