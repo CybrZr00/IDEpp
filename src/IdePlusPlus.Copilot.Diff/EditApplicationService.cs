@@ -11,6 +11,10 @@ public enum ApplyResult
     /// <summary>The target resolved outside the open solution directory, or no solution is open.
     /// Nothing was written.</summary>
     OutsideWorkspace,
+
+    /// <summary>The operation's start_line/end_line do not fit the file as it currently stands.
+    /// Nothing was written.</summary>
+    InvalidRange,
 }
 
 /// <summary>
@@ -54,20 +58,70 @@ public sealed class EditApplicationService
         return File.Exists(fullPath) ? File.ReadAllText(fullPath) : "";
     }
 
-    public static string ComputeResultingContent(EditOperation operation, string currentContent)
+    /// <summary>
+    /// Computes what the file becomes, or fails with a message the caller can show and the model
+    /// can act on.
+    ///
+    /// This replaced a pair of Math.Clamp calls that turned every bad range into a silent
+    /// truncation. start_line/end_line are required only in propose_edit's prose - JSON Schema
+    /// cannot express "required when mode is replace_range" in a form every provider honours - so
+    /// an omitted end_line arrived as null, clamped to the line count, and deleted from start_line
+    /// to EOF while still reporting success. Omitting both replaced the whole file with the
+    /// fragment. A stale end_line did the same: in a multi-edit Auto Mode turn nothing renumbers a
+    /// file after the previous edit, so the second edit's numbers are routinely out of date.
+    ///
+    /// There is deliberately no lenient fallback. Guessing at what the model meant is precisely
+    /// what made the original data loss invisible.
+    /// </summary>
+    public static bool TryComputeResultingContent(
+        EditOperation operation, string currentContent, out string result, out string? error)
     {
+        result = "";
+
         if (operation.IsWholeFile)
         {
-            return operation.NewText;
+            result = operation.NewText;
+            error = null;
+            return true;
         }
 
         var lines = currentContent.Replace("\r\n", "\n").Split('\n').ToList();
-        var startIndex = Math.Clamp((operation.StartLine ?? 1) - 1, 0, lines.Count);
-        var endIndex = Math.Clamp(operation.EndLine ?? lines.Count, startIndex, lines.Count);
 
-        lines.RemoveRange(startIndex, endIndex - startIndex);
-        lines.InsertRange(startIndex, operation.NewText.Replace("\r\n", "\n").Split('\n'));
-        return string.Join("\n", lines);
+        if (operation.StartLine is not { } startLine || operation.EndLine is not { } endLine)
+        {
+            error = "replace_range requires both start_line and end_line. Use the 1-based line "
+                    + "numbers shown by read_file, and pass the same value for both to replace a "
+                    + "single line.";
+            return false;
+        }
+
+        if (startLine < 1 || startLine > lines.Count)
+        {
+            error = $"start_line {startLine} is outside the file, which has {lines.Count} line(s). "
+                    + "Re-read the file for current line numbers - they shift after every edit.";
+            return false;
+        }
+
+        if (endLine < startLine)
+        {
+            error = $"end_line {endLine} is before start_line {startLine}. end_line is inclusive, "
+                    + "so it must be greater than or equal to start_line.";
+            return false;
+        }
+
+        if (endLine > lines.Count)
+        {
+            error = $"end_line {endLine} is past the end of the file, which has {lines.Count} "
+                    + "line(s). Re-read the file for current line numbers - they shift after "
+                    + "every edit.";
+            return false;
+        }
+
+        lines.RemoveRange(startLine - 1, endLine - startLine + 1);
+        lines.InsertRange(startLine - 1, operation.NewText.Replace("\r\n", "\n").Split('\n'));
+        result = string.Join("\n", lines);
+        error = null;
+        return true;
     }
 
     /// <summary>
@@ -92,7 +146,11 @@ public sealed class EditApplicationService
             return ApplyResult.Conflict;
         }
 
-        var newContent = ComputeResultingContent(operation, currentContent);
+        if (!TryComputeResultingContent(operation, currentContent, out var newContent, out _))
+        {
+            return ApplyResult.InvalidRange;
+        }
+
         var openDocument = FindOpenDocument(fullPath);
         if (openDocument is not null)
         {

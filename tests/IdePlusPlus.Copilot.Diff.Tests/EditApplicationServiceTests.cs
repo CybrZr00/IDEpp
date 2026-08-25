@@ -14,69 +14,89 @@ public class EditApplicationServiceTests
     private static EditOperation WholeFile(string newText) =>
         new("Foo.cs", "whole_file", null, null, newText);
 
-    private static EditOperation ReplaceRange(int startLine, int endLine, string newText) =>
+    private static EditOperation ReplaceRange(int? startLine, int? endLine, string newText) =>
         new("Foo.cs", "replace_range", startLine, endLine, newText);
 
-    [Fact]
-    public void ComputeResultingContent_WholeFile_ReturnsTheNewTextVerbatim()
+    /// <summary>Asserts the operation is accepted and returns the resulting content.</summary>
+    private static string Compute(EditOperation operation, string currentContent)
     {
-        var result = EditApplicationService.ComputeResultingContent(WholeFile("only line"), "a\nb\nc");
+        EditApplicationService
+            .TryComputeResultingContent(operation, currentContent, out var result, out var error)
+            .ShouldBeTrue($"expected success but got: {error}");
+        return result;
+    }
+
+    /// <summary>Asserts the operation is refused and returns the message.</summary>
+    private static string Refuse(EditOperation operation, string currentContent)
+    {
+        EditApplicationService
+            .TryComputeResultingContent(operation, currentContent, out var result, out var error)
+            .ShouldBeFalse();
+        result.ShouldBe("");
+        error.ShouldNotBeNullOrWhiteSpace();
+        return error!;
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_WholeFile_ReturnsTheNewTextVerbatim()
+    {
+        var result = Compute(WholeFile("only line"), "a\nb\nc");
 
         result.ShouldBe("only line");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_ReplacesJustTheInclusiveRange()
+    public void TryComputeResultingContent_ReplaceRange_ReplacesJustTheInclusiveRange()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(2, 3, "B\nC"), "a\nb\nc\nd");
+        var result = Compute(ReplaceRange(2, 3, "B\nC"), "a\nb\nc\nd");
 
         result.ShouldBe("a\nB\nC\nd");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_WithStartEqualToEnd_ReplacesASingleLine()
+    public void TryComputeResultingContent_ReplaceRange_WithStartEqualToEnd_ReplacesASingleLine()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(2, 2, "B"), "a\nb\nc");
+        var result = Compute(ReplaceRange(2, 2, "B"), "a\nb\nc");
 
         result.ShouldBe("a\nB\nc");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_CanGrowTheFile()
+    public void TryComputeResultingContent_ReplaceRange_CanGrowTheFile()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(2, 2, "B1\nB2\nB3"), "a\nb\nc");
+        var result = Compute(ReplaceRange(2, 2, "B1\nB2\nB3"), "a\nb\nc");
 
         result.ShouldBe("a\nB1\nB2\nB3\nc");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_CanShrinkTheFile()
+    public void TryComputeResultingContent_ReplaceRange_CanShrinkTheFile()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(2, 4, "B"), "a\nb\nc\nd\ne");
+        var result = Compute(ReplaceRange(2, 4, "B"), "a\nb\nc\nd\ne");
 
         result.ShouldBe("a\nB\ne");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_ReplacingTheFirstLine()
+    public void TryComputeResultingContent_ReplaceRange_ReplacingTheFirstLine()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(1, 1, "A"), "a\nb\nc");
+        var result = Compute(ReplaceRange(1, 1, "A"), "a\nb\nc");
 
         result.ShouldBe("A\nb\nc");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_ReplacingTheLastLine()
+    public void TryComputeResultingContent_ReplaceRange_ReplacingTheLastLine()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(3, 3, "C"), "a\nb\nc");
+        var result = Compute(ReplaceRange(3, 3, "C"), "a\nb\nc");
 
         result.ShouldBe("a\nb\nC");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_SpanningTheWholeFile()
+    public void TryComputeResultingContent_ReplaceRange_SpanningTheWholeFile()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(1, 3, "x"), "a\nb\nc");
+        var result = Compute(ReplaceRange(1, 3, "x"), "a\nb\nc");
 
         result.ShouldBe("x");
     }
@@ -84,27 +104,91 @@ public class EditApplicationServiceTests
     /// <summary>Line endings are normalized to LF on both sides, so an edit to a CRLF file rewrites
     /// the whole file's endings. Pinned as current behaviour, not endorsed as correct.</summary>
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_NormalizesCrlfInTheExistingContent()
+    public void TryComputeResultingContent_ReplaceRange_NormalizesCrlfInTheExistingContent()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(2, 2, "B"), "a\r\nb\r\nc");
+        var result = Compute(ReplaceRange(2, 2, "B"), "a\r\nb\r\nc");
 
         result.ShouldBe("a\nB\nc");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_NormalizesCrlfInTheNewText()
+    public void TryComputeResultingContent_ReplaceRange_NormalizesCrlfInTheNewText()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(2, 2, "B1\r\nB2"), "a\nb\nc");
+        var result = Compute(ReplaceRange(2, 2, "B1\r\nB2"), "a\nb\nc");
 
         result.ShouldBe("a\nB1\nB2\nc");
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_OnAnEmptyFile_ProducesJustTheNewText()
+    public void TryComputeResultingContent_ReplaceRange_OnAnEmptyFile_ProducesJustTheNewText()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(1, 1, "first"), "");
+        var result = Compute(ReplaceRange(1, 1, "first"), "");
 
         result.ShouldBe("first");
+    }
+
+    // --- Range validation: the paths that used to truncate silently ---
+
+    /// <summary>The headline case. A null end_line clamped to the line count, so the edit deleted
+    /// from start_line to EOF and still reported success.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithoutEndLine_IsRefusedRatherThanDeletingToEof()
+    {
+        Refuse(ReplaceRange(2, null, "B"), "a\nb\nc\nd\ne").ShouldContain("end_line");
+    }
+
+    /// <summary>Worse than the above: both null clamped to 0..count, replacing the entire file
+    /// with whatever fragment the model sent.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithNeitherLineNumber_IsRefusedRatherThanReplacingTheFile()
+    {
+        Refuse(ReplaceRange(null, null, "B"), "a\nb\nc\nd\ne").ShouldContain("start_line");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithoutStartLine_IsRefused()
+    {
+        Refuse(ReplaceRange(null, 3, "B"), "a\nb\nc").ShouldContain("start_line");
+    }
+
+    /// <summary>The stale-line-number case: a multi-edit turn renumbers nothing, so the second
+    /// edit's end_line routinely points past a file the first edit shortened.</summary>
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithEndLinePastTheFile_IsRefused()
+    {
+        Refuse(ReplaceRange(2, 99, "B"), "a\nb\nc").ShouldContain("99");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithStartLinePastTheFile_IsRefused()
+    {
+        Refuse(ReplaceRange(50, 60, "B"), "a\nb\nc").ShouldContain("50");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithEndLineBeforeStartLine_IsRefused()
+    {
+        Refuse(ReplaceRange(3, 2, "B"), "a\nb\nc").ShouldContain("before");
+    }
+
+    [Fact]
+    public void TryComputeResultingContent_ReplaceRange_WithAZeroStartLine_IsRefused()
+    {
+        Refuse(ReplaceRange(0, 1, "B"), "a\nb\nc").ShouldContain("start_line");
+    }
+
+    /// <summary>whole_file carries no line numbers, so validation must not reject it.</summary>
+    [Fact]
+    public void TryComputeResultingContent_WholeFile_IsUnaffectedByTheAbsentLineNumbers()
+    {
+        Compute(WholeFile("replacement"), "a\nb\nc").ShouldBe("replacement");
+    }
+
+    /// <summary>Refusals are written for the model to act on, not just for a log line.</summary>
+    [Fact]
+    public void TryComputeResultingContent_RefusalMessage_TellsTheModelToReReadTheFile()
+    {
+        Refuse(ReplaceRange(2, 99, "B"), "a\nb\nc").ShouldContain("Re-read the file");
     }
 
     // --- ResolveWithinWorkspace: the write path's containment check ---
@@ -165,9 +249,9 @@ public class EditApplicationServiceTests
     }
 
     [Fact]
-    public void ComputeResultingContent_ReplaceRange_PreservesATrailingBlankLine()
+    public void TryComputeResultingContent_ReplaceRange_PreservesATrailingBlankLine()
     {
-        var result = EditApplicationService.ComputeResultingContent(ReplaceRange(1, 1, "A"), "a\nb\n");
+        var result = Compute(ReplaceRange(1, 1, "A"), "a\nb\n");
 
         result.ShouldBe("A\nb\n");
     }

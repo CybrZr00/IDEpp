@@ -80,7 +80,18 @@ public sealed partial class EditProposalViewModel : ObservableObject
 
         _originalContentSnapshot = _applicationService.GetCurrentContent(_fullPath);
 
-        var resultingContent = EditApplicationService.ComputeResultingContent(_operation, _originalContentSnapshot);
+        // A range that doesn't fit the file is refused here rather than diffed. Previously it was
+        // clamped, so the proposal that reached this point - and the diff the user reviewed - was
+        // already the truncated version.
+        if (!EditApplicationService.TryComputeResultingContent(
+                _operation, _originalContentSnapshot, out var resultingContent, out var rangeError))
+        {
+            IsComplete = true;
+            IsDecided = true;
+            DecisionText = $"Refused - {rangeError}";
+            return;
+        }
+
         DiffLines = new ObservableCollection<DiffLine>(DiffComputer.Compute(_originalContentSnapshot, resultingContent));
         IsComplete = true;
     }
@@ -98,6 +109,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
         {
             ApplyResult.Applied => "Accepted",
             ApplyResult.OutsideWorkspace => "Refused - this path is outside the open solution.",
+            ApplyResult.InvalidRange => "Refused - the line range no longer fits the file.",
             _ => "Couldn't apply - the file changed since this was proposed.",
         };
     }
