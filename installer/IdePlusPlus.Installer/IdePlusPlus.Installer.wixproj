@@ -1,0 +1,52 @@
+<Project Sdk="WixToolset.Sdk/7.0.0">
+
+  <PropertyGroup>
+    <!-- Installers are a "build me a release" action, not part of the fast inner dev loop - unlike
+         every other project here, this one is deliberately Release-by-default and deliberately not
+         referenced by IdePlusPlus.slnx, so an ordinary `dotnet build`/`dotnet test` on the main
+         solution never triggers a self-contained publish. Build this one directly:
+         dotnet build installer\IdePlusPlus.Installer\IdePlusPlus.Installer.wixproj -c Release -->
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <Platform>x64</Platform>
+    <OutputName>IdePlusPlus-Setup</OutputName>
+
+    <!-- WiX v7 requires explicitly accepting the Open Source Maintenance Fee EULA to build at all -
+         see https://docs.firegiant.com/wix/osmf/. Free unless this project's WiX usage specifically
+         earns over $10,000/year, which doesn't apply here; committed (not accepted per-machine) so
+         anyone building this repo, including CI, needs no separate manual step. -->
+    <AcceptEula>wix7</AcceptEula>
+
+    <ProductVersion>1.0.0</ProductVersion>
+    <AppProjectPath>$(MSBuildThisFileDirectory)..\..\src\IdePlusPlus.App\IdePlusPlus.App.csproj</AppProjectPath>
+    <AppRuntimeIdentifier>win-x64</AppRuntimeIdentifier>
+    <AppPublishDir>$(MSBuildThisFileDirectory)bin\app-publish\$(AppRuntimeIdentifier)\</AppPublishDir>
+
+    <DefineConstants>ProductVersion=$(ProductVersion);AppPublishDir=$(AppPublishDir)</DefineConstants>
+
+    <!-- ICE38/ICE64/ICE91 are the well-known trio of "advertised install" self-repair/cleanup rules
+         from MSI's managed-deployment era (Group Policy software install, install-on-first-use) that
+         a straightforward perUser desktop-app installer with harvested file components routinely
+         trips, and routinely suppresses - not validation generally, just these three. See e.g.
+         https://github.com/wixtoolset/issues/issues/8633. -->
+    <SuppressIces>ICE38;ICE64;ICE91</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" />
+  </ItemGroup>
+
+  <!--
+    Publishes IdePlusPlus.App fresh before every build, so `dotnet build` on this project alone is a
+    complete, self-contained "produce today's installer" command - nothing to run by hand first, and
+    no risk of harvesting a stale publish output left over from a previous run.
+
+    Self-contained (bundles the .NET runtime, so a clean machine needs nothing preinstalled) but
+    deliberately NOT single-file: this app loads plugins via MEF/System.Composition and Roslyn's own
+    assembly-resolution, both of which are exactly the kind of reflection-heavy behavior that single-file
+    publishing (and trimming, also left off) is prone to breaking.
+  -->
+  <Target Name="PublishAppForInstaller" BeforeTargets="CoreCompile">
+    <Exec Command="dotnet publish &quot;$(AppProjectPath)&quot; -c Release -r $(AppRuntimeIdentifier) --self-contained true -p:PublishSingleFile=false -o &quot;$(AppPublishDir)&quot;" />
+  </Target>
+
+</Project>
