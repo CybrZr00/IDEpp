@@ -40,8 +40,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly Dispatcher _dispatcher;
 
-    private LaunchProfile? _currentLaunchProfile;
-    private bool _debugBrowserLaunched;
+    /// <summary>Each Action.Start entry's own launch profile, keyed by the DebugSession StartDebuggingAsync
+    /// started it under - not a single shared field, since a multi-project launch runs more than one
+    /// session at once and each needs its own "should this session's output auto-open a browser, and
+    /// with what settings" answer. Cleared and repopulated at the start of every StartDebuggingAsync.</summary>
+    private readonly Dictionary<DebugSession, LaunchProfile?> _launchProfilesBySession = [];
+
+    /// <summary>Sessions whose Kestrel "Now listening on" line has already triggered a browser launch -
+    /// per-session for the same reason _launchProfilesBySession is, so each project in a multi-project
+    /// launch gets its own browser tab once *it* is actually ready, instead of one shared flag letting
+    /// the first session to log its URL silently suppress every other session's launch.</summary>
+    private readonly HashSet<DebugSession> _browserLaunchedSessions = [];
+
     private SolutionTreeNode? _solutionRoot;
 
     /// <summary>Every named startup configuration saved for the current solution (see
@@ -123,10 +133,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // second session is running does output get a "[DisplayName] " prefix to stay distinguishable.
             Output.AppendLine(_debugSessionManager.Sessions.Count > 1 ? $"[{session.DisplayName}] {trimmed}" : trimmed);
 
-            if (!_debugBrowserLaunched && _currentLaunchProfile is { LaunchBrowser: true }
+            // Keyed by the specific session this line came from - not a single shared flag/profile -
+            // so a multi-project launch detects each project's own "Now listening on" independently,
+            // instead of the first session to log one silently consuming the only check that existed.
+            if (!_browserLaunchedSessions.Contains(session)
+                && _launchProfilesBySession.GetValueOrDefault(session) is { LaunchBrowser: true }
                 && KestrelUrlDetector.TryExtractListeningUrl(trimmed) is { } url)
             {
-                _debugBrowserLaunched = true;
+                _browserLaunchedSessions.Add(session);
                 BrowserLauncher.Open(url);
             }
         });
@@ -1005,7 +1019,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         var entries = ActiveConfiguration?.Entries.Where(e => e.Action != StartupAction.None).ToList() ?? [];
         var isSingleEntry = entries.Count == 1;
-        _debugBrowserLaunched = false;
+        _launchProfilesBySession.Clear();
+        _browserLaunchedSessions.Clear();
 
         foreach (var entry in entries)
         {
@@ -1030,17 +1045,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 continue;
             }
 
-            _currentLaunchProfile = LaunchSettingsLoader.Load(entry.ProjectPath, entry.LaunchProfileName);
+            var launchProfile = LaunchSettingsLoader.Load(entry.ProjectPath, entry.LaunchProfileName);
 
             Output.AppendLine($"Starting debugger: {dllPath}");
             try
             {
-                await _debugSessionManager.StartAsync(
+                var session = await _debugSessionManager.StartAsync(
                     NetcoredbgPath,
                     dllPath,
                     Path.GetDirectoryName(entry.ProjectPath)!,
-                    _currentLaunchProfile?.EnvironmentVariables,
-                    _currentLaunchProfile?.CommandLineArgs);
+                    launchProfile?.EnvironmentVariables,
+                    launchProfile?.CommandLineArgs);
+                _launchProfilesBySession[session] = launchProfile;
             }
             catch (Exception ex)
             {
