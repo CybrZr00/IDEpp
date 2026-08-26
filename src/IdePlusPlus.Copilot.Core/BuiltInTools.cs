@@ -21,6 +21,7 @@ public static class BuiltInTools
         .. DiagnosticTools.All,
         .. SymbolTools.All,
         .. SkillTools.All,
+        .. SubAgentTools.All,
     ];
 
     /// <summary>

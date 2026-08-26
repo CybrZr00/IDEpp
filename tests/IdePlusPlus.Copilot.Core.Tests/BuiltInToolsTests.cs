@@ -36,6 +36,7 @@ public class BuiltInToolsTests
         names.ShouldContain(SymbolTools.FindSymbolToolName);
         names.ShouldContain(SymbolTools.FindReferencesToolName);
         names.ShouldContain(SkillTools.ReadSkillToolName);
+        names.ShouldContain(SubAgentTools.InvestigateParallelToolName);
     }
 
     [Fact]
