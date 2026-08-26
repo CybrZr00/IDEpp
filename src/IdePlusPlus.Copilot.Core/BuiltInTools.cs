@@ -20,6 +20,7 @@ public static class BuiltInTools
         .. TestTools.All,
         .. DiagnosticTools.All,
         .. SymbolTools.All,
+        .. SkillTools.All,
     ];
 
     /// <summary>

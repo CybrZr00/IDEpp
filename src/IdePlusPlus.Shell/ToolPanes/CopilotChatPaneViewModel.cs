@@ -71,6 +71,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "several files change. Prefer mode replace_text, quoting the exact snippet to replace: it does " +
         "not depend on line numbers, so it cannot be thrown off by an earlier edit. Use replace_range " +
         "only with line numbers you know are current, and whole_file only for a file you are creating.\n" +
+        "- If the user asks you to remember a procedure, or you catch yourself re-explaining the same " +
+        "multi-step approach, save it once as a skill: propose_edit (mode whole_file) to " +
+        ".ideplusplus/copilot/skills/{short-name}.md, starting with a frontmatter block - " +
+        "\"---\\ndescription: one line\\n---\" - followed by the instructions. Saved skills are listed " +
+        "by name and description at the top of every conversation; call read_skill to load one's full " +
+        "body before following it.\n" +
         "- Never abbreviate a file with a placeholder such as \"... rest of file unchanged ...\". " +
         "Whatever you send is written to disk exactly as given.\n" +
         "- Don't re-read a file you already read in this conversation unless you've changed it since - " +
@@ -122,6 +128,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly AppSettingsStore _appSettingsStore;
     private readonly EditApplicationService _editApplicationService;
     private readonly ProjectMemoryStore _projectMemoryStore;
+    private readonly SkillStore _skillStore;
     private readonly ChatHistoryStore _chatHistoryStore;
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly McpServerManager _mcpServerManager;
@@ -158,6 +165,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         AppSettingsStore appSettingsStore,
         EditApplicationService editApplicationService,
         ProjectMemoryStore projectMemoryStore,
+        SkillStore skillStore,
         ChatHistoryStore chatHistoryStore,
         CodebaseIndexService codebaseIndexService,
         McpServerManager mcpServerManager,
@@ -174,6 +182,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _editApplicationService = editApplicationService;
         _workspaceFileReader = new WorkspaceFileReader(_editApplicationService.TryGetUnsavedText);
         _projectMemoryStore = projectMemoryStore;
+        _skillStore = skillStore;
         _chatHistoryStore = chatHistoryStore;
         _codebaseIndexService = codebaseIndexService;
         _mcpServerManager = mcpServerManager;
@@ -442,6 +451,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 history.Insert(0, new ChatMessage(
                     ChatRole.System, $"Project memory (persisted context from previous sessions):\n\n{memory}"));
             }
+
+            var skills = _skillStore.ListSkills(_solutionDirectory);
+            if (skills.Count > 0)
+            {
+                var catalog = string.Join("\n", skills.Select(s => $"- {s.Name}: {s.Description}"));
+                history.Insert(0, new ChatMessage(
+                    ChatRole.System,
+                    $"Saved skills (call read_skill with the name to load one's full instructions):\n\n{catalog}"));
+            }
         }
 
         if (IncludeCurrentFileContext && _currentDocument is { FilePath: { } path })
@@ -680,6 +698,22 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 return referenceName is null
                     ? (true, "find_references requires a 'name' argument.")
                     : await RunFindReferencesAsync(referenceName, cancellationToken);
+
+            case SkillTools.ReadSkillToolName:
+                var skillName = arguments?["name"]?.GetValue<string>();
+                if (_solutionDirectory is null)
+                {
+                    return (true, "No solution is open, so there are no skills to read.");
+                }
+                if (skillName is null)
+                {
+                    return (true, "read_skill requires a 'name' argument.");
+                }
+                var skillText = _skillStore.ReadSkill(_solutionDirectory, skillName);
+                return skillText is null
+                    ? (true, $"No skill named '{skillName}' was found. Check the catalog at the top of this "
+                             + "conversation for the exact name.")
+                    : (false, skillText);
 
             case DiagnosticTools.GetDiagnosticsToolName:
                 var diagnosticFile = arguments?["file"]?.GetValue<string>();
@@ -1453,13 +1487,30 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             proposal.Complete(proposalEvent, _solutionDirectory);
 
+            // A saved skill's raw text later gets injected straight into the model's own context as
+            // trusted instruction-shaped content (see PrependContextAsync/read_skill) - so unlike an
+            // ordinary code file, Auto Mode writing and auto-accepting a new one with nobody looking
+            // is a real risk, not just the ordinary case. Held back the same way a large deletion is.
+            var isSkillWrite = _solutionDirectory is not null
+                && proposal.TargetsPathUnder(SkillStore.SkillsDirectory(_solutionDirectory));
+
             // Auto Mode applies edits with nobody looking, which is fine for the ordinary case and
-            // not fine for an edit that removes most of a file - the exact shape silent truncation
-            // takes. Held for a human instead: the proposal stays undecided with its Accept button
-            // live, so confirming is one click rather than a re-run, and the model is told why.
+            // not fine for an edit that removes most of a file, or one that writes a skill - the
+            // proposal stays undecided with its Accept button live instead, so confirming is one
+            // click rather than a re-run, and the model is told why.
             if (IsAutoMode && !proposal.IsLargeDeletion)
             {
-                proposal.AcceptCommand.Execute(null);
+                if (isSkillWrite)
+                {
+                    proposal.ExplainHeldForManualReview(
+                        "this saves a skill, and a saved skill's text is read back into your own "
+                        + "context later - so unlike an ordinary edit, it needs a human to look at it "
+                        + "first");
+                }
+                else
+                {
+                    proposal.AcceptCommand.Execute(null);
+                }
             }
         }
         else

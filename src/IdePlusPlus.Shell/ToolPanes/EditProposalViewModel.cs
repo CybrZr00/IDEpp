@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Diff;
@@ -61,6 +62,39 @@ public sealed partial class EditProposalViewModel : ObservableObject
     /// false for a conflict (the file changed since this was proposed). Auto Mode uses this to
     /// decide whether it's safe to let the model keep going past this proposal.</summary>
     public bool WasApplied { get; private set; }
+
+    /// <summary>True once this proposal is complete and its resolved target lies inside the given
+    /// absolute directory - used to hold specific paths (e.g. saved skills) back from Auto Mode's
+    /// auto-accept regardless of IsLargeDeletion. Compared with a trailing separator so a
+    /// same-prefixed sibling directory can't pass as "inside".</summary>
+    public bool TargetsPathUnder(string absoluteDirectory)
+    {
+        if (_fullPath is null)
+        {
+            return false;
+        }
+
+        var normalizedDirectory = Path.GetFullPath(absoluteDirectory);
+        var withSeparator = normalizedDirectory.EndsWith(Path.DirectorySeparatorChar)
+            ? normalizedDirectory
+            : normalizedDirectory + Path.DirectorySeparatorChar;
+
+        return _fullPath.StartsWith(withSeparator, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Overrides the default "waiting for accept/reject" wording set by Complete() when a
+    /// proposal is deliberately held back from Auto Mode's auto-accept for a reason more specific
+    /// than IsLargeDeletion - explains why to the model, the same way the large-deletion wording
+    /// already does. A no-op once the proposal has already been decided.</summary>
+    public void ExplainHeldForManualReview(string reason)
+    {
+        if (!IsDecided)
+        {
+            ToolResultText =
+                $"Not applied yet: {reason}, so it is waiting for the user to confirm rather than "
+                + "being applied automatically.";
+        }
+    }
 
     /// <summary>The raw arguments the model sent, replayed into chat history so this appears as a
     /// real propose_edit tool call rather than something that happened off to the side.</summary>

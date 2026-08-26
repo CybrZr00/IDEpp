@@ -223,4 +223,61 @@ public class EditProposalViewModelTests : IDisposable
         proposal.WasApplied.ShouldBeTrue();
         File.ReadAllText(Path.Combine(_root, "Foo.cs")).ShouldBe("int a = 1;\nint b = 3;");
     }
+
+    [Fact]
+    public void TargetsPathUnder_ForAFileInsideTheGivenDirectory_IsTrue()
+    {
+        WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+
+        proposal.TargetsPathUnder(_root).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void TargetsPathUnder_ForAFileOutsideTheGivenDirectory_IsFalse()
+    {
+        WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+
+        proposal.TargetsPathUnder(Path.Combine(_root, "skills")).ShouldBeFalse();
+    }
+
+    /// <summary>A same-prefixed sibling ("skills-backup") must not pass as "inside skills" - the
+    /// same boundary WorkspaceFileReader.ResolveWithinRoot guards against for the workspace root
+    /// itself.</summary>
+    [Fact]
+    public void TargetsPathUnder_ForASimilarlyNamedSiblingDirectory_IsFalse()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "skills-backup"));
+        WriteFile("skills-backup/marker.md", "content");
+        var proposal = Complete(ReplaceRange("skills-backup/marker.md", 1, 1, "x"), _root);
+
+        proposal.TargetsPathUnder(Path.Combine(_root, "skills")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ExplainHeldForManualReview_OverridesTheWaitingMessageWithTheGivenReason()
+    {
+        WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+
+        proposal.ExplainHeldForManualReview("this saves a skill");
+
+        proposal.IsDecided.ShouldBeFalse();
+        proposal.ToolResultText.ShouldContain("Not applied yet");
+        proposal.ToolResultText.ShouldContain("this saves a skill");
+    }
+
+    [Fact]
+    public void ExplainHeldForManualReview_OnceAlreadyDecided_DoesNothing()
+    {
+        WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+        proposal.AcceptCommand.Execute(null);
+        var appliedText = proposal.ToolResultText;
+
+        proposal.ExplainHeldForManualReview("too late");
+
+        proposal.ToolResultText.ShouldBe(appliedText);
+    }
 }

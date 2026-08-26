@@ -35,6 +35,7 @@ public class BuiltInToolsTests
         names.ShouldContain(DiagnosticTools.GetDiagnosticsToolName);
         names.ShouldContain(SymbolTools.FindSymbolToolName);
         names.ShouldContain(SymbolTools.FindReferencesToolName);
+        names.ShouldContain(SkillTools.ReadSkillToolName);
     }
 
     [Fact]
