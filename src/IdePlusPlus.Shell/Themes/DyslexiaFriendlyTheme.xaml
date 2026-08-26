@@ -18,6 +18,11 @@
     <SolidColorBrush x:Key="DiffHighlightBackgroundBrush" Color="#F0D9A0" />
     <SolidColorBrush x:Key="EditProposalBackgroundBrush" Color="#F5EEDC" />
     <SolidColorBrush x:Key="EditProposalBorderBrush" Color="#E0D3B0" />
+    <!-- A muted violet accent, distinct from the neutral EditProposal brushes above - an adversarial
+         review is deliberately a second voice, not the primary agent's own tool output. Muted like
+         every other accent here, for the same lower-visual-noise reason. -->
+    <SolidColorBrush x:Key="ReviewBackgroundBrush" Color="#EFE3F0" />
+    <SolidColorBrush x:Key="ReviewBorderBrush" Color="#D6C0DA" />
     <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#EEE2C4" />
 
 </ResourceDictionary>

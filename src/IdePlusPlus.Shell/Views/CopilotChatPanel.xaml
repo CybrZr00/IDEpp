@@ -65,6 +65,36 @@
             </Border>
         </DataTemplate>
 
+        <!-- Deliberately its own visual identity (violet accent, no left/right alignment split) so
+             an adversarial review reads as a second voice looking at the work, not the primary
+             agent talking about itself the way a ChatMessageViewModel bubble would. -->
+        <DataTemplate DataType="{x:Type toolPanes:ReviewMessageViewModel}">
+            <Border Margin="4"
+                    Padding="8"
+                    CornerRadius="4"
+                    Background="{DynamicResource ReviewBackgroundBrush}"
+                    BorderBrush="{DynamicResource ReviewBorderBrush}"
+                    BorderThickness="1"
+                    HorizontalAlignment="Left"
+                    MaxWidth="480">
+                <StackPanel>
+                    <TextBlock Text="🔍 Independent review"
+                               FontSize="11"
+                               FontWeight="Bold"
+                               Margin="0,0,0,4"
+                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <mdxam:MarkdownScrollViewer Markdown="{Binding Text}"
+                                                MarkdownStyleName="SasabuneCompact"
+                                                Foreground="{DynamicResource WindowForegroundBrush}"
+                                                Background="{DynamicResource ReviewBackgroundBrush}"
+                                                BorderThickness="0"
+                                                Padding="0"
+                                                VerticalScrollBarVisibility="Disabled"
+                                                HorizontalScrollBarVisibility="Disabled" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
         <DataTemplate DataType="{x:Type diff:DiffLine}">
             <Border>
                 <Border.Style>
@@ -294,6 +324,11 @@
                           FontSize="11" />
                 <Button Content="Index Codebase" Command="{Binding IndexCodebaseCommand}" Margin="8,0,0,0" Padding="6,0" />
                 <Button Content="Save Memory" Command="{Binding SaveMemoryCommand}" Margin="4,0,0,0" Padding="6,0" />
+                <Button Content="Review"
+                        Command="{Binding ReviewLastChangeCommand}"
+                        Margin="4,0,0,0"
+                        Padding="6,0"
+                        ToolTip="Sends the current uncommitted diff to a fresh, independent model call for a second opinion" />
             </StackPanel>
             <TextBlock Text="{Binding IndexStatus}"
                        Margin="0,2,0,0"

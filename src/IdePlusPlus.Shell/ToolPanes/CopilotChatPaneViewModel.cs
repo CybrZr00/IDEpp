@@ -92,6 +92,22 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "something you know is broken - and if you cannot, say plainly what is still wrong.\n" +
         "- Keep narration short. One line on what you're doing beats a paragraph on what you're about to do.";
 
+    /// <summary>
+    /// One-off system prompt for ReviewLastChangeAsync's independent second opinion - deliberately
+    /// not DefaultSystemPrompt's job, since a reviewer that already believes it wrote the change
+    /// (and remembers deciding it was fine) is a much weaker check than one seeing the diff cold,
+    /// with no memory of the conversation that produced it.
+    /// </summary>
+    private const string AdversarialReviewSystemPrompt =
+        "You are an independent code reviewer for the IDE++ IDE. You did not write the change below " +
+        "and have no memory of the conversation that produced it - you are seeing only the request " +
+        "that prompted it and the resulting diff. Look for real problems: bugs, edge cases the diff " +
+        "doesn't handle, logic that contradicts the stated request, security issues, or anything else " +
+        "a careful reviewer would flag before merging. Be specific, citing the actual lines you're " +
+        "concerned about. If you genuinely find nothing wrong, say so plainly in one line rather than " +
+        "inventing issues to seem thorough - a false positive costs the same attention a real bug " +
+        "deserves.";
+
     /// <summary>Long enough for a cold build of a large solution, short enough that a wedged one
     /// doesn't hold the conversation open indefinitely.</summary>
     private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(5);
@@ -158,6 +174,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private IReadOnlyList<string> _indexableFiles = [];
     private IReadOnlyList<string> _testProjectPaths = [];
     private CancellationTokenSource? _streamCancellation;
+
+    /// <summary>The request that produced whatever is currently uncommitted, for
+    /// ReviewLastChangeAsync to hand to the reviewer as context. Tracked separately from Messages
+    /// rather than scanned for the last User-role entry, since synthetic markers this class itself
+    /// adds ("🔍 Review last change" and friends) are User-role messages too - scanning would pick
+    /// up its own marker on a second review click with nothing new sent in between.</summary>
+    private string? _lastUserRequestText;
 
     public CopilotChatPaneViewModel(
         OpenRouterChatClient openRouterClient,
@@ -346,6 +369,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         SaveMemoryCommand.NotifyCanExecuteChanged();
         IndexCodebaseCommand.NotifyCanExecuteChanged();
+        ReviewLastChangeCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>
@@ -396,6 +420,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var userText = InputText.Trim();
         InputText = "";
         StatusMessage = null;
+        _lastUserRequestText = userText;
 
         var userMessage = new ChatMessageViewModel(ChatRole.User) { Text = userText };
         Messages.Add(userMessage);
@@ -1565,6 +1590,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             Steps:
             {stepsList}
             """;
+        _lastUserRequestText = instruction;
 
         var history = Messages
             .OfType<ChatMessageViewModel>()
@@ -1625,6 +1651,94 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         Messages.Add(assistantMessage);
 
         await RunAssistantTurnsAsync(history, assistantMessage);
+    }
+
+    private bool CanReviewLastChange() => _solutionDirectory is not null && !IsStreaming;
+
+    /// <summary>
+    /// Sends the current uncommitted diff to a fresh, independently-prompted model call and renders
+    /// its critique as its own message type - a second opinion, not a continuation of the
+    /// conversation that produced the change. No tools are offered: a blind read of the diff is what
+    /// makes this v1, cheap to run on demand rather than after every edit.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanReviewLastChange))]
+    private async Task ReviewLastChangeAsync()
+    {
+        var solutionDirectory = _solutionDirectory!;
+
+        var (success, diff) = await _gitService.GetDiffAsync(solutionDirectory, null, staged: false, CancellationToken.None);
+        if (!success)
+        {
+            StatusMessage = $"Couldn't get a diff to review: {diff}";
+            return;
+        }
+
+        if (diff.Length == 0)
+        {
+            StatusMessage = "Nothing to review yet - there are no uncommitted changes.";
+            return;
+        }
+
+        Messages.Add(new ChatMessageViewModel(ChatRole.User) { Text = "🔍 Review last change" });
+        var reviewMessage = new ReviewMessageViewModel();
+        Messages.Add(reviewMessage);
+
+        var reviewHistory = new List<ChatMessage>
+        {
+            new(ChatRole.System, AdversarialReviewSystemPrompt),
+            new(ChatRole.User,
+                $"--- ORIGINAL REQUEST (context only) ---\n{_lastUserRequestText ?? "(not available)"}\n\n"
+                + $"--- DIFF TO REVIEW ---\n{Cap(diff, GitTools.MaxOutputChars, "diff")}"),
+        };
+
+        IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+
+        IsStreaming = true;
+        CurrentActivity = "Reviewing...";
+        _streamCancellation = new CancellationTokenSource();
+        try
+        {
+            await foreach (var streamEvent in client.StreamChatAsync(
+                reviewHistory, SelectedModel, tools: null, SelectedEffort, _streamCancellation.Token))
+            {
+                _dispatcher.Invoke(() =>
+                {
+                    switch (streamEvent)
+                    {
+                        case TextDelta delta:
+                            reviewMessage.Append(delta.Text);
+                            break;
+                        case StreamError error:
+                            reviewMessage.Append($"\n\n[error: {error.Message}]");
+                            break;
+                        case FinishReasonReceived { Reason: "length" }:
+                            reviewMessage.Append(
+                                "\n\n[response was cut off - it hit the model's output length limit before finishing]");
+                            break;
+                        case UsageReceived usage:
+                            TotalPromptTokens += usage.PromptTokens;
+                            TotalCompletionTokens += usage.CompletionTokens;
+                            break;
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Invoke(() => reviewMessage.Append("\n\n[cancelled]"));
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Adversarial review failed unexpectedly");
+            _dispatcher.Invoke(() => reviewMessage.Append($"\n\n[error: the review stopped unexpectedly - {ex.Message}]"));
+        }
+        finally
+        {
+            reviewMessage.IsComplete = true;
+            IsStreaming = false;
+            CurrentActivity = null;
+            _streamCancellation = null;
+        }
     }
 
     private bool CanIndexCodebase() => _solutionDirectory is not null && !IsIndexing && _indexableFiles.Count > 0;
@@ -1754,6 +1868,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         SendCommand.NotifyCanExecuteChanged();
         SaveMemoryCommand.NotifyCanExecuteChanged();
+        ReviewLastChangeCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnIsIndexingChanged(bool value) => IndexCodebaseCommand.NotifyCanExecuteChanged();
