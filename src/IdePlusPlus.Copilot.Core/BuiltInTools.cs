@@ -29,8 +29,15 @@ public static class BuiltInTools
     /// </summary>
     public static IReadOnlyList<ToolDefinition> OptIn { get; } = [.. ShellTools.All];
 
+    /// <summary>
+    /// Gated independently of <see cref="OptIn"/>'s AreShellCommandsEnabled toggle: fetch_url reaches
+    /// the network but can never run arbitrary code the way run_command can, so it has its own
+    /// AreWebFetchEnabled setting rather than riding on the shell-commands one.
+    /// </summary>
+    public static IReadOnlyList<ToolDefinition> WebOptIn { get; } = [.. WebTools.All];
+
     private static readonly HashSet<string> Names =
-        All.Concat(OptIn).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+        All.Concat(OptIn).Concat(WebOptIn).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
     public static bool IsBuiltIn(string toolName) => Names.Contains(toolName);
 }

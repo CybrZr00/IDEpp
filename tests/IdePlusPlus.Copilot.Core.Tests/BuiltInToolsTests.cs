@@ -77,6 +77,27 @@ public class BuiltInToolsTests
         }
     }
 
+    /// <summary>fetch_url is gated by its own AreWebFetchEnabled toggle, independent of OptIn's
+    /// AreShellCommandsEnabled - so it lives in its own list, but must still route as built-in for
+    /// the same reason run_command must.</summary>
+    [Fact]
+    public void WebOptInTools_AreRoutableButNotAlwaysOffered()
+    {
+        BuiltInTools.All.ShouldNotContain(t => t.Name == WebTools.FetchUrlToolName);
+        BuiltInTools.WebOptIn.ShouldContain(t => t.Name == WebTools.FetchUrlToolName);
+        BuiltInTools.IsBuiltIn(WebTools.FetchUrlToolName).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void WebOptInTools_HaveDescriptionsAndObjectSchemasToo()
+    {
+        foreach (var tool in BuiltInTools.WebOptIn)
+        {
+            tool.Description.ShouldNotBeNullOrWhiteSpace();
+            tool.ParametersSchema["type"]!.GetValue<string>().ShouldBe("object");
+        }
+    }
+
     [Fact]
     public void IsBuiltIn_ForAnMcpStyleQualifiedName_IsFalse()
     {

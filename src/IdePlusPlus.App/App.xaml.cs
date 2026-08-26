@@ -105,8 +105,11 @@ public partial class App : Application
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
 
-        _serviceProvider.GetRequiredService<CopilotChatPaneViewModel>().ShellCommandApprovalPrompt =
+        var copilotChatPane = _serviceProvider.GetRequiredService<CopilotChatPaneViewModel>();
+        copilotChatPane.ShellCommandApprovalPrompt =
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
+        copilotChatPane.WebFetchApprovalPrompt =
+            (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
         _ = mcpServerManager.ReconnectAllAsync();
 
         mainWindow.Show();
@@ -170,6 +173,34 @@ public partial class App : Application
              command above is something you would be willing to run yourself.
              """,
             "IDE++ - run this command?",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        return result == MessageBoxResult.Yes;
+    }
+
+    /// <summary>
+    /// Asked before the copilot fetches a new host. The URL is shown verbatim, same rationale as
+    /// ConfirmShellCommand - a paraphrase ("a documentation page") is not something anyone can
+    /// meaningfully consent to. Defaults to No.
+    /// </summary>
+    private static bool ConfirmWebFetch(Window owner, string url, string reason)
+    {
+        var result = MessageBox.Show(
+            owner,
+            $"""
+             The AI assistant wants to fetch a webpage:
+
+             {url}
+
+             Its reason: {reason}
+
+             Local, private-network, and cloud-metadata addresses are always refused regardless of this
+             prompt. Only allow it if you're comfortable with the assistant reading this page - remember
+             that whatever it says becomes part of the conversation.
+             """,
+            "IDE++ - fetch this page?",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);

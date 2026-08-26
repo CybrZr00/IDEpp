@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="HtmlAgilityPack" />
   </ItemGroup>
 
 </Project>
