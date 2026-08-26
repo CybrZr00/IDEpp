@@ -27,8 +27,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 {
     public const string PaneContentId = "CopilotChat";
 
-    private const string ProviderOpenRouter = "OpenRouter";
-    private const string ProviderLmStudio = "LM Studio";
+    // Public so ScheduledAutomationService/ScheduledAutomationsPaneViewModel can match a saved
+    // schedule's Provider string against the same two values, rather than duplicating them as a
+    // second pair of magic strings that could drift out of sync with these.
+    public const string ProviderOpenRouter = "OpenRouter";
+    public const string ProviderLmStudio = "LM Studio";
 
     private const string ProviderSettingKey = "ChatProvider";
     private const string OpenRouterModelSettingKey = "OpenRouterChatModel";
@@ -170,6 +173,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
     private readonly WebContentFetcher _webContentFetcher = new();
+    private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
 
     /// <summary>Commands the user has already approved this session, so an agentic loop that runs
     /// the same command twice asks once. Keyed on the exact command text - a different command is a
@@ -211,14 +215,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         GitService gitService,
         BuildService buildService,
         TestRunService testRunService,
-        RoslynWorkspaceService roslynWorkspaceService)
+        RoslynWorkspaceService roslynWorkspaceService,
+        WorkspaceFileReader workspaceFileReader,
+        ReadOnlyToolDispatcher readOnlyToolDispatcher)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
         _lmStudioClient = lmStudioClient;
         _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
-        _workspaceFileReader = new WorkspaceFileReader(_editApplicationService.TryGetUnsavedText);
+        _workspaceFileReader = workspaceFileReader;
         _projectMemoryStore = projectMemoryStore;
         _skillStore = skillStore;
         _chatHistoryStore = chatHistoryStore;
@@ -229,6 +235,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _buildService = buildService;
         _testRunService = testRunService;
         _roslynWorkspaceService = roslynWorkspaceService;
+        _readOnlyToolDispatcher = readOnlyToolDispatcher;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -671,22 +678,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         switch (call.Name)
         {
             case WorkspaceTools.ReadFileToolName:
-                var file = arguments?["file"]?.GetValue<string>();
-                return file is null
-                    ? (true, "read_file requires a 'file' argument.")
-                    : (false, _workspaceFileReader.ReadFile(
-                        _solutionDirectory,
-                        file,
-                        arguments?["offset"]?.GetValue<int>(),
-                        arguments?["limit"]?.GetValue<int>()));
-
             case WorkspaceTools.ListFilesToolName:
-                var directory = arguments?["directory"]?.GetValue<string>();
-                var recursive = arguments?["recursive"]?.GetValue<bool>() ?? false;
-                return (false, _workspaceFileReader.ListFiles(_solutionDirectory, directory, recursive));
-
             case WorkspaceTools.SearchCodebaseToolName:
-                return await RunSearchCodebaseAsync(arguments?["query"]?.GetValue<string>(), cancellationToken);
+            case SymbolTools.FindSymbolToolName:
+            case SymbolTools.FindReferencesToolName:
+            case DiagnosticTools.GetDiagnosticsToolName:
+                return await _readOnlyToolDispatcher.ExecuteAsync(call.Name!, arguments, _solutionDirectory, cancellationToken);
 
             case GitTools.DiffToolName:
                 return await RunGitDiffAsync(
@@ -712,18 +709,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     arguments?["reason"]?.GetValue<string>(),
                     cancellationToken);
 
-            case SymbolTools.FindSymbolToolName:
-                var symbolName = arguments?["name"]?.GetValue<string>();
-                return symbolName is null
-                    ? (true, "find_symbol requires a 'name' argument.")
-                    : await RunFindSymbolAsync(symbolName, cancellationToken);
-
-            case SymbolTools.FindReferencesToolName:
-                var referenceName = arguments?["name"]?.GetValue<string>();
-                return referenceName is null
-                    ? (true, "find_references requires a 'name' argument.")
-                    : await RunFindReferencesAsync(referenceName, cancellationToken);
-
             case SkillTools.ReadSkillToolName:
                 var skillName = arguments?["name"]?.GetValue<string>();
                 if (_solutionDirectory is null)
@@ -740,12 +725,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                              + "conversation for the exact name.")
                     : (false, skillText);
 
-            case DiagnosticTools.GetDiagnosticsToolName:
-                var diagnosticFile = arguments?["file"]?.GetValue<string>();
-                return diagnosticFile is null
-                    ? (true, "get_diagnostics requires a 'file' argument.")
-                    : await RunGetDiagnosticsAsync(diagnosticFile, cancellationToken);
-
             case TestTools.RunTestsToolName:
                 return await RunTestsAsync(
                     arguments?["project"]?.GetValue<string>(),
@@ -758,27 +737,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             default:
                 return (true, $"Unknown built-in tool '{call.Name}'.");
         }
-    }
-
-    /// <summary>Factored out of ExecuteToolAsync's switch so it can also be called from a sub-agent
-    /// dispatch (see ExecuteSubAgentToolAsync) without duplicating the indexed-check/formatting.</summary>
-    private async Task<(bool IsError, string Text)> RunSearchCodebaseAsync(string? query, CancellationToken cancellationToken)
-    {
-        if (query is null)
-        {
-            return (true, "search_codebase requires a 'query' argument.");
-        }
-
-        if (!_codebaseIndexService.IsIndexed)
-        {
-            return (true, "The codebase isn't indexed yet - use read_file/list_files instead, " +
-                          "or ask the user to click 'Index Codebase' in the Copilot Chat pane.");
-        }
-
-        var hits = await _codebaseIndexService.SearchAsync(query, CodebaseSearchTopK, cancellationToken);
-        return hits.Count == 0
-            ? (false, "No matches found.")
-            : (false, string.Join("\n\n", hits.Select(c => $"// {c.FilePath}:{c.StartLine}-{c.EndLine}\n{c.Text}")));
     }
 
     private async Task<(bool IsError, string Text)> RunGitDiffAsync(
@@ -1021,179 +979,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         return (!result.Success, result.Text);
     }
 
-    private async Task<(bool IsError, string Text)> RunFindSymbolAsync(
-        string name, CancellationToken cancellationToken)
-    {
-        if (_solutionDirectory is null)
-        {
-            return (true, "No solution is open, so there are no symbols to search.");
-        }
-
-        IReadOnlyList<SymbolLocation> symbols;
-        try
-        {
-            symbols = await _roslynWorkspaceService.FindSymbolsAsync(name, SymbolTools.MaxResults, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return (true, $"Symbol search failed: {ex.Message}");
-        }
-
-        if (symbols.Count == 0)
-        {
-            return (false,
-                $"No C# symbol named '{name}' was found. The match is exact and case-sensitive on the "
-                + "symbol's own name; try search_codebase if you are not sure what it is called.");
-        }
-
-        return (false, $"{symbols.Count} declaration(s) of '{name}':\n" + FormatSymbols(symbols));
-    }
-
-    private async Task<(bool IsError, string Text)> RunFindReferencesAsync(
-        string name, CancellationToken cancellationToken)
-    {
-        if (_solutionDirectory is null)
-        {
-            return (true, "No solution is open, so there are no references to search.");
-        }
-
-        IReadOnlyList<SymbolLocation> declarations;
-        IReadOnlyList<SymbolLocation> references;
-        int totalReferences;
-        try
-        {
-            (declarations, references, totalReferences) =
-                await _roslynWorkspaceService.FindReferencesAsync(name, SymbolTools.MaxResults, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return (true, $"Reference search failed: {ex.Message}");
-        }
-
-        if (declarations.Count == 0)
-        {
-            return (false, $"No C# symbol named '{name}' was found, so it has no references.");
-        }
-
-        // More than one declaration means more than one symbol shares this name - an overload set,
-        // or unrelated types with a same-named member. Picking one would answer a question the
-        // caller did not ask.
-        if (references.Count == 0 && totalReferences == 0 && declarations.Count > 1)
-        {
-            return (false,
-                $"'{name}' is ambiguous - {declarations.Count} declarations share that name, so references "
-                + "were not resolved. Narrow it down from these:\n" + FormatSymbols(declarations));
-        }
-
-        if (totalReferences == 0)
-        {
-            return (false,
-                $"'{name}' is declared but never referenced:\n" + FormatSymbols(declarations));
-        }
-
-        var report = new StringBuilder($"'{name}' has {totalReferences} reference(s).\n\nDeclared at:\n");
-        report.Append(FormatSymbols(declarations));
-        report.Append("\n\nReferenced at:\n");
-        report.Append(FormatSymbols(references));
-
-        if (totalReferences > references.Count)
-        {
-            report.Append($"\n\n[{totalReferences - references.Count} more reference(s) not shown]");
-        }
-
-        return (false, report.ToString());
-    }
-
-    /// <summary>Paths are made relative to the solution so they can be handed straight back to
-    /// read_file, and the source line is included so a list of hits is readable without opening
-    /// every one of them.</summary>
-    private string FormatSymbols(IReadOnlyList<SymbolLocation> symbols) =>
-        string.Join("\n", symbols.Select(s =>
-        {
-            var path = _solutionDirectory is null
-                ? s.FilePath
-                : Path.GetRelativePath(_solutionDirectory, s.FilePath).Replace('\\', '/');
-            return $"  {path}:{s.Line}:{s.Column}  {s.Kind} {s.DisplayName}"
-                   + (s.LineText.Length > 0 ? $"\n      {s.LineText}" : "");
-        }));
-
-    /// <summary>
-    /// Compiler errors and warnings for one file, from the already-loaded Roslyn semantic model.
-    ///
-    /// Reads the editor's buffer rather than disk where the file is open, so a file edited but not
-    /// saved is analysed as it stands - the same reason read_file does. Unlike build_solution this
-    /// deliberately does not save anything: it is meant to be cheap enough to call after every edit,
-    /// and writing to disk as a side effect of a read-only question would be a surprise.
-    /// </summary>
-    private async Task<(bool IsError, string Text)> RunGetDiagnosticsAsync(
-        string file, CancellationToken cancellationToken)
-    {
-        if (_solutionDirectory is null)
-        {
-            return (true, "No solution is open, so there is nothing to analyse.");
-        }
-
-        if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, file) is not { } fullPath)
-        {
-            return (true, $"Refused: '{file}' resolves outside the open solution directory.");
-        }
-
-        if (!File.Exists(fullPath))
-        {
-            return (true, $"File not found: {file}");
-        }
-
-        if (!_roslynWorkspaceService.IsAnalysed(fullPath))
-        {
-            return (true,
-                $"{file} is not part of the loaded C# solution, so it has no compiler diagnostics. "
-                + "This covers non-C# files, and C# files added since the solution was opened. "
-                + "Use build_solution instead.");
-        }
-
-        var unsavedText = _editApplicationService.TryGetUnsavedText(fullPath);
-
-        IReadOnlyList<LiveDiagnostic> diagnostics;
-        try
-        {
-            diagnostics = await _roslynWorkspaceService.GetDiagnosticsAsync(fullPath, unsavedText, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return (true, $"Could not analyse {file}: {ex.Message}");
-        }
-
-        var errors = diagnostics.Where(d => d.Severity == "Error").ToList();
-        var warnings = diagnostics.Where(d => d.Severity == "Warning").ToList();
-
-        if (errors.Count == 0 && warnings.Count == 0)
-        {
-            return (false, $"{file}: no errors or warnings."
-                           + (unsavedText is null ? "" : " (Analysed with your unsaved changes.)"));
-        }
-
-        var report = new StringBuilder($"{file}: {errors.Count} error(s), {warnings.Count} warning(s).");
-        if (unsavedText is not null)
-        {
-            report.Append(" Analysed with your unsaved changes.");
-        }
-
-        foreach (var diagnostic in errors.Concat(warnings).Take(DiagnosticTools.MaxReportedDiagnostics))
-        {
-            report.Append(
-                $"\n({diagnostic.Line},{diagnostic.Column}): "
-                + $"{diagnostic.Severity.ToLowerInvariant()} {diagnostic.Code}: {diagnostic.Message}");
-        }
-
-        var total = errors.Count + warnings.Count;
-        if (total > DiagnosticTools.MaxReportedDiagnostics)
-        {
-            report.Append($"\n\n[{total - DiagnosticTools.MaxReportedDiagnostics} more not shown]");
-        }
-
-        return (false, report.ToString());
-    }
-
     /// <summary>
     /// Runs the tests and reports the failures.
     ///
@@ -1345,7 +1130,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             try
             {
                 var loop = new HeadlessAgentLoop(
-                    client, SelectedModel, SelectedEffort, SubAgentTools.AllowedTools, ExecuteSubAgentToolAsync);
+                    client, SelectedModel, SelectedEffort, SubAgentTools.AllowedTools,
+                    (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, _solutionDirectory, ct));
                 var result = await loop.RunAsync(
                     SubAgentSystemPrompt, task, SubAgentTools.MaxIterationsPerTask, cancellationToken);
                 return (Description: task, Result: result);
@@ -1374,57 +1160,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             var caveat = run.Result.HitIterationCap ? " [may be incomplete - hit its iteration limit]" : "";
             return $"Sub-agent {i + 1} (\"{run.Description}\"){caveat}:\n{run.Result.FinalText}";
         })));
-    }
-
-    /// <summary>The read-only subset of ExecuteToolAsync's switch, reused as the dispatch delegate
-    /// every HeadlessAgentLoop sub-agent runs against - see SubAgentTools' own doc comment for why
-    /// this is a separate hard-coded switch rather than routing sub-agent calls through
-    /// ExecuteToolAsync itself (which would also reach MCP/plugin tools and, eventually,
-    /// propose_edit).</summary>
-    private async Task<(bool IsError, string Text)> ExecuteSubAgentToolAsync(
-        string toolName, JsonNode? arguments, CancellationToken cancellationToken)
-    {
-        switch (toolName)
-        {
-            case WorkspaceTools.ReadFileToolName:
-                var file = arguments?["file"]?.GetValue<string>();
-                return file is null
-                    ? (true, "read_file requires a 'file' argument.")
-                    : (false, _workspaceFileReader.ReadFile(
-                        _solutionDirectory,
-                        file,
-                        arguments?["offset"]?.GetValue<int>(),
-                        arguments?["limit"]?.GetValue<int>()));
-
-            case WorkspaceTools.ListFilesToolName:
-                var directory = arguments?["directory"]?.GetValue<string>();
-                var recursive = arguments?["recursive"]?.GetValue<bool>() ?? false;
-                return (false, _workspaceFileReader.ListFiles(_solutionDirectory, directory, recursive));
-
-            case WorkspaceTools.SearchCodebaseToolName:
-                return await RunSearchCodebaseAsync(arguments?["query"]?.GetValue<string>(), cancellationToken);
-
-            case SymbolTools.FindSymbolToolName:
-                var symbolName = arguments?["name"]?.GetValue<string>();
-                return symbolName is null
-                    ? (true, "find_symbol requires a 'name' argument.")
-                    : await RunFindSymbolAsync(symbolName, cancellationToken);
-
-            case SymbolTools.FindReferencesToolName:
-                var referenceName = arguments?["name"]?.GetValue<string>();
-                return referenceName is null
-                    ? (true, "find_references requires a 'name' argument.")
-                    : await RunFindReferencesAsync(referenceName, cancellationToken);
-
-            case DiagnosticTools.GetDiagnosticsToolName:
-                var diagnosticFile = arguments?["file"]?.GetValue<string>();
-                return diagnosticFile is null
-                    ? (true, "get_diagnostics requires a 'file' argument.")
-                    : await RunGetDiagnosticsAsync(diagnosticFile, cancellationToken);
-
-            default:
-                return (true, $"'{toolName}' is not available to a sub-agent.");
-        }
     }
 
     private static string FormatBuildReport(

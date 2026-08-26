@@ -91,6 +91,7 @@ public partial class MainWindow : Window
         CallStackAnchorable.Content = viewModel.CallStack;
         LocalsAnchorable.Content = viewModel.Locals;
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
+        ScheduledAutomationsAnchorable.Content = viewModel.ScheduledAutomations;
         WelcomeDocument.Content = viewModel.Welcome;
 
         _contentById = new Dictionary<string, object>
@@ -104,6 +105,7 @@ public partial class MainWindow : Window
             [CallStackPaneViewModel.PaneContentId] = viewModel.CallStack,
             [LocalsPaneViewModel.PaneContentId] = viewModel.Locals,
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
+            [ScheduledAutomationsPaneViewModel.PaneContentId] = viewModel.ScheduledAutomations,
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 

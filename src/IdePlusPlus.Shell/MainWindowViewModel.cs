@@ -58,6 +58,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// see StartDebuggingAsync/StopDebuggingAsync.</summary>
     private readonly List<RunService> _multiProjectRunServices = [];
 
+    private readonly ScheduledAutomationService _scheduledAutomationService;
+
     private StartupConfiguration? ActiveConfiguration => _startupConfigurations.FirstOrDefault(c => c.Name == _activeConfigurationName);
 
     public MainWindowViewModel(
@@ -68,6 +70,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SourceControlPaneViewModel sourceControl,
         NuGetPaneViewModel nuGet,
         TestExplorerPaneViewModel testExplorer,
+        ScheduledAutomationsPaneViewModel scheduledAutomations,
+        ScheduledAutomationService scheduledAutomationService,
         WelcomeDocumentViewModel welcome,
         CallStackPaneViewModel callStack,
         LocalsPaneViewModel locals,
@@ -88,6 +92,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SourceControl = sourceControl;
         NuGet = nuGet;
         TestExplorer = testExplorer;
+        ScheduledAutomations = scheduledAutomations;
+        _scheduledAutomationService = scheduledAutomationService;
         Welcome = welcome;
         CallStack = callStack;
         Locals = locals;
@@ -168,6 +174,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public NuGetPaneViewModel NuGet { get; }
 
     public TestExplorerPaneViewModel TestExplorer { get; }
+
+    public ScheduledAutomationsPaneViewModel ScheduledAutomations { get; }
 
     public WelcomeDocumentViewModel Welcome { get; }
 
@@ -480,6 +488,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // Picks up a project-local .ideplusplus/copilot/mcp-servers.json, if the solution has one.
             _mcpServerManager.SetSolutionDirectory(solutionDirectory);
             _ = _mcpServerManager.ReconnectAllAsync();
+            _scheduledAutomationService.SetSolutionDirectory(solutionDirectory);
             CopilotChat.SetTestProjects(root.Flatten()
                 .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, FullPath: not null })
                 .Select(n => n.FullPath!)

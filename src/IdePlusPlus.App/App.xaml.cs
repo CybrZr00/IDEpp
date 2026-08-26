@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using IdePlusPlus.Build;
+using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
@@ -290,6 +291,15 @@ public partial class App : Application
         services.AddSingleton<EditApplicationService>();
         services.AddSingleton<ProjectMemoryStore>();
         services.AddSingleton<SkillStore>();
+        services.AddSingleton<ScheduleStore>();
+        // A read_file/list_files call needs to see a file's unsaved editor content where it's open
+        // (EditApplicationService never writes an open buffer to disk on its own) - one shared
+        // instance, rather than one per consumer, so the chat pane and the scheduler agree on what
+        // "current" means for the same file.
+        services.AddSingleton(sp => new WorkspaceFileReader(sp.GetRequiredService<EditApplicationService>().TryGetUnsavedText));
+        services.AddSingleton<ReadOnlyToolDispatcher>();
+        services.AddSingleton<ScheduledAutomationService>();
+        services.AddSingleton<ScheduledAutomationsPaneViewModel>();
         services.AddSingleton<ChatHistoryStore>();
         services.AddSingleton<LmStudioEmbeddingClient>();
         services.AddSingleton<CodebaseIndexService>();

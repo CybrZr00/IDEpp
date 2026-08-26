@@ -298,6 +298,9 @@
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
             <views:CopilotChatPanel />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:ScheduledAutomationsPaneViewModel}">
+            <views:ScheduledAutomationsPanel />
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SourceControlPaneViewModel}">
             <views:SourceControlPanel />
         </DataTemplate>
@@ -579,6 +582,10 @@
                         <avalonDock:LayoutAnchorable x:Name="CopilotChatAnchorable"
                                                       ContentId="{x:Static toolPanes:CopilotChatPaneViewModel.PaneContentId}"
                                                       Title="Copilot Chat"
+                                                      CanClose="False" />
+                        <avalonDock:LayoutAnchorable x:Name="ScheduledAutomationsAnchorable"
+                                                      ContentId="{x:Static toolPanes:ScheduledAutomationsPaneViewModel.PaneContentId}"
+                                                      Title="Scheduled Automations"
                                                       CanClose="False" />
                     </avalonDock:LayoutAnchorablePane>
 

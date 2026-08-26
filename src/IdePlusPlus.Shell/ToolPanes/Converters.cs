@@ -18,6 +18,19 @@ public sealed class BoolToVisibilityConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Collapses on null or an empty string - used for a summary field that only exists once a
+/// schedule has actually run (LastResultSummary), so the row doesn't show an empty line before then.</summary>
+public sealed class NullToVisibilityConverter : IValueConverter
+{
+    public static readonly NullToVisibilityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is null or "" ? Visibility.Collapsed : Visibility.Visible;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public sealed class InverseBoolToVisibilityConverter : IValueConverter
 {
     public static readonly InverseBoolToVisibilityConverter Instance = new();
