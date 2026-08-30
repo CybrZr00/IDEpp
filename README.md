@@ -35,10 +35,13 @@ never really a notepad to begin with.
 - Test Explorer: discovers and runs `dotnet test` suites, jumps straight to a failing assertion
 - Task Runner: lists the `package.json` scripts in and around the solution and runs one on
   double-click, using whichever of npm/pnpm/yarn the repo's `packageManager` field or lockfile
-  implies. Discovery is a plain JSON read, so it costs nothing on a solution with no scripts;
-  gulp/grunt tasks and before/after-build bindings are designed but not built yet
-- A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings, and
-  chat-tool registration) with each plugin isolated in its own `AssemblyLoadContext`
+  implies. Discovery is a plain JSON read, so it costs nothing on a solution with no scripts. A task
+  can be bound to Before/After Build or Clean and then runs automatically — including on F5's
+  implicit build — without ever being able to fail the build itself. Gulp and Grunt tasks are
+  designed but not built yet
+- A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings,
+  chat-tool registration, and build-lifecycle handlers) with each plugin isolated in its own
+  `AssemblyLoadContext`
 
 ### The AI Copilot agent
 - Works against **OpenRouter** (any hosted model) or a local **LM Studio** server — your choice of

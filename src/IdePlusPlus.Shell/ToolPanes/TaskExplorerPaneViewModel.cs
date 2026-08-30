@@ -25,9 +25,10 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
     /// forever. `npm run watch` bound to Before Build is the obvious way to hit this, which is why
     /// binding a watch-looking task also warns.
     /// </summary>
-    public static readonly TimeSpan BoundTaskTimeout = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan DefaultBoundTaskTimeout = TimeSpan.FromMinutes(2);
 
     private readonly TaskRunService _taskRunService;
+    private readonly TimeSpan _boundTaskTimeout;
 
     private string? _solutionDirectory;
     private IReadOnlyList<string> _solutionFilePaths = [];
@@ -36,9 +37,14 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
 
     public const string PaneContentId = "TaskRunner";
 
-    public TaskExplorerPaneViewModel(TaskRunService taskRunService)
-        : base(PaneContentId, "Task Runner") =>
+    /// <summary>The timeout is a constructor parameter purely so tests can assert the timeout path
+    /// without waiting two minutes for it.</summary>
+    public TaskExplorerPaneViewModel(TaskRunService taskRunService, TimeSpan? boundTaskTimeout = null)
+        : base(PaneContentId, "Task Runner")
+    {
         _taskRunService = taskRunService;
+        _boundTaskTimeout = boundTaskTimeout ?? DefaultBoundTaskTimeout;
+    }
 
     /// <summary>
     /// Where task output goes - set once by MainWindowViewModel, which owns the Output pane and
@@ -133,7 +139,7 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
 
     /// <summary>
     /// Runs everything bound to <paramref name="kind"/>, one task at a time, each under
-    /// <see cref="BoundTaskTimeout"/>. Never throws: a bound task that fails is reported and the
+    /// <see cref="DefaultBoundTaskTimeout"/> unless overridden. Never throws: a bound task that fails is reported and the
     /// build carries on, matching what Visual Studio does and keeping a broken lint config from
     /// making the IDE unable to build.
     /// </summary>
@@ -141,7 +147,7 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
     {
         foreach (var node in BoundTaskNodes(kind))
         {
-            await RunOneAsync(node, BoundTaskTimeout);
+            await RunOneAsync(node, _boundTaskTimeout);
         }
     }
 
@@ -172,7 +178,7 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
                 timeoutSource?.Token ?? CancellationToken.None);
 
             OutputLine?.Invoke(timeoutSource is { IsCancellationRequested: true }
-                ? $"Task stopped after {timeout!.Value.TotalMinutes:0} minutes without finishing: {command}"
+                ? $"Task stopped - it did not finish within the time allowed for a bound task: {command}"
                 : $"Task finished with exit code {exitCode}: {command}");
         }
         catch (OperationCanceledException)
@@ -232,8 +238,8 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
             if (WatchTaskDetector.LooksLikeAWatchTask(task))
             {
                 OutputLine?.Invoke(
-                    $"    Note: '{task.Name}' looks like a watch or server task. A task that never exits will be " +
-                    $"stopped after {BoundTaskTimeout.TotalMinutes:0} minutes, delaying every build by that long.");
+                    $"    Note: '{task.Name}' looks like a watch or server task. A bound task that never exits is " +
+                    $"stopped once it hits its time limit, so every build would wait that long first.");
             }
         }
 

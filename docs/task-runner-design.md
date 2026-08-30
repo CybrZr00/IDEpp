@@ -103,7 +103,7 @@ dependency management UI.
 
 ---
 
-## Phase 2 — Build bindings, and a build-event member on `IPluginHost`
+## Phase 2 — Build bindings, and a build-event member on `IPluginHost` *(shipped)*
 
 **Summary**: Bindings let a discovered task run automatically at a lifecycle point. Two consumers
 need the same hook: the Task Explorer's own bindings, and plugins. Add `BuildEventKind` /
@@ -133,11 +133,15 @@ to the members they call, and a new member adds none they need to resolve. Only 
 this interface.
 
 **Storage**: `.ideplusplus/tasks.json`, keyed by solution-relative manifest path + task name, same
-degrade-to-empty posture as `PublishSelectionStore`. **Also read** Visual Studio's own
-`// <binding BeforeBuild="build" />` comment at the top of a `gulpfile.js`/`package.json` when
-present, so a repo already configured in VS works here on first open — read-only; IDE++ never
-rewrites the user's manifest. The consequence is a real interop gap worth stating in the UI: bindings
-created in IDE++ live in `.ideplusplus/` and are not visible to Visual Studio.
+degrade-to-empty posture as `PublishSelectionStore`. Bindings created in IDE++ are not visible to
+Visual Studio, which is a real interop gap worth stating in the UI.
+
+Reading Visual Studio's own `/// <binding BeforeBuild='build' />` comment — planned for this phase —
+**moved to Phase 3**. That comment is a JavaScript-file convention: it lives at the top of a
+`gulpfile.js`/`Gruntfile.js`, which is exactly what Phase 3 adds and Phase 2 has none of. Putting it
+in a `package.json` would make the file invalid JSON, which `PackageJsonReader` parses strictly
+because npm does. So there was nothing for the importer to read yet, and building it now would have
+meant guessing at where VS keeps npm-script bindings instead.
 
 **Sequencing and the build guard**: `BuildService` gains
 `Task<T> RunExclusiveAsync<T>(Func<Task<T>> work)` — the existing private guard exposed as a critical
@@ -181,7 +185,9 @@ first-time discovery per solution behind a one-time prompt naming the file, pers
 reason Phase 1 goes first.
 
 **New files**: `GulpTaskDiscovery.cs`, `GruntTaskDiscovery.cs`, `TaskDiscoveryCache.cs` in
-`IdePlusPlus.Tasks`; a consent dialog in the shell.
+`IdePlusPlus.Tasks`; a consent dialog in the shell; and `VsBindingCommentReader.cs`, carried over
+from Phase 2 — the `/// <binding BeforeBuild='sass' />` comment it reads only exists in the
+JavaScript manifests this phase introduces. Read-only: IDE++ never rewrites the user's gulpfile.
 
 **Real risks**: both output formats are tool-version-dependent, so each parser stays in its own file
 (same containment argument as `TrxParser`). Discovery must be timeout-bounded and tree-killed — a
@@ -207,3 +213,8 @@ abort).
 
 **Suggested order**: Phase 1 (M) → Phase 2 (M, and the only phase touching the plugin contract) →
 Phase 3 (S once Phase 1's process plumbing exists, but the consent flow is the fiddly part).
+
+Phases 1 and 2 are shipped. Both were verified end to end against a throwaway solution driven
+through the real `SolutionLoader` → discovery → pane → `TaskRunService` path, not only by unit
+tests — which is how the process-tree defect above was found, and how the bound-task timeout was
+confirmed to actually release the build rather than merely being configured.
