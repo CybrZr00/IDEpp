@@ -46,6 +46,21 @@ public sealed record TemplateInfo(
     public IReadOnlyList<string> FrameworkChoices =>
         FindParameter(FrameworkParameterName)?.Choices.Select(c => c.Value).ToList() ?? [];
 
+    /// <summary>
+    /// Whether this template's name will become a type name, and so has to be a valid identifier
+    /// rather than merely a valid file name.
+    ///
+    /// <para>Derived rather than hard-coded: a template that has a language and whose own default
+    /// name is an identifier produces a type (Class -&gt; "Class1", API Controller -&gt;
+    /// "ValueController"), while the config-file templates have neither (EditorConfig file has no
+    /// language, gitignore's default name starts with a dot).</para>
+    /// </summary>
+    public bool NameBecomesTypeName =>
+        !string.IsNullOrWhiteSpace(Language) &&
+        DefaultName is { Length: > 0 } defaultName &&
+        (char.IsLetter(defaultName[0]) || defaultName[0] == '_') &&
+        defaultName.All(c => char.IsLetterOrDigit(c) || c == '_');
+
     public const string FrameworkParameterName = "Framework";
 
     public const string NamespaceParameterName = "namespace";
