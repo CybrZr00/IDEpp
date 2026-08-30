@@ -569,6 +569,7 @@
             </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Settings..." Click="SettingsMenuItem_OnClick" />
+                <MenuItem Header="Template _Packages..." Command="{Binding ManageTemplatePackagesCommand}" />
                 <Separator />
                 <MenuItem Header="Plugins" ItemsSource="{Binding PluginCommands}">
                     <MenuItem.ItemContainerStyle>

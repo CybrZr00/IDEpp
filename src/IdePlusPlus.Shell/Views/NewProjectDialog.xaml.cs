@@ -66,6 +66,21 @@ public partial class NewProjectDialog : Window
         e.Cancel = true;
     }
 
+    /// <summary>Reloads the template list afterwards, but only when something actually changed -
+    /// re-reading the cache on every Close would be work for nothing.</summary>
+    private async void TemplatePackagesButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (Owner?.DataContext is not MainWindowViewModel mainWindow)
+        {
+            return;
+        }
+
+        if (mainWindow.ShowTemplatePackagesDialog(this))
+        {
+            await ViewModel.LoadAsync();
+        }
+    }
+
     private void BrowseButton_OnClick(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog

@@ -352,6 +352,7 @@ public partial class App : Application
         services.AddSingleton<PublishService>();
         services.AddSingleton<TemplateCatalog>();
         services.AddSingleton<TemplateInstantiationService>();
+        services.AddSingleton<TemplatePackageService>();
         services.AddSingleton<NuGetSearchClient>();
         services.AddSingleton<NuGetPaneViewModel>();
         services.AddSingleton<TestDiscoveryService>();

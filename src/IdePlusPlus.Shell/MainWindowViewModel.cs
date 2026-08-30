@@ -50,6 +50,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly TemplateCatalog _templateCatalog;
     private readonly TemplateInstantiationService _templateInstantiation;
+    private readonly TemplatePackageService _templatePackages;
     private readonly Dispatcher _dispatcher;
 
     /// <summary>Each Action.Start entry's own launch profile, keyed by the DebugSession StartDebuggingAsync
@@ -117,6 +118,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RoslynWorkspaceService roslynWorkspaceService,
         TemplateCatalog templateCatalog,
         TemplateInstantiationService templateInstantiation,
+        TemplatePackageService templatePackages,
         PluginBuildEventRegistry pluginBuildEvents)
     {
         SolutionExplorer = solutionExplorer;
@@ -144,6 +146,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _roslynWorkspaceService = roslynWorkspaceService;
         _templateCatalog = templateCatalog;
         _templateInstantiation = templateInstantiation;
+        _templatePackages = templatePackages;
         _pluginBuildEvents = pluginBuildEvents;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
@@ -1307,6 +1310,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     private bool HasSolution() => CurrentSolutionPath is not null;
+
+    /// <summary>
+    /// Tools > Template Packages, and the same dialog the New Project dialog opens - so a missing
+    /// template can be fetched from where you noticed it was missing.
+    /// </summary>
+    [RelayCommand]
+    private void ManageTemplatePackages()
+    {
+        var changed = ShowTemplatePackagesDialog(System.Windows.Application.Current?.MainWindow);
+        if (changed)
+        {
+            _ = RefreshNewItemShortcutsAsync(
+                CurrentSolutionPath is { } path ? Path.GetDirectoryName(path) : null);
+        }
+    }
+
+    /// <summary>Shared with the New Project dialog, which owns itself while modal and so has to pass
+    /// its own window as the owner. Returns whether anything changed.</summary>
+    public bool ShowTemplatePackagesDialog(System.Windows.Window? owner)
+    {
+        var dialog = new TemplatePackagesDialog(
+            new TemplatePackagesDialogViewModel(
+                _templatePackages,
+                CurrentSolutionPath is { } path ? Path.GetDirectoryName(path) : null))
+        {
+            Owner = owner,
+        };
+
+        dialog.ShowDialog();
+        return dialog.PackagesChanged;
+    }
 
     /// <summary>
     /// The item templates File > New offers directly. Populated from the catalog rather than

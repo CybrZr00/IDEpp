@@ -147,6 +147,12 @@
 
         <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
                     Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <!-- Here as well as on Tools, because the moment you notice a template is missing is
+                 while looking for it. -->
+            <Button Content="Template Packages..."
+                    Click="TemplatePackagesButton_OnClick"
+                    Padding="12,4"
+                    Margin="0,0,8,0" />
             <Button Content="Create" Command="{Binding CreateCommand}" Padding="12,4" IsDefault="True" />
             <Button Content="Cancel" Click="CancelButton_OnClick" Margin="8,0,0,0" Padding="12,4" IsCancel="True" />
         </StackPanel>
