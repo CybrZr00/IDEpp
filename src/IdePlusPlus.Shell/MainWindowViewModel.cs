@@ -66,7 +66,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private SolutionTreeNode? _solutionRoot;
 
-    /// <summary>Reset on every solution load - see WarnAboutNewFileAnalysis.</summary>
+    /// <summary>Reset on every solution load - see RegisterNewFilesForAnalysisAsync.</summary>
     private bool _warnedAboutNewFileAnalysis;
 
     /// <summary>Every named startup configuration saved for the current solution (see
@@ -527,7 +527,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// and leaves only the name to type).
     /// </summary>
     [RelayCommand(CanExecute = nameof(HasSolution))]
-    private void NewItem(string? shortName)
+    private async Task NewItemAsync(string? shortName)
     {
         if (ResolveItemTarget() is not { } target)
         {
@@ -549,8 +549,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         // No solution reload: an SDK-style project globs its sources, so the file is already a
-        // project item and only the tree needs telling. See WarnAboutNewFileAnalysis for the one
-        // thing that does not follow from that.
+        // project item, and the tree and the Roslyn workspace are each told directly.
         AddFilesToTree(target, dialog.ResultFiles);
 
         foreach (var file in dialog.ResultFiles)
@@ -558,7 +557,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             OpenPath(file);
         }
 
-        WarnAboutNewFileAnalysis(dialog.ResultFiles);
+        await RegisterNewFilesForAnalysisAsync(target, dialog.ResultFiles);
     }
 
     /// <summary>
@@ -671,23 +670,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Says once per solution that a newly added code file has no IntelliSense yet.
-    /// RoslynWorkspaceService has no add-document path - only LoadSolutionAsync - so a file created
-    /// here is unknown to it until the solution is reopened. Stated rather than left to be
-    /// discovered, and said once rather than on every add.
+    /// Tells the Roslyn workspace about the files just created, so they get IntelliSense and
+    /// diagnostics straight away instead of only after the solution is reopened.
+    ///
+    /// <para>Only code files are offered - the workspace refuses anything else, and an .editorconfig
+    /// was never going to be analysed. A refusal is reported once per solution rather than per file:
+    /// it means the project itself isn't in the Roslyn workspace (an unrestored or failed project),
+    /// which is worth knowing once and not on every add.</para>
     /// </summary>
-    private void WarnAboutNewFileAnalysis(IReadOnlyList<string> files)
+    private async Task RegisterNewFilesForAnalysisAsync(NewItemTarget target, IReadOnlyList<string> files)
     {
-        if (_warnedAboutNewFileAnalysis ||
-            !files.Any(f => Path.GetExtension(f) is ".cs" or ".vb"))
+        var sourceFiles = files.Where(f => Path.GetExtension(f) is ".cs" or ".vb").ToList();
+        if (sourceFiles.Count == 0)
+        {
+            return;
+        }
+
+        var registered = true;
+        foreach (var file in sourceFiles)
+        {
+            registered &= await _roslynWorkspaceService.NotifyDocumentAddedAsync(file, target.ProjectPath);
+        }
+
+        if (registered || _warnedAboutNewFileAnalysis)
         {
             return;
         }
 
         _warnedAboutNewFileAnalysis = true;
         Output.AppendLine(
-            "Note: IntelliSense and diagnostics for files added this way start working once the " +
-            "solution is reopened.");
+            "Note: IntelliSense and diagnostics for files added to this project start working once " +
+            "the solution is reopened.");
     }
 
     /// <summary>Selects a project node by its file path, expanding the solution so the container
