@@ -98,8 +98,12 @@ dependency management UI.
   stdout pipe, so the reader never saw EOF either. A watcher that prints output happens to die soon
   after on a broken pipe, which is what made the first pass look fine; a silent one runs forever.
   Stopping therefore goes through `ProcessJob` (a Windows job object with `KILL_ON_JOB_CLOSE`), with
-  the tree kill kept as a first step. `ShellCommandRunner`, `BuildService` and `TestRunService` all
-  still make the bare tree-kill assumption.
+  the tree kill kept as a first step. `ShellCommandRunner`, `BuildService` and `TestRunService` made
+  the same bare tree-kill assumption and now use `ProcessJob` too; each has a regression test that
+  spawns a deliberately orphaned grandchild, verified failing without the job assignment. For
+  `BuildService` that also means MSBuild's worker nodes go with the build rather than surviving for
+  reuse - a cold node next time is cheaper than a cancelled build that leaks processes holding
+  `obj`/`bin`.
 
 ---
 
