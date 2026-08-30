@@ -33,6 +33,10 @@ never really a notepad to begin with.
   and container-image targets; profiles using a protocol IDE++ cannot run (MSDeploy, ClickOnce,
   Azure) are listed read-only rather than hidden or overwritten
 - Test Explorer: discovers and runs `dotnet test` suites, jumps straight to a failing assertion
+- Task Runner: lists the `package.json` scripts in and around the solution and runs one on
+  double-click, using whichever of npm/pnpm/yarn the repo's `packageManager` field or lockfile
+  implies. Discovery is a plain JSON read, so it costs nothing on a solution with no scripts;
+  gulp/grunt tasks and before/after-build bindings are designed but not built yet
 - A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings, and
   chat-tool registration) with each plugin isolated in its own `AssemblyLoadContext`
 

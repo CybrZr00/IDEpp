@@ -29,7 +29,7 @@ last.
 
 ---
 
-## Phase 1 — npm-script Task Explorer (no Node.js required)
+## Phase 1 — npm-script Task Explorer (no Node.js required) *(shipped)*
 
 **Summary**: A new `IdePlusPlus.Tasks` project (sibling to `IdePlusPlus.Build`) that finds
 `package.json` files in and around the open solution, parses their `scripts` object, and exposes
@@ -55,12 +55,14 @@ nothing on malformed input" shape, reused almost verbatim for `package.json`. `B
 - `TaskManifestDiscovery.cs` — candidate manifests from the solution directory and the tree,
   `node_modules` excluded
 - `TaskRunService.cs` — runs one task, streams output, kills the tree on cancel, one run at a time
-  per manifest
+  (globally, not per manifest — concurrent runs are deferred, below)
 
-**New files elsewhere**: `src/IdePlusPlus.Shell/ToolPanes/TaskExplorerPaneViewModel.cs`,
-`TaskTreeNode.cs`, `src/IdePlusPlus.Shell/Views/TaskExplorerPanel.xaml(.cs)`; a `LayoutAnchorable` in
-`MainWindow.xaml` alongside the Test Explorer, its entry in `MainWindow.xaml.cs`'s ContentId map so
-layout restore works; DI registration in `App.xaml.cs`; `tests/IdePlusPlus.Tasks.Tests`.
+**New files elsewhere**: `src/IdePlusPlus.Shell/ToolPanes/TaskExplorerPaneViewModel.cs` and
+`TaskTreeNode.cs`; an inline `DataTemplate` plus a `LayoutAnchorable` in `MainWindow.xaml` alongside
+the Test Explorer (the tree needs no more markup than the Test Explorer's, which is also inline
+rather than a `Views/` UserControl), its entry in `MainWindow.xaml.cs`'s ContentId map so layout
+restore works — `AttachMissingCoreToolWindows` already adds the pane back for a user whose saved
+layout predates it; DI registration in `App.xaml.cs`; `tests/IdePlusPlus.Tasks.Tests`.
 
 **MVP scope**: discover `package.json` manifests (solution directory, one shallow scan; plus
 `_solutionRoot.Flatten()` file nodes named `package.json`, minus anything under `node_modules`);
@@ -79,7 +81,10 @@ dependency management UI.
   "npm is not installed" on a machine where it plainly is. `NodeToolLocator` must walk `PATH`
   applying `PATHEXT` itself (preferring `.cmd`), and check `node_modules/.bin` first for a locally
   installed tool. Going through `cmd.exe /c` instead is the wrong fix: .NET's `ArgumentList` escaping
-  follows the C runtime's rules, not `cmd.exe`'s, so it is not injection-safe there.
+  follows the C runtime's rules, not `cmd.exe`'s, so it is not injection-safe there. Note the same
+  problem arrives by the back door anyway — `CreateProcess` runs a resolved `.cmd` *through*
+  `cmd.exe`, which is the BatBadBut bug class — so task names (repository-authored, therefore
+  untrusted) are validated against a conservative charset and refused rather than escaped.
 - **`node_modules` is already in the tree.** SDK-style default globs exclude `bin`/`obj` but not
   `node_modules`, so a project with dependencies installed contributes thousands of file nodes —
   including hundreds of nested `package.json`s. Discovery must filter on a `node_modules` path
