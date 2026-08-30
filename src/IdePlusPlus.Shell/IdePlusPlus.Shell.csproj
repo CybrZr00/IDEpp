@@ -48,6 +48,7 @@
     <ProjectReference Include="..\IdePlusPlus.NuGet\IdePlusPlus.NuGet.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Publish\IdePlusPlus.Publish.csproj" />
     <ProjectReference Include="..\IdePlusPlus.TestRunner\IdePlusPlus.TestRunner.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Tasks\IdePlusPlus.Tasks.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Roslyn\IdePlusPlus.Roslyn.csproj" />
   </ItemGroup>
 

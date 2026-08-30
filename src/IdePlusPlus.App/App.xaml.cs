@@ -25,6 +25,7 @@ using IdePlusPlus.PluginContracts;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
+using IdePlusPlus.Tasks;
 using IdePlusPlus.TestRunner;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
@@ -313,6 +314,8 @@ public partial class App : Application
         services.AddSingleton<TestDiscoveryService>();
         services.AddSingleton<TestRunService>();
         services.AddSingleton<TestExplorerPaneViewModel>();
+        services.AddSingleton<TaskRunService>();
+        services.AddSingleton<TaskExplorerPaneViewModel>();
         services.AddSingleton<RoslynWorkspaceService>();
         services.AddSingleton<RoslynCompletionService>();
         services.AddSingleton<MainWindowViewModel>();

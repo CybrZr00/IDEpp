@@ -295,6 +295,33 @@
                           SelectedItemChanged="TestTreeView_OnSelectedItemChanged" />
             </DockPanel>
         </DataTemplate>
+        <HierarchicalDataTemplate DataType="{x:Type toolPanes:TaskTreeNode}" ItemsSource="{Binding Children}">
+            <!-- Foreground set explicitly, same reason as the Solution Explorer template above -
+                 the default themed TreeViewItem template hardcodes light-theme text color. -->
+            <TextBlock Text="{Binding Name}"
+                       Foreground="{DynamicResource WindowForegroundBrush}"
+                       ToolTip="{Binding Description}" />
+        </HierarchicalDataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:TaskExplorerPaneViewModel}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+                    <Button Content="Run" Command="{Binding RunSelectedCommand}" Margin="0,0,4,0" />
+                    <Button Content="Stop" Command="{Binding CancelCommand}" Margin="0,0,4,0" />
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Bottom"
+                           Text="{Binding Summary}"
+                           Margin="4,2"
+                           FontSize="11"
+                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                <TreeView ItemsSource="{Binding Tree}"
+                          Background="{DynamicResource PanelBackgroundBrush}"
+                          Foreground="{DynamicResource WindowForegroundBrush}"
+                          BorderThickness="0"
+                          MouseDoubleClick="TaskTreeView_OnMouseDoubleClick"
+                          SelectedItemChanged="TaskTreeView_OnSelectedItemChanged" />
+            </DockPanel>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
             <views:CopilotChatPanel />
         </DataTemplate>
@@ -569,6 +596,10 @@
                             <avalonDock:LayoutAnchorable x:Name="TestExplorerAnchorable"
                                                           ContentId="{x:Static toolPanes:TestExplorerPaneViewModel.PaneContentId}"
                                                           Title="Tests"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="TaskRunnerAnchorable"
+                                                          ContentId="{x:Static toolPanes:TaskExplorerPaneViewModel.PaneContentId}"
+                                                          Title="Task Runner"
                                                           CanClose="False" />
                             <avalonDock:LayoutAnchorable x:Name="CallStackAnchorable"
                                                           ContentId="{x:Static toolPanes:CallStackPaneViewModel.PaneContentId}"

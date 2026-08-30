@@ -1,0 +1,176 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+
+namespace IdePlusPlus.Tasks;
+
+/// <summary>
+/// Runs one task at a time, streaming its output live and killing the whole process tree on cancel.
+/// Mirrors TestRunService's shape - the same _starting/_process guard against two callers racing
+/// past an IsRunning check, the same ct.Register(Cancel) so a token actually stops the process
+/// rather than only stopping the await, and the same entireProcessTree kill, which matters more
+/// here than anywhere else in the codebase: npm spawns node, and node spawns whatever the script
+/// asked for.
+///
+/// One run at a time overall, not one per manifest - running several tasks concurrently is a
+/// deliberate non-goal for now (see docs/task-runner-design.md).
+/// </summary>
+public sealed partial class TaskRunService
+{
+    // Deliberately conservative, and enforced rather than escaped. On Windows the package manager
+    // resolves to a .cmd shim, and CreateProcess runs a .cmd by handing it to cmd.exe - so the
+    // arguments are parsed by cmd.exe, whose quoting rules are not the C-runtime rules
+    // ProcessStartInfo.ArgumentList escapes for. Escaping correctly for both parsers at once is the
+    // bug class behind BatBadBut (CVE-2024-24576 and friends). Task names come from a file in the
+    // repository, which is not necessarily trusted, so a name outside this set is refused instead.
+    // Every real npm script name is well inside it.
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9_.:\-]*$", RegexOptions.Compiled)]
+    private static partial Regex SafeTaskNameRegex();
+
+    private readonly object _stateLock = new();
+    private Process? _process;
+    private bool _starting;
+
+    public bool IsRunning
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _starting || _process is { HasExited: false };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns the task's exit code, or -1 if it could never start (tool not on PATH, unusable task
+    /// name, unusable manifest path) - in which case the reason has been written to
+    /// <paramref name="onOutputLine"/>, since that is where the user is already looking.
+    /// </summary>
+    public async Task<int> RunAsync(
+        TaskDefinition task,
+        NodePackageManager packageManager,
+        Action<string> onOutputLine,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (!SafeTaskNameRegex().IsMatch(task.Name))
+        {
+            onOutputLine($"Refusing to run '{task.Name}' - task names are limited to letters, digits, '.', ':', '_' and '-'.");
+            return -1;
+        }
+
+        if (Path.GetDirectoryName(task.ManifestPath) is not { Length: > 0 } workingDirectory)
+        {
+            onOutputLine($"Refusing to run '{task.Name}' - {task.ManifestPath} has no containing directory.");
+            return -1;
+        }
+
+        var toolName = packageManager.ExecutableName();
+        if (NodeToolLocator.Locate(toolName, workingDirectory) is not { } executablePath)
+        {
+            onOutputLine($"Could not find {toolName} - install Node.js, or make sure {toolName} is on PATH.");
+            return -1;
+        }
+
+        lock (_stateLock)
+        {
+            if (_starting || _process is { HasExited: false })
+            {
+                throw new InvalidOperationException("A task is already running; stop it first.");
+            }
+
+            _starting = true;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(executablePath)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workingDirectory,
+            };
+            startInfo.ArgumentList.Add("run");
+            startInfo.ArgumentList.Add(task.Name);
+
+            using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
+            process.ErrorDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
+
+            try
+            {
+                process.Start();
+            }
+            catch (Win32Exception ex)
+            {
+                onOutputLine($"Could not start {executablePath}: {ex.Message}");
+                return -1;
+            }
+
+            lock (_stateLock)
+            {
+                _process = process;
+                _starting = false;
+            }
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            using (ct.Register(Cancel))
+            {
+                try
+                {
+                    await process.WaitForExitAsync(ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Killed by the registration above - report what it exited with rather than
+                    // throwing, since the caller asked for this.
+                }
+            }
+
+            lock (_stateLock)
+            {
+                if (ReferenceEquals(_process, process))
+                {
+                    _process = null;
+                }
+            }
+
+            return process.HasExited ? process.ExitCode : -1;
+        }
+        finally
+        {
+            lock (_stateLock)
+            {
+                _starting = false;
+            }
+        }
+    }
+
+    public void Cancel()
+    {
+        Process? process;
+        lock (_stateLock)
+        {
+            process = _process;
+        }
+
+        try
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            // Already gone, or refused to die - nothing further to do, and throwing from a
+            // cancellation callback would replace the caller's cancellation with a worse error.
+        }
+    }
+}

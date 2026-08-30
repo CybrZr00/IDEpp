@@ -84,6 +84,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SourceControlPaneViewModel sourceControl,
         NuGetPaneViewModel nuGet,
         TestExplorerPaneViewModel testExplorer,
+        TaskExplorerPaneViewModel taskExplorer,
         ScheduledAutomationsPaneViewModel scheduledAutomations,
         ScheduledAutomationService scheduledAutomationService,
         WelcomeDocumentViewModel welcome,
@@ -107,6 +108,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SourceControl = sourceControl;
         NuGet = nuGet;
         TestExplorer = testExplorer;
+        TaskExplorer = taskExplorer;
         ScheduledAutomations = scheduledAutomations;
         _scheduledAutomationService = scheduledAutomationService;
         Welcome = welcome;
@@ -123,6 +125,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _appSettingsStore = appSettingsStore;
         _roslynWorkspaceService = roslynWorkspaceService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
+
+        // Task output arrives on the task process's own thread (see TaskExplorerPaneViewModel.OutputLine),
+        // so it gets the same dispatch treatment as build output rather than touching Output directly.
+        // Deliberately not OnBuildOutputLine: that also feeds ErrorList.AddIfDiagnostic, whose parser
+        // is MSBuild-specific, and npm output is not MSBuild output.
+        TaskExplorer.OutputLine = line => _dispatcher.Invoke(() => Output.AppendLine(line));
 
         currentTheme = _themeService.Current;
         _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
@@ -194,6 +202,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public NuGetPaneViewModel NuGet { get; }
 
     public TestExplorerPaneViewModel TestExplorer { get; }
+
+    public TaskExplorerPaneViewModel TaskExplorer { get; }
 
     public ScheduledAutomationsPaneViewModel ScheduledAutomations { get; }
 
@@ -608,10 +618,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, FullPath: not null })
                 .Select(n => n.FullPath!)
                 .ToList());
-            CopilotChat.SetIndexableFiles(root.Flatten()
+            var solutionFilePaths = root.Flatten()
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)
-                .ToList());
+                .ToList();
+            CopilotChat.SetIndexableFiles(solutionFilePaths);
             CopilotChat.SetSolutionProjects(root.Flatten()
                 .Where(n => n is { Kind: SolutionTreeNodeKind.Project, FullPath: not null })
                 .Select(n => (n.FullPath!, n.TargetFramework))
@@ -659,6 +670,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // session, but may already have build output on disk from a prior one - so discovery
             // might still find real tests immediately. Not gated on success (see DiscoverTestsAsync).
             _ = DiscoverTestsAsync();
+
+            // Unlike test discovery this needs nothing built - it is a JSON parse over files that
+            // are already on disk (see PackageJsonReader).
+            _ = DiscoverTasksAsync(solutionDirectory, solutionFilePaths);
 
             // Default-on: only skipped if the user has explicitly turned it off in Settings.
             var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
@@ -989,6 +1004,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         OpenPath(fullPath);
     }
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync, same posture as DiscoverTestsAsync - a
+    /// solution with no package.json anywhere is the common case and must stay silent.</summary>
+    private async Task DiscoverTasksAsync(string? solutionDirectory, IReadOnlyList<string> solutionFilePaths)
+    {
+        try
+        {
+            await TaskExplorer.SetSolutionAsync(solutionDirectory, solutionFilePaths);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Task discovery failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Opens the package.json a Task Explorer node came from - the manifest-node
+    /// counterpart to double-clicking a task, which runs it instead.</summary>
+    public void OpenTaskManifest(TaskTreeNode node) => OpenPath(node.ManifestPath);
 
     /// <summary>Fire-and-forget from BuildAsync/LoadSolutionAsync - a discovery failure must never
     /// break build/load result reporting, just get logged to Output.</summary>

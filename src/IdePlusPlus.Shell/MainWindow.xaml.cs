@@ -88,6 +88,7 @@ public partial class MainWindow : Window
         OutputAnchorable.Content = viewModel.Output;
         ErrorListAnchorable.Content = viewModel.ErrorList;
         TestExplorerAnchorable.Content = viewModel.TestExplorer;
+        TaskRunnerAnchorable.Content = viewModel.TaskExplorer;
         CallStackAnchorable.Content = viewModel.CallStack;
         LocalsAnchorable.Content = viewModel.Locals;
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
@@ -102,6 +103,7 @@ public partial class MainWindow : Window
             [OutputPaneViewModel.PaneContentId] = viewModel.Output,
             [ErrorListPaneViewModel.PaneContentId] = viewModel.ErrorList,
             [TestExplorerPaneViewModel.PaneContentId] = viewModel.TestExplorer,
+            [TaskExplorerPaneViewModel.PaneContentId] = viewModel.TaskExplorer,
             [CallStackPaneViewModel.PaneContentId] = viewModel.CallStack,
             [LocalsPaneViewModel.PaneContentId] = viewModel.Locals,
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
@@ -600,6 +602,29 @@ public partial class MainWindow : Window
     // file), so it can't be bound TwoWay from XAML - mirror it into the view model from the event instead.
     private void TestTreeView_OnSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e) =>
         ((MainWindowViewModel)DataContext).TestExplorer.SelectedNode = e.NewValue as TestTreeNode;
+
+    /// <summary>Double-click runs a task, and opens the package.json behind a manifest node - the
+    /// same "act on what was double-clicked" split the Test Explorer tree uses.</summary>
+    private void TaskTreeView_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement { DataContext: TaskTreeNode node })
+        {
+            return;
+        }
+
+        var viewModel = (MainWindowViewModel)DataContext;
+        if (node.Kind == TaskTreeNodeKind.Task)
+        {
+            _ = viewModel.TaskExplorer.RunAsync(node);
+        }
+        else
+        {
+            viewModel.OpenTaskManifest(node);
+        }
+    }
+
+    private void TaskTreeView_OnSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e) =>
+        ((MainWindowViewModel)DataContext).TaskExplorer.SelectedNode = e.NewValue as TaskTreeNode;
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
