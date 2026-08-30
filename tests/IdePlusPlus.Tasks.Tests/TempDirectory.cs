@@ -23,6 +23,10 @@ internal sealed class TempDirectory : IDisposable
 
     public string WritePackageJson(string json) => WriteFile("package.json", json);
 
+    /// <summary>A path inside this directory for a file that does not exist yet.</summary>
+    public string PathFor(string relativePath) =>
+        System.IO.Path.Combine(Path, relativePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+
     public void Dispose()
     {
         try

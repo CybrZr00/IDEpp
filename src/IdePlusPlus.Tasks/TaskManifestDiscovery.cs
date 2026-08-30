@@ -18,6 +18,21 @@ public static class TaskManifestDiscovery
 {
     public const string PackageJsonFileName = "package.json";
 
+    /// <summary>
+    /// The JavaScript manifests IDE++ recognizes, and which runner each belongs to. Case-insensitive
+    /// because both conventions are in the wild ("Gulpfile.js" and "gulpfile.js"). Deliberately a
+    /// short list of the common names rather than every variant gulp will load - an unrecognized
+    /// one means "no tasks listed", not a broken IDE.
+    /// </summary>
+    private static readonly Dictionary<string, TaskManifestKind> JavaScriptManifestNames =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["gulpfile.js"] = TaskManifestKind.Gulp,
+            ["gulpfile.mjs"] = TaskManifestKind.Gulp,
+            ["gulpfile.babel.js"] = TaskManifestKind.Gulp,
+            ["gruntfile.js"] = TaskManifestKind.Grunt,
+        };
+
     private const string NodeModulesDirectoryName = "node_modules";
 
     /// <summary>Deep enough for a repo-root manifest and a one-level-down one (src/web,
@@ -37,7 +52,7 @@ public static class TaskManifestDiscovery
     {
         var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var path in EnumerateSolutionDirectory(solutionDirectory))
+        foreach (var path in EnumerateSolutionDirectory(solutionDirectory, [PackageJsonFileName]))
         {
             AddCandidate(candidates, path);
         }
@@ -60,6 +75,34 @@ public static class TaskManifestDiscovery
         }
 
         return manifests;
+    }
+
+    /// <summary>
+    /// Finds gulpfiles and Gruntfiles the same two ways <see cref="Discover"/> finds package.json,
+    /// and stops there: what tasks they contain cannot be known without executing them, which needs
+    /// the user's approval first (see <see cref="JavaScriptTaskTrustStore"/>). Finding the files is
+    /// a filesystem read and safe to do unprompted; that split is the whole point of this being a
+    /// separate method.
+    /// </summary>
+    public static IReadOnlyList<(string Path, TaskManifestKind Kind)> FindJavaScriptManifests(
+        string? solutionDirectory, IEnumerable<string> solutionFilePaths)
+    {
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in EnumerateSolutionDirectory(solutionDirectory, JavaScriptManifestNames.Keys))
+        {
+            AddCandidate(candidates, path);
+        }
+
+        foreach (var path in solutionFilePaths.Where(p => JavaScriptManifestNames.ContainsKey(Path.GetFileName(p))))
+        {
+            AddCandidate(candidates, path);
+        }
+
+        return candidates
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .Select(path => (Path: path, Kind: JavaScriptManifestNames[Path.GetFileName(path)]))
+            .ToList();
     }
 
     public static bool IsUnderNodeModules(string path) =>
@@ -101,13 +144,15 @@ public static class TaskManifestDiscovery
             contents.Scripts);
     }
 
-    private static IEnumerable<string> EnumerateSolutionDirectory(string? solutionDirectory)
+    private static IEnumerable<string> EnumerateSolutionDirectory(
+        string? solutionDirectory, IEnumerable<string> fileNames)
     {
         if (string.IsNullOrEmpty(solutionDirectory) || !Directory.Exists(solutionDirectory))
         {
             yield break;
         }
 
+        var wanted = fileNames.ToList();
         var queue = new Queue<(string Directory, int Depth)>();
         queue.Enqueue((solutionDirectory, 1));
 
@@ -115,10 +160,13 @@ public static class TaskManifestDiscovery
         {
             var (directory, depth) = queue.Dequeue();
 
-            var manifestPath = Path.Combine(directory, PackageJsonFileName);
-            if (File.Exists(manifestPath))
+            foreach (var fileName in wanted)
             {
-                yield return manifestPath;
+                var manifestPath = Path.Combine(directory, fileName);
+                if (File.Exists(manifestPath))
+                {
+                    yield return manifestPath;
+                }
             }
 
             if (depth >= SolutionScanDepth)
