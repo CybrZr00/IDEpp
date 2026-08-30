@@ -38,7 +38,10 @@ never really a notepad to begin with.
   implies. Discovery is a plain JSON read, so it costs nothing on a solution with no scripts. A task
   can be bound to Before/After Build or Clean and then runs automatically — including on F5's
   implicit build — without ever being able to fail the build itself. Gulp and Grunt tasks are
-  designed but not built yet
+  listed too, but only after you approve it for that solution: enumerating them means running the
+  gulpfile, so it is never automatic, and the approval is re-asked when the file changes. A
+  gulpfile's Visual Studio `<binding>` comment is imported, so a repo already set up in VS works
+  here on first open
 - A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings,
   chat-tool registration, and build-lifecycle handlers) with each plugin isolated in its own
   `AssemblyLoadContext`

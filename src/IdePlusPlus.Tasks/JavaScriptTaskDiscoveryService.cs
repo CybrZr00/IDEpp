@@ -21,6 +21,11 @@ public sealed class JavaScriptTaskDiscoveryService
     private readonly Dictionary<string, (DateTime WriteTimeUtc, long Length, JavaScriptTaskListResult Result)> _cache =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Manifests whose unsupported-binding warning has already been said. It is a fact
+    /// about the file, not about this scan, so repeating it on every solution load and every
+    /// refresh would be noise the user learns to skip past.</summary>
+    private readonly HashSet<string> _warnedAboutUnsupportedBindings = new(StringComparer.OrdinalIgnoreCase);
+
     public JavaScriptTaskDiscoveryService(JavaScriptTaskTrustStore trustStore) => _trustStore = trustStore;
 
     /// <summary>
@@ -169,7 +174,7 @@ public sealed class JavaScriptTaskDiscoveryService
             return [];
         }
 
-        if (comment.UnsupportedProjectOpenTasks.Count > 0)
+        if (comment.UnsupportedProjectOpenTasks.Count > 0 && _warnedAboutUnsupportedBindings.Add(manifestPath))
         {
             OnLog?.Invoke(
                 $"[Tasks] {Path.GetFileName(manifestPath)}: Visual Studio binds " +

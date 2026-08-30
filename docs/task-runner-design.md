@@ -175,7 +175,7 @@ plugin failures are handled everywhere else.
 
 ---
 
-## Phase 3 — Gulp and Grunt discovery (needs Node.js, and consent)
+## Phase 3 — Gulp and Grunt discovery (needs Node.js, and consent) *(shipped)*
 
 **Summary**: Enumerate gulp tasks with `gulp --tasks-simple` (one task name per line) and grunt tasks
 by parsing `grunt --no-color --help`, preferring the locally installed `node_modules/.bin` binary and
@@ -184,10 +184,20 @@ does not spawn Node.
 
 **Why this is last**: `gulp --tasks-simple` *executes the gulpfile* to build its task graph. Listing
 tasks is therefore arbitrary code execution from the repository — which is exactly what IDE++ gates
-behind explicit opt-in everywhere else (the shell tool is opt-in and confirmed per use). Gate
-first-time discovery per solution behind a one-time prompt naming the file, persisted as a flag in
-`.ideplusplus/tasks.json`. `package.json` scripts, being a pure JSON parse, need no such gate — the
-reason Phase 1 goes first.
+behind explicit opt-in everywhere else (the shell tool is opt-in and confirmed per use).
+`package.json` scripts, being a pure JSON parse, need no such gate — the reason Phase 1 goes first.
+
+**Correction to this plan, as built**: the consent flag does *not* go in `.ideplusplus/tasks.json`.
+That is a file a repository ships, so a hostile repo could arrive with the flag already set and its
+gulpfile would run on open — the approval would approve itself. `McpProjectTrustStore` had already
+made this argument ("a trust record stored under the solution would be checked in and would approve
+itself"), so `JavaScriptTaskTrustStore` follows it exactly: `%LOCALAPPDATA%`, keyed by solution
+path, valued by a content fingerprint over every JavaScript manifest, so approving a repo once does
+not approve whatever its gulpfile becomes on the next pull.
+
+Approval is also requested from a **button, not on solution load**. A dialog every time a repo with
+a gulpfile is opened is one people learn to click through, which would leave the gate in place and
+the protection gone.
 
 **New files**: `GulpTaskDiscovery.cs`, `GruntTaskDiscovery.cs`, `TaskDiscoveryCache.cs` in
 `IdePlusPlus.Tasks`; a consent dialog in the shell; and `VsBindingCommentReader.cs`, carried over
@@ -197,7 +207,15 @@ JavaScript manifests this phase introduces. Read-only: IDE++ never rewrites the 
 **Real risks**: both output formats are tool-version-dependent, so each parser stays in its own file
 (same containment argument as `TrxParser`). Discovery must be timeout-bounded and tree-killed — a
 gulpfile that starts a watcher at module scope will otherwise never return. A gulpfile that throws
-should surface its stderr, not an empty task list.
+should surface its stderr, not an empty task list. Running a gulp task is `gulp sass`, **not**
+`npm run sass`: `TaskRunService` dispatches on manifest kind, since the npm form would fail with a
+script-not-found error that says nothing about the real cause.
+
+**Verified against a real gulp install** (not just captured fixtures): loading a solution with an
+unapproved gulpfile prompts nothing and lists nothing; declining leaves it unapproved; approving
+lists the gulpfile's five tasks and imports its `<binding>` comment; reloading does not re-prompt;
+editing the gulpfile revokes approval and re-offers the scan; and `gulp sass` runs. Grunt's parser
+is covered by captured-output tests only — no grunt project was built to run against.
 
 ---
 
@@ -219,7 +237,8 @@ abort).
 **Suggested order**: Phase 1 (M) → Phase 2 (M, and the only phase touching the plugin contract) →
 Phase 3 (S once Phase 1's process plumbing exists, but the consent flow is the fiddly part).
 
-Phases 1 and 2 are shipped. Both were verified end to end against a throwaway solution driven
+All three phases are shipped. Each was verified end to end against a throwaway solution driven
 through the real `SolutionLoader` → discovery → pane → `TaskRunService` path, not only by unit
-tests — which is how the process-tree defect above was found, and how the bound-task timeout was
-confirmed to actually release the build rather than merely being configured.
+tests — which is how the process-tree defect above was found, how the bound-task timeout was
+confirmed to actually release the build rather than merely being configured, and how Phase 3's
+approval gate was checked to actually hold when declined.
