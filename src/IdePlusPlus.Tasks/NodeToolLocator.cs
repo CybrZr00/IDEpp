@@ -79,7 +79,9 @@ public static class NodeToolLocator
     }
 
     /// <summary>Extensionless matches are deliberately not considered: the extensionless "npm" next
-    /// to npm.cmd is a shell script, which CreateProcess cannot start.</summary>
+    /// to npm.cmd is a shell script, which CreateProcess cannot start. Note the returned path
+    /// carries PATHEXT's casing rather than the file's own (".CMD" for the usual PATHEXT) - Windows
+    /// paths are case-insensitive, so it starts either way.</summary>
     private static string? FirstExisting(string directory, string toolName, IReadOnlyList<string> extensions)
     {
         foreach (var extension in extensions)
