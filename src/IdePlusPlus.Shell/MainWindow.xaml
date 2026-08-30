@@ -298,7 +298,7 @@
         <HierarchicalDataTemplate DataType="{x:Type toolPanes:TaskTreeNode}" ItemsSource="{Binding Children}">
             <!-- Foreground set explicitly, same reason as the Solution Explorer template above -
                  the default themed TreeViewItem template hardcodes light-theme text color. -->
-            <TextBlock Text="{Binding Name}"
+            <TextBlock Text="{Binding Label}"
                        Foreground="{DynamicResource WindowForegroundBrush}"
                        ToolTip="{Binding Description}" />
         </HierarchicalDataTemplate>
@@ -319,7 +319,26 @@
                           Foreground="{DynamicResource WindowForegroundBrush}"
                           BorderThickness="0"
                           MouseDoubleClick="TaskTreeView_OnMouseDoubleClick"
-                          SelectedItemChanged="TaskTreeView_OnSelectedItemChanged" />
+                          SelectedItemChanged="TaskTreeView_OnSelectedItemChanged">
+                    <!-- Each item toggles rather than sets, so the same menu both binds and
+                         unbinds; the node's own label is what shows the current state. -->
+                    <TreeView.ContextMenu>
+                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                            <MenuItem Header="Run at Before Build"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="BeforeBuild" />
+                            <MenuItem Header="Run at After Build"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="AfterBuild" />
+                            <MenuItem Header="Run at Before Clean"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="BeforeClean" />
+                            <MenuItem Header="Run at After Clean"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="AfterClean" />
+                        </ContextMenu>
+                    </TreeView.ContextMenu>
+                </TreeView>
             </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">

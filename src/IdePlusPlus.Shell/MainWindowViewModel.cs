@@ -9,11 +9,13 @@ using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.NuGet;
+using IdePlusPlus.PluginContracts;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell.ToolPanes;
+using IdePlusPlus.Tasks;
 using IdePlusPlus.Shell.Views;
 using Microsoft.Win32;
 
@@ -74,6 +76,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private readonly ScheduledAutomationService _scheduledAutomationService;
 
+    private readonly PluginBuildEventRegistry _pluginBuildEvents;
+
     private StartupConfiguration? ActiveConfiguration => _startupConfigurations.FirstOrDefault(c => c.Name == _activeConfigurationName);
 
     public MainWindowViewModel(
@@ -99,7 +103,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         NuGetService nuGetService,
         PublishService publishService,
         AppSettingsStore appSettingsStore,
-        RoslynWorkspaceService roslynWorkspaceService)
+        RoslynWorkspaceService roslynWorkspaceService,
+        PluginBuildEventRegistry pluginBuildEvents)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
@@ -124,6 +129,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _publishService = publishService;
         _appSettingsStore = appSettingsStore;
         _roslynWorkspaceService = roslynWorkspaceService;
+        _pluginBuildEvents = pluginBuildEvents;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         // Task output arrives on the task process's own thread (see TaskExplorerPaneViewModel.OutputLine),
@@ -1091,12 +1097,53 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Runs a build with whatever is bound around it - Task Explorer's bindings and plugin handlers -
+    /// as one exclusive section, so nothing else can start a build in the gap while a Before Build
+    /// task is still writing files this build is about to read.
+    ///
+    /// Bound work never fails the build: a non-zero task or a throwing handler is reported and the
+    /// build proceeds, matching Visual Studio and keeping a broken lint config from making the IDE
+    /// unable to build.
+    /// </summary>
+    private Task<int> WithBuildEventsAsync(BuildEventKind before, BuildEventKind after, Func<Task<int>> build) =>
+        _buildService.RunExclusiveAsync(async () =>
+        {
+            await RunBuildEventAsync(before);
+            var exitCode = await build();
+            await RunBuildEventAsync(after, exitCode);
+            return exitCode;
+        });
+
+    /// <summary>Bound tasks first, then plugin handlers - the IDE's own feature is the more
+    /// predictable of the two, and a plugin handler is the more likely to be slow.</summary>
+    private async Task RunBuildEventAsync(BuildEventKind kind, int? exitCode = null)
+    {
+        await TaskExplorer.RunBoundTasksAsync(ToBindingKind(kind));
+
+        if (CurrentSolutionPath is { } solutionPath)
+        {
+            await _pluginBuildEvents.DispatchAsync(new BuildEventContext(kind, solutionPath, Configuration, exitCode));
+        }
+    }
+
+    private static TaskBindingKind ToBindingKind(BuildEventKind kind) => kind switch
+    {
+        BuildEventKind.BeforeBuild => TaskBindingKind.BeforeBuild,
+        BuildEventKind.AfterBuild => TaskBindingKind.AfterBuild,
+        BuildEventKind.BeforeClean => TaskBindingKind.BeforeClean,
+        _ => TaskBindingKind.AfterClean,
+    };
+
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private async Task BuildAsync()
     {
         var exitCode = await RunBuildVerbAsync(
             "Build",
-            () => _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
+            () => WithBuildEventsAsync(
+                BuildEventKind.BeforeBuild,
+                BuildEventKind.AfterBuild,
+                () => _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
 
         if (exitCode == 0)
         {
@@ -1110,13 +1157,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private Task CleanAsync() =>
         RunBuildVerbAsync(
             "Clean",
-            () => _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
+            () => WithBuildEventsAsync(
+                BuildEventKind.BeforeClean,
+                BuildEventKind.AfterClean,
+                () => _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
 
+    /// <summary>Fires the build events, not the clean ones, even though BuildService.RebuildAsync is
+    /// a clean followed by a build: the clean is an implementation detail of rebuilding here, and
+    /// firing four events for one command would run clean-bound work at a surprising moment.</summary>
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private Task RebuildAsync() =>
         RunBuildVerbAsync(
             "Rebuild",
-            () => _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
+            () => WithBuildEventsAsync(
+                BuildEventKind.BeforeBuild,
+                BuildEventKind.AfterBuild,
+                () => _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
 
     /// <summary>The quick-Run/Stop toolbar button targets the first non-None entry in the active
     /// configuration (Start or StartWithoutDebugging - Run never attaches a debugger regardless of
@@ -1380,7 +1436,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         int exitCode;
         try
         {
-            exitCode = await _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration);
+            // F5's implicit build fires bindings too - Visual Studio's do, and a Before Build task
+            // that only runs for the toolbar button would be a trap.
+            exitCode = await WithBuildEventsAsync(
+                BuildEventKind.BeforeBuild,
+                BuildEventKind.AfterBuild,
+                () => _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration));
         }
         catch (InvalidOperationException ex)
         {
