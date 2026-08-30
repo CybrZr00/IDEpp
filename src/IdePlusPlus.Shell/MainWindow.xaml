@@ -214,7 +214,17 @@
                       Foreground="{DynamicResource WindowForegroundBrush}"
                       BorderThickness="0"
                       MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick"
-                      PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown" />
+                      PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown">
+                <!-- Two-way, so the IDE can reveal a node it just created. Expansion is bound too:
+                     WPF only realizes a container once its parents are expanded, so setting
+                     IsSelected on a collapsed branch would otherwise do nothing. -->
+                <TreeView.ItemContainerStyle>
+                    <Style TargetType="TreeViewItem">
+                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                    </Style>
+                </TreeView.ItemContainerStyle>
+            </TreeView>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
             <TextBox Text="{Binding Text, Mode=OneWay}"
@@ -448,7 +458,11 @@
               Background="{DynamicResource WindowBackgroundBrush}"
               Foreground="{DynamicResource WindowForegroundBrush}">
             <MenuItem Header="_File">
-                <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" />
+                <MenuItem Header="_New">
+                    <MenuItem Header="_Project..." Command="{Binding NewProjectCommand}" />
+                    <Separator />
+                    <MenuItem Header="_File" Command="{Binding NewDocumentCommand}" />
+                </MenuItem>
                 <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
                 <MenuItem Header="Open _Solution..." Command="{Binding OpenSolutionCommand}" />
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" />

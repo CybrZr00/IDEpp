@@ -524,6 +524,13 @@ public partial class MainWindow : Window
         var viewModel = (MainWindowViewModel)DataContext;
         var contextMenu = new ContextMenu { PlacementTarget = element };
 
+        if (node.Kind == SolutionTreeNodeKind.Solution)
+        {
+            var newProjectMenuItem = new MenuItem { Header = "Add New Project..." };
+            newProjectMenuItem.Click += (_, _) => viewModel.NewProjectCommand.Execute(null);
+            contextMenu.Items.Add(newProjectMenuItem);
+        }
+
         if (node.Kind == SolutionTreeNodeKind.Project)
         {
             var menuItem = new MenuItem { Header = "Set as Startup Project" };

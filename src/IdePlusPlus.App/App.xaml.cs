@@ -26,6 +26,7 @@ using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.Tasks;
+using IdePlusPlus.Templates;
 using IdePlusPlus.TestRunner;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
@@ -113,6 +114,11 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
+
+        // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
+        // second or two and is otherwise invisible, so it says so in the Output pane.
+        _serviceProvider.GetRequiredService<TemplateCatalog>().OnLog +=
+            line => dispatcher.Invoke(() => output.AppendLine(line));
 
         var javaScriptTaskDiscovery = _serviceProvider.GetRequiredService<JavaScriptTaskDiscoveryService>();
         javaScriptTaskDiscovery.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
@@ -344,6 +350,8 @@ public partial class App : Application
         services.AddSingleton<SourceControlPaneViewModel>();
         services.AddSingleton<NuGetService>();
         services.AddSingleton<PublishService>();
+        services.AddSingleton<TemplateCatalog>();
+        services.AddSingleton<TemplateInstantiationService>();
         services.AddSingleton<NuGetSearchClient>();
         services.AddSingleton<NuGetPaneViewModel>();
         services.AddSingleton<TestDiscoveryService>();

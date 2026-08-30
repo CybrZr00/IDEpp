@@ -16,6 +16,7 @@ using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.Tasks;
+using IdePlusPlus.Templates;
 using IdePlusPlus.Shell.Views;
 using Microsoft.Win32;
 
@@ -42,6 +43,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly PublishService _publishService;
     private readonly AppSettingsStore _appSettingsStore;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
+    private readonly TemplateCatalog _templateCatalog;
+    private readonly TemplateInstantiationService _templateInstantiation;
     private readonly Dispatcher _dispatcher;
 
     /// <summary>Each Action.Start entry's own launch profile, keyed by the DebugSession StartDebuggingAsync
@@ -104,6 +107,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         PublishService publishService,
         AppSettingsStore appSettingsStore,
         RoslynWorkspaceService roslynWorkspaceService,
+        TemplateCatalog templateCatalog,
+        TemplateInstantiationService templateInstantiation,
         PluginBuildEventRegistry pluginBuildEvents)
     {
         SolutionExplorer = solutionExplorer;
@@ -129,6 +134,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _publishService = publishService;
         _appSettingsStore = appSettingsStore;
         _roslynWorkspaceService = roslynWorkspaceService;
+        _templateCatalog = templateCatalog;
+        _templateInstantiation = templateInstantiation;
         _pluginBuildEvents = pluginBuildEvents;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
@@ -476,6 +483,59 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void NewDocument() => ActiveDocument = _editorWorkspace.NewDocument();
 
+    /// <summary>
+    /// New Project - also reached from the Solution Explorer's solution node. The dialog does the
+    /// creating (it streams into the Output pane while still up); what's left here is reloading the
+    /// solution it changed and revealing the result.
+    /// </summary>
+    [RelayCommand]
+    private async Task NewProjectAsync()
+    {
+        var viewModel = new NewProjectDialogViewModel(
+            _templateCatalog, _templateInstantiation, CurrentSolutionPath, OnBuildOutputLine);
+
+        var dialog = new NewProjectDialog(viewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+
+        if (dialog.ShowDialog() != true || dialog.ResultSolutionPath is not { } solutionPath)
+        {
+            return;
+        }
+
+        // A full reload rather than a targeted insert: the solution file itself changed, and the
+        // new project has to be evaluated by MSBuild before anything can build or run it.
+        await LoadSolutionAsync(solutionPath, clearOutput: false);
+
+        if (dialog.ResultProjectPath is { } projectPath)
+        {
+            RevealProject(projectPath);
+        }
+    }
+
+    /// <summary>Selects a project node by its file path, expanding the solution so the container
+    /// actually exists to be selected.</summary>
+    private void RevealProject(string projectPath)
+    {
+        if (_solutionRoot is not { } root)
+        {
+            return;
+        }
+
+        root.IsExpanded = true;
+
+        var node = root.Flatten().FirstOrDefault(n =>
+            n.Kind == SolutionTreeNodeKind.Project &&
+            n.FullPath is not null &&
+            string.Equals(n.FullPath, projectPath, StringComparison.OrdinalIgnoreCase));
+
+        if (node is not null)
+        {
+            node.IsSelected = true;
+        }
+    }
+
     [RelayCommand]
     private void OpenDocument()
     {
@@ -594,9 +654,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    public async Task LoadSolutionAsync(string solutionPath)
+    /// <param name="clearOutput">False for a reload triggered from inside the IDE - creating a
+    /// project streams its own output here, and clearing it would throw away the log of what just
+    /// happened before anyone could read it.</param>
+    public async Task LoadSolutionAsync(string solutionPath, bool clearOutput = true)
     {
-        Output.Clear();
+        if (clearOutput)
+        {
+            Output.Clear();
+        }
+
         Output.AppendLine($"Loading {solutionPath}...");
         try
         {

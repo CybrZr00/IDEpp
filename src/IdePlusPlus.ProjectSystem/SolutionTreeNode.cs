@@ -25,6 +25,17 @@ public sealed partial class SolutionTreeNode(string name, string? fullPath, Solu
     [ObservableProperty]
     private bool isStartupProject;
 
+    /// <summary>Two-way bound to the TreeView's own selection, so the IDE can reveal a node it just
+    /// created rather than leaving the user to find it.</summary>
+    [ObservableProperty]
+    private bool isSelected;
+
+    /// <summary>Two-way bound to the TreeView's expansion. Selecting a node is not enough on its own -
+    /// WPF only realizes a container once its parents are expanded, so a selection set on a collapsed
+    /// branch silently does nothing.</summary>
+    [ObservableProperty]
+    private bool isExpanded;
+
     /// <summary>
     /// The Windows target framework moniker to pass to `dotnet build/run -f` for multi-targeted
     /// projects (e.g. MAUI's TargetFrameworks="net10.0-android;net10.0-windows10.0.19041.0;..."),
