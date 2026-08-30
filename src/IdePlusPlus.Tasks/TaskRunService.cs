@@ -1,16 +1,21 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.Tasks;
 
 /// <summary>
 /// Runs one task at a time, streaming its output live and killing the whole process tree on cancel.
 /// Mirrors TestRunService's shape - the same _starting/_process guard against two callers racing
-/// past an IsRunning check, the same ct.Register(Cancel) so a token actually stops the process
-/// rather than only stopping the await, and the same entireProcessTree kill, which matters more
-/// here than anywhere else in the codebase: npm spawns node, and node spawns whatever the script
-/// asked for.
+/// past an IsRunning check, and the same ct.Register(Cancel) so a token actually stops the process
+/// rather than only stopping the await.
+///
+/// Stopping goes through a <see cref="ProcessJob"/> rather than relying on
+/// Process.Kill(entireProcessTree: true) alone. Measured against a real `npm run watch`, the tree
+/// kill left the innermost node.exe alive and orphaned, still holding the redirected stdout pipe -
+/// see ProcessJob's own comment for the chain. The tree kill is still issued first; the job is what
+/// makes Stop actually mean stop.
 ///
 /// One run at a time overall, not one per manifest - running several tasks concurrently is a
 /// deliberate non-goal for now (see docs/task-runner-design.md).
@@ -29,6 +34,7 @@ public sealed partial class TaskRunService
 
     private readonly object _stateLock = new();
     private Process? _process;
+    private ProcessJob? _job;
     private bool _starting;
 
     public bool IsRunning
@@ -101,6 +107,10 @@ public sealed partial class TaskRunService
             process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
             process.ErrorDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
 
+            // Created before Start so assignment can happen as soon as possible afterwards - see
+            // ProcessJob for the race this narrows but cannot fully close.
+            using var job = ProcessJob.TryCreate();
+
             try
             {
                 process.Start();
@@ -111,9 +121,12 @@ public sealed partial class TaskRunService
                 return -1;
             }
 
+            job?.TryAssign(process);
+
             lock (_stateLock)
             {
                 _process = process;
+                _job = job;
                 _starting = false;
             }
 
@@ -138,6 +151,7 @@ public sealed partial class TaskRunService
                 if (ReferenceEquals(_process, process))
                 {
                     _process = null;
+                    _job = null;
                 }
             }
 
@@ -155,9 +169,11 @@ public sealed partial class TaskRunService
     public void Cancel()
     {
         Process? process;
+        ProcessJob? job;
         lock (_stateLock)
         {
             process = _process;
+            job = _job;
         }
 
         try
@@ -172,5 +188,10 @@ public sealed partial class TaskRunService
             // Already gone, or refused to die - nothing further to do, and throwing from a
             // cancellation callback would replace the caller's cancellation with a worse error.
         }
+
+        // After the tree kill, not instead of it: the tree kill reaches processes the job might
+        // have missed (anything spawned in the assignment window), and the job reaches the ones the
+        // tree walk demonstrably does not.
+        job?.Kill();
     }
 }
