@@ -307,7 +307,12 @@
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
                     <Button Content="Run" Command="{Binding RunSelectedCommand}" Margin="0,0,4,0" />
                     <Button Content="Stop" Command="{Binding CancelCommand}" Margin="0,0,4,0" />
-                    <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,4,0" />
+                    <!-- Only enabled when there is an unapproved gulpfile/Gruntfile to scan; listing
+                         their tasks means executing them, so it is never automatic. -->
+                    <Button Content="Scan gulp/grunt..."
+                            Command="{Binding ScanJavaScriptTasksCommand}"
+                            ToolTip="Lists tasks from this solution's gulpfile or Gruntfile. Doing so runs that file." />
                 </StackPanel>
                 <TextBlock DockPanel.Dock="Bottom"
                            Text="{Binding Summary}"

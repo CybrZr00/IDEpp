@@ -20,7 +20,7 @@ public class TaskExplorerPaneViewModelTests
             { "scripts": { "build": "tsc", "test": "jest" } }
             """);
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
 
         pane.Tree.Count.ShouldBe(1);
@@ -39,7 +39,7 @@ public class TaskExplorerPaneViewModelTests
         // list MainWindowViewModel hands over from SolutionLoader's file nodes.
         var deep = solution.WriteFile("src/Web/Client/package.json", """{ "scripts": { "bundle": "vite build" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, [deep]);
 
         pane.Tree.Count.ShouldBe(1);
@@ -51,11 +51,11 @@ public class TaskExplorerPaneViewModelTests
     {
         using var solution = new ScratchSolutionDirectory();
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
 
         pane.Tree.ShouldBeEmpty();
-        pane.Summary.ShouldBe("No package.json scripts found.");
+        pane.Summary.ShouldBe("No tasks found.");
     }
 
     /// <summary>Reloading has to replace the tree, not append to it.</summary>
@@ -68,7 +68,7 @@ public class TaskExplorerPaneViewModelTests
         using var second = new ScratchSolutionDirectory();
         second.WriteFile("package.json", """{ "scripts": { "lint": "eslint .", "serve": "vite" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(first.Path, []);
         await pane.SetSolutionAsync(second.Path, []);
 
@@ -82,7 +82,7 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
 
         pane.RunSelectedCommand.CanExecute(null).ShouldBeFalse("nothing is selected yet");
@@ -100,7 +100,7 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0].Children[0];
 
@@ -124,7 +124,7 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc", "test": "jest" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0].Children[1];
 
@@ -141,7 +141,7 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0].Children[0];
 
@@ -158,7 +158,7 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0].Children[0];
 
@@ -173,7 +173,7 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0];
 
@@ -187,7 +187,7 @@ public class TaskExplorerPaneViewModelTests
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
         TaskBindingStore.Save(solution.Path, [new TaskBinding("package.json", "build", TaskBindingKind.BeforeBuild)]);
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
 
         pane.Tree[0].Children[0].Bindings.ShouldBe([TaskBindingKind.BeforeBuild]);
@@ -203,7 +203,8 @@ public class TaskExplorerPaneViewModelTests
         solution.WriteFile("package.json", """{ "scripts": { "watch": "tsc --watch" } }""");
 
         var output = new List<string>();
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService()) { OutputLine = output.Add };
+        var pane = NewPane();
+        pane.OutputLine = output.Add;
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0].Children[0];
 
@@ -219,7 +220,8 @@ public class TaskExplorerPaneViewModelTests
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
         var output = new List<string>();
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService()) { OutputLine = output.Add };
+        var pane = NewPane();
+        pane.OutputLine = output.Add;
         await pane.SetSolutionAsync(solution.Path, []);
         pane.SelectedNode = pane.Tree[0].Children[0];
 
@@ -234,12 +236,105 @@ public class TaskExplorerPaneViewModelTests
         using var solution = new ScratchSolutionDirectory();
         solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
 
-        var pane = new TaskExplorerPaneViewModel(new TaskRunService());
+        var pane = NewPane();
         await pane.SetSolutionAsync(solution.Path, []);
 
         await Should.NotThrowAsync(() => pane.RunBoundTasksAsync(TaskBindingKind.BeforeBuild));
         pane.IsBusy.ShouldBeFalse();
     }
+
+    /// <summary>
+    /// A gulpfile must never be executed without approval, so an unapproved one is found and
+    /// reported but not listed. This is the security-relevant assertion in this file: if it starts
+    /// failing, opening a cloned repository runs its gulpfile.
+    /// </summary>
+    [Fact]
+    public async Task SetSolutionAsync_GulpfileIsNotScannedWithoutApproval()
+    {
+        using var solution = new ScratchSolutionDirectory();
+        solution.WriteFile("gulpfile.js", "throw new Error('this must never run');");
+
+        var pane = NewPane();
+        await pane.SetSolutionAsync(solution.Path, []);
+
+        pane.Tree.ShouldBeEmpty();
+        pane.Summary.ShouldBe("No tasks found. 1 gulp/grunt file(s) not scanned.");
+        pane.ScanJavaScriptTasksCommand.CanExecute(null).ShouldBeTrue("the user should be offered the scan");
+    }
+
+    [Fact]
+    public async Task SetSolutionAsync_NpmTasksStillListedAlongsideAnUnscannedGulpfile()
+    {
+        using var solution = new ScratchSolutionDirectory();
+        solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
+        solution.WriteFile("gulpfile.js", "throw new Error('this must never run');");
+
+        var pane = NewPane();
+        await pane.SetSolutionAsync(solution.Path, []);
+
+        pane.Tree[0].Children.Select(c => c.Name).ShouldBe(["build"]);
+        pane.Summary.ShouldBe("1 task in 1 manifest 1 gulp/grunt file(s) not scanned.");
+    }
+
+    [Fact]
+    public async Task ScanCommand_IsUnavailableWhenThereIsNoJavaScriptManifest()
+    {
+        using var solution = new ScratchSolutionDirectory();
+        solution.WriteFile("package.json", """{ "scripts": { "build": "tsc" } }""");
+
+        var pane = NewPane();
+        await pane.SetSolutionAsync(solution.Path, []);
+
+        pane.ScanJavaScriptTasksCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    /// <summary>A declined prompt must leave the solution unapproved, not approved-by-default.</summary>
+    [Fact]
+    public async Task ScanCommand_Declined_ListsNothingAndStaysOffered()
+    {
+        using var solution = new ScratchSolutionDirectory();
+        solution.WriteFile("gulpfile.js", "throw new Error('this must never run');");
+
+        var discovery = NewDiscoveryService();
+        discovery.TrustPrompt = _ => Task.FromResult(false);
+        var pane = new TaskExplorerPaneViewModel(new TaskRunService(), discovery);
+        await pane.SetSolutionAsync(solution.Path, []);
+
+        await pane.ScanJavaScriptTasksCommand.ExecuteAsync(null);
+
+        pane.Tree.ShouldBeEmpty();
+        pane.ScanJavaScriptTasksCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    /// <summary>No prompt wired - a headless context - must approve nothing rather than everything.</summary>
+    [Fact]
+    public async Task ScanCommand_WithNoPromptWired_FailsClosed()
+    {
+        using var solution = new ScratchSolutionDirectory();
+        solution.WriteFile("gulpfile.js", "throw new Error('this must never run');");
+
+        var logged = new List<string>();
+        var discovery = NewDiscoveryService();
+        discovery.OnLog = logged.Add;
+        var pane = new TaskExplorerPaneViewModel(new TaskRunService(), discovery);
+        await pane.SetSolutionAsync(solution.Path, []);
+
+        await pane.ScanJavaScriptTasksCommand.ExecuteAsync(null);
+
+        pane.Tree.ShouldBeEmpty();
+        logged.ShouldContain(line => line.Contains("has not been approved"));
+    }
+
+    private static JavaScriptTaskDiscoveryService NewDiscoveryService() =>
+        new(new JavaScriptTaskTrustStore(
+            Path.Combine(Path.GetTempPath(), $"ideplusplus-test-trust-{Guid.NewGuid():N}.json")));
+
+    /// <summary>
+    /// The trust store is pointed at a throwaway path so no test reads or writes the real one in
+    /// %LOCALAPPDATA%. Nothing here approves a solution, so gulp/grunt discovery never runs and no
+    /// test executes a JavaScript file.
+    /// </summary>
+    private static TaskExplorerPaneViewModel NewPane() => new(new TaskRunService(), NewDiscoveryService());
 
     private sealed class ScratchSolutionDirectory : IDisposable
     {

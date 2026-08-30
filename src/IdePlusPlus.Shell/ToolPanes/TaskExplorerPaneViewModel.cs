@@ -28,21 +28,27 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
     public static readonly TimeSpan DefaultBoundTaskTimeout = TimeSpan.FromMinutes(2);
 
     private readonly TaskRunService _taskRunService;
+    private readonly JavaScriptTaskDiscoveryService _javaScriptDiscovery;
     private readonly TimeSpan _boundTaskTimeout;
 
     private string? _solutionDirectory;
     private IReadOnlyList<string> _solutionFilePaths = [];
     private IReadOnlyList<TaskManifest> _manifests = [];
+    private IReadOnlyList<(string Path, TaskManifestKind Kind)> _javaScriptManifests = [];
     private List<TaskBinding> _bindings = [];
 
     public const string PaneContentId = "TaskRunner";
 
     /// <summary>The timeout is a constructor parameter purely so tests can assert the timeout path
     /// without waiting two minutes for it.</summary>
-    public TaskExplorerPaneViewModel(TaskRunService taskRunService, TimeSpan? boundTaskTimeout = null)
+    public TaskExplorerPaneViewModel(
+        TaskRunService taskRunService,
+        JavaScriptTaskDiscoveryService javaScriptDiscovery,
+        TimeSpan? boundTaskTimeout = null)
         : base(PaneContentId, "Task Runner")
     {
         _taskRunService = taskRunService;
+        _javaScriptDiscovery = javaScriptDiscovery;
         _boundTaskTimeout = boundTaskTimeout ?? DefaultBoundTaskTimeout;
     }
 
@@ -82,9 +88,15 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
         var solutionDirectory = _solutionDirectory;
         var solutionFilePaths = _solutionFilePaths;
 
+        IReadOnlyList<TaskManifest> npmManifests;
         try
         {
-            _manifests = await Task.Run(() => TaskManifestDiscovery.Discover(solutionDirectory, solutionFilePaths));
+            npmManifests = await Task.Run(() => TaskManifestDiscovery.Discover(solutionDirectory, solutionFilePaths));
+
+            // Finding the files is a filesystem read; listing what is inside them is not, and needs
+            // approval first - see JavaScriptTaskDiscoveryService.
+            _javaScriptManifests = await Task.Run(
+                () => TaskManifestDiscovery.FindJavaScriptManifests(solutionDirectory, solutionFilePaths));
         }
         catch (Exception ex)
         {
@@ -92,7 +104,97 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
             return;
         }
 
+        _manifests = npmManifests;
         RebuildTree();
+
+        // Only re-lists an already-approved solution; an unapproved one waits for the Scan button.
+        if (solutionDirectory is not null && CanListJavaScriptTasks())
+        {
+            await ListJavaScriptTasksAsync(solutionDirectory, npmManifests);
+        }
+    }
+
+    private bool CanListJavaScriptTasks() =>
+        _solutionDirectory is { } directory
+        && _javaScriptManifests.Count > 0
+        && _javaScriptDiscovery.IsTrusted(directory, _javaScriptManifests.Select(m => m.Path).ToList());
+
+    private async Task ListJavaScriptTasksAsync(string solutionDirectory, IReadOnlyList<TaskManifest> npmManifests)
+    {
+        IReadOnlyList<TaskManifest> javaScriptManifests;
+        try
+        {
+            javaScriptManifests = await _javaScriptDiscovery.ListTasksAsync(solutionDirectory, _javaScriptManifests);
+        }
+        catch (Exception ex)
+        {
+            OutputLine?.Invoke($"gulp/grunt discovery failed: {ex.Message}");
+            return;
+        }
+
+        ImportVisualStudioBindings(solutionDirectory, javaScriptManifests);
+
+        _manifests = [.. npmManifests, .. javaScriptManifests];
+        RebuildTree();
+    }
+
+    /// <summary>
+    /// Adopts the bindings a manifest's own Visual Studio comment declares, for tasks that exist and
+    /// are not already bound here. Import-once by construction: adopted bindings are saved into
+    /// .ideplusplus/tasks.json, so unbinding one afterwards sticks rather than being re-added on the
+    /// next scan.
+    /// </summary>
+    private void ImportVisualStudioBindings(string solutionDirectory, IReadOnlyList<TaskManifest> javaScriptManifests)
+    {
+        var imported = 0;
+        foreach (var manifest in javaScriptManifests)
+        {
+            var taskNames = manifest.Tasks.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+
+            foreach (var binding in _javaScriptDiscovery.ImportVisualStudioBindings(solutionDirectory, manifest.Path))
+            {
+                if (!taskNames.Contains(binding.TaskName) || _bindings.Contains(binding))
+                {
+                    continue;
+                }
+
+                _bindings.Add(binding);
+                imported++;
+                OutputLine?.Invoke(
+                    $"[Tasks] Imported Visual Studio binding: '{binding.TaskName}' runs at " +
+                    $"{TaskTreeNode.DisplayName(binding.Kind)}.");
+            }
+        }
+
+        if (imported > 0)
+        {
+            TaskBindingStore.Save(solutionDirectory, _bindings);
+        }
+    }
+
+    private bool CanScanJavaScriptTasks() =>
+        !IsBusy && _solutionDirectory is not null && _javaScriptManifests.Count > 0 && !CanListJavaScriptTasks();
+
+    /// <summary>
+    /// Asks for approval to execute this solution's gulpfile/Gruntfile, and lists their tasks if
+    /// given. Deliberately a button rather than something that happens on solution load: a dialog
+    /// every time a repo with a gulpfile is opened would train people to click through it.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanScanJavaScriptTasks))]
+    private async Task ScanJavaScriptTasksAsync()
+    {
+        if (_solutionDirectory is not { } solutionDirectory)
+        {
+            return;
+        }
+
+        var manifestPaths = _javaScriptManifests.Select(m => m.Path).ToList();
+        if (!await _javaScriptDiscovery.RequestTrustAsync(solutionDirectory, manifestPaths))
+        {
+            return;
+        }
+
+        await ListJavaScriptTasksAsync(solutionDirectory, [.. _manifests.Where(m => m.Kind == TaskManifestKind.NpmScripts)]);
     }
 
     private void RebuildTree()
@@ -167,7 +269,7 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
         using var timeoutSource = timeout is { } limit ? new CancellationTokenSource(limit) : null;
         try
         {
-            var command = $"{node.PackageManager.ExecutableName()} run {task.Name}";
+            var command = TaskRunService.DescribeCommand(task, node.PackageManager);
             OutputLine?.Invoke($"Task started ({command}): {node.ManifestPath}");
 
             Summary = $"Running {task.Name}...";
@@ -249,16 +351,22 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
 
     private void RecomputeSummary()
     {
+        // Said explicitly rather than left as a silently short list: a solution whose tasks all live
+        // in a gulpfile would otherwise look like a solution with no tasks at all.
+        var unscanned = CanScanJavaScriptTasks()
+            ? $" {_javaScriptManifests.Count} gulp/grunt file(s) not scanned."
+            : "";
+
         var taskCount = Tree.Sum(manifest => manifest.Children.Count);
         if (taskCount == 0)
         {
-            Summary = "No package.json scripts found.";
+            Summary = $"No tasks found.{unscanned}";
             return;
         }
 
         var boundCount = Tree.SelectMany(manifest => manifest.Children).Count(task => task.Bindings.Count > 0);
         var summary = $"{taskCount} {(taskCount == 1 ? "task" : "tasks")} in {Tree.Count} {(Tree.Count == 1 ? "manifest" : "manifests")}";
-        Summary = boundCount == 0 ? summary : $"{summary}, {boundCount} bound";
+        Summary = (boundCount == 0 ? summary : $"{summary}, {boundCount} bound") + unscanned;
     }
 
     partial void OnIsBusyChanged(bool value) => NotifyCommandsCanExecuteChanged();
@@ -270,5 +378,6 @@ public sealed partial class TaskExplorerPaneViewModel : ToolPaneViewModel
         RunSelectedCommand.NotifyCanExecuteChanged();
         CancelCommand.NotifyCanExecuteChanged();
         ToggleBindingCommand.NotifyCanExecuteChanged();
+        ScanJavaScriptTasksCommand.NotifyCanExecuteChanged();
     }
 }

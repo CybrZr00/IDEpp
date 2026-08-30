@@ -113,6 +113,11 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
+
+        var javaScriptTaskDiscovery = _serviceProvider.GetRequiredService<JavaScriptTaskDiscoveryService>();
+        javaScriptTaskDiscovery.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        javaScriptTaskDiscovery.TrustPrompt = request =>
+            dispatcher.Invoke(() => Task.FromResult(ConfirmJavaScriptTaskDiscovery(mainWindow, request)));
         _ = mcpServerManager.ReconnectAllAsync();
 
         mainWindow.Show();
@@ -149,6 +154,35 @@ public partial class App : Application
              the file changes.
              """,
             "IDE++ - run this solution's MCP servers?",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        return result == MessageBoxResult.Yes;
+    }
+
+    /// <summary>
+    /// Asks before listing a solution's gulp/grunt tasks, because listing them runs the file that
+    /// defines them - gulp builds its task graph by executing the gulpfile, and there is no way to
+    /// enumerate tasks without it. The files are named in full for the same reason MCP's prompt
+    /// lists commands: "scan this solution's task files" is not something anyone can meaningfully
+    /// consent to. Defaults to No, and a dismissed dialog is a No.
+    /// </summary>
+    private static bool ConfirmJavaScriptTaskDiscovery(Window owner, JavaScriptTaskTrustRequest request)
+    {
+        var files = string.Join(Environment.NewLine, request.ManifestPaths.Select(path => $"    {path}"));
+
+        var result = MessageBox.Show(
+            owner,
+            $"""
+             Listing this solution's gulp/grunt tasks means running these files:
+
+             {files}
+
+             That executes whatever they do when loaded, as you, with your permissions. Only allow
+             this if you trust the source of this solution. You will be asked again if they change.
+             """,
+            "IDE++ - run this solution's task files?",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);
@@ -316,6 +350,8 @@ public partial class App : Application
         services.AddSingleton<TestRunService>();
         services.AddSingleton<TestExplorerPaneViewModel>();
         services.AddSingleton<TaskRunService>();
+        services.AddSingleton<JavaScriptTaskTrustStore>();
+        services.AddSingleton<JavaScriptTaskDiscoveryService>();
         services.AddSingleton<TaskExplorerPaneViewModel>();
         services.AddSingleton<RoslynWorkspaceService>();
         services.AddSingleton<RoslynCompletionService>();

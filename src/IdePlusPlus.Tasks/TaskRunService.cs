@@ -73,8 +73,23 @@ public sealed partial class TaskRunService
             return -1;
         }
 
-        var toolName = packageManager.ExecutableName();
-        if (NodeToolLocator.Locate(toolName, workingDirectory) is not { } executablePath)
+        var (toolName, taskArguments) = Invocation(task, packageManager);
+
+        // Same local-first resolution and npx fallback as task discovery: a repo that lists gulp as
+        // a devDependency without a .bin shim still runs.
+        string executablePath;
+        IReadOnlyList<string> arguments;
+        if (NodeToolLocator.Locate(toolName, workingDirectory) is { } toolPath)
+        {
+            executablePath = toolPath;
+            arguments = taskArguments;
+        }
+        else if (NodeToolLocator.Locate("npx", workingDirectory) is { } npxPath)
+        {
+            executablePath = npxPath;
+            arguments = ["--no-install", toolName, .. taskArguments];
+        }
+        else
         {
             onOutputLine($"Could not find {toolName} - install Node.js, or make sure {toolName} is on PATH.");
             return -1;
@@ -100,8 +115,10 @@ public sealed partial class TaskRunService
                 CreateNoWindow = true,
                 WorkingDirectory = workingDirectory,
             };
-            startInfo.ArgumentList.Add("run");
-            startInfo.ArgumentList.Add(task.Name);
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
 
             using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
@@ -164,6 +181,27 @@ public sealed partial class TaskRunService
                 _starting = false;
             }
         }
+    }
+
+    /// <summary>
+    /// How a task is invoked, which depends on where it came from: an npm script runs through its
+    /// package manager (`npm run build`), while a gulp or grunt task is a first-class argument to
+    /// its own runner (`gulp sass`). Getting this wrong would run `npm run sass` against a gulpfile
+    /// and fail with a script-not-found error that says nothing about the real cause.
+    /// </summary>
+    private static (string ToolName, IReadOnlyList<string> Arguments) Invocation(
+        TaskDefinition task, NodePackageManager packageManager) => task.ManifestKind switch
+    {
+        TaskManifestKind.Gulp => ("gulp", [task.Name]),
+        TaskManifestKind.Grunt => ("grunt", [task.Name]),
+        _ => (packageManager.ExecutableName(), ["run", task.Name]),
+    };
+
+    /// <summary>The command line as the user would type it, for the Output pane.</summary>
+    public static string DescribeCommand(TaskDefinition task, NodePackageManager packageManager)
+    {
+        var (toolName, arguments) = Invocation(task, packageManager);
+        return $"{toolName} {string.Join(' ', arguments)}";
     }
 
     public void Cancel()

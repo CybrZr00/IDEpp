@@ -85,9 +85,8 @@ public sealed class TaskTreeNode(string name, TaskTreeNodeKind kind)
     /// would otherwise show "package.json" several times over.</summary>
     private static string ManifestDisplayName(string manifestPath)
     {
+        var fileName = Path.GetFileName(manifestPath);
         var directoryName = Path.GetFileName(Path.GetDirectoryName(manifestPath));
-        return string.IsNullOrEmpty(directoryName)
-            ? TaskManifestDiscovery.PackageJsonFileName
-            : $"{directoryName}/{TaskManifestDiscovery.PackageJsonFileName}";
+        return string.IsNullOrEmpty(directoryName) ? fileName : $"{directoryName}/{fileName}";
     }
 }
