@@ -418,6 +418,7 @@ Confirmed asymmetry: MCP tool calls **already** auto-execute in a loop; `propose
 - Add a minimal Watch pane using the DAP `evaluate` request, which is never sent today — `VariableInfo` and the `LocalsPaneViewModel` pattern already exist to reuse (M).
 - No NuGet package management (add/remove/restore) anywhere, no Test Explorer/`dotnet test` integration (the repo's own xUnit suite can't be run from inside IDE++ itself), no New Project/New Item wizards, no multi-project debug or attach-to-process — larger initiatives, roughly in that priority order.
 - No publish of any kind — no `dotnet publish`, no `.pubxml` reading, no deployment UI. The only publish in the repo is IDE++ publishing itself, via a hand-written profile nothing in the app can read (M). *(Shipped — see the execution status above.)*
+- No Task Runner Explorer equivalent — nothing discovers `package.json` scripts, `gulpfile.js` or `Gruntfile.js`, and there is no before/after-build binding mechanism for anything to hang off (`IPluginHost` has no build-lifecycle member either). Designed in [task-runner-design.md](task-runner-design.md) as three phases (M/M/S).
 
 ### Copilot / AI ecosystem
 
