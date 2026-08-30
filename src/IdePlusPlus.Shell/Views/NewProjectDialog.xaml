@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:templates="clr-namespace:IdePlusPlus.Templates;assembly=IdePlusPlus.Templates"
         xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes"
+        xmlns:views="clr-namespace:IdePlusPlus.Shell.Views"
         Title="New Project"
         Width="860"
         Height="600"
@@ -59,6 +60,7 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -124,6 +126,10 @@
                            Margin="0,6,0,0"
                            FontSize="11"
                            Foreground="{DynamicResource MutedForegroundBrush}" />
+
+                <views:TemplateParameterList Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2"
+                                             DataContext="{Binding Parameters}"
+                                             Margin="0,12,0,0" />
             </Grid>
         </ScrollViewer>
 

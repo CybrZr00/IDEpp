@@ -55,6 +55,10 @@ public sealed partial class NewItemDialogViewModel : ObservableObject
 
     public ObservableCollection<string> Languages { get; } = [];
 
+    /// <summary>The template's own parameters, rendered from the cache - see
+    /// <see cref="TemplateParameterViewModel"/>. Rebuilt whenever the selected template changes.</summary>
+    public ObservableCollection<TemplateParameterViewModel> Parameters { get; } = [];
+
     [ObservableProperty]
     private TemplateGroup? selectedTemplate;
 
@@ -109,7 +113,14 @@ public sealed partial class NewItemDialogViewModel : ObservableObject
                 return nameError;
             }
 
-            return string.IsNullOrWhiteSpace(Directory) ? "Choose a folder." : null;
+            if (string.IsNullOrWhiteSpace(Directory))
+            {
+                return "Choose a folder.";
+            }
+
+            return TemplateParameters.AllRequiredAnswered(Parameters.Select(p => p.ToValue()))
+                ? null
+                : "Fill in the required options.";
         }
     }
 
@@ -150,6 +161,7 @@ public sealed partial class NewItemDialogViewModel : ObservableObject
         }
 
         SelectedLanguage = Languages.FirstOrDefault();
+        RebuildParameters(value);
 
         if (value is not null && !_nameEditedByUser)
         {
@@ -191,7 +203,8 @@ public sealed partial class NewItemDialogViewModel : ObservableObject
                 Target.ProjectDirectory,
                 Target.RootNamespace,
                 Languages.Count > 1 ? SelectedLanguage : null,
-                Target.ProjectPath);
+                Target.ProjectPath,
+                TemplateParameters.ToArguments(Parameters.Select(p => p.ToValue())));
 
             var result = await _instantiation.CreateItemAsync(plan, _onOutputLine);
 
@@ -209,6 +222,30 @@ public sealed partial class NewItemDialogViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    /// <summary>Parameters belong to the resolved template entry, not the group - the language
+    /// variants of one template can declare different ones.</summary>
+    private void RebuildParameters(TemplateGroup? group)
+    {
+        foreach (var existing in Parameters)
+        {
+            existing.Changed -= NotifyValidationChanged;
+        }
+
+        Parameters.Clear();
+
+        if (group?.Resolve(SelectedLanguage) is not { } template)
+        {
+            return;
+        }
+
+        foreach (var parameter in TemplateParameters.UserEditable(template))
+        {
+            var viewModel = new TemplateParameterViewModel(parameter);
+            viewModel.Changed += NotifyValidationChanged;
+            Parameters.Add(viewModel);
         }
     }
 

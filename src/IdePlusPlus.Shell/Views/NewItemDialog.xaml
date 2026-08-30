@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:templates="clr-namespace:IdePlusPlus.Templates;assembly=IdePlusPlus.Templates"
+        xmlns:views="clr-namespace:IdePlusPlus.Shell.Views"
         Title="New Item"
         Width="820"
         Height="560"
@@ -51,12 +52,14 @@
             </ListBox>
         </DockPanel>
 
-        <Grid Grid.Row="0" Grid.Column="2">
+        <ScrollViewer Grid.Row="0" Grid.Column="2" VerticalScrollBarVisibility="Auto">
+        <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="100" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -100,7 +103,12 @@
                        FontFamily="Consolas"
                        Foreground="{DynamicResource MutedForegroundBrush}"
                        ToolTip="Taken from the project's root namespace and the folder the file goes in" />
+
+            <views:TemplateParameterList Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
+                                         DataContext="{Binding Parameters}"
+                                         Margin="0,10,0,0" />
         </Grid>
+        </ScrollViewer>
 
         <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,10,0,0">
             <TextBlock Text="{Binding TargetSummary}"

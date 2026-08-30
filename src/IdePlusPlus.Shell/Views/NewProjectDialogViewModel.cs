@@ -61,6 +61,11 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
 
     public ObservableCollection<string> Frameworks { get; } = [];
 
+    /// <summary>The template's own parameters, rendered from the cache - see
+    /// <see cref="TemplateParameterViewModel"/>. Rebuilt whenever the template or language
+    /// changes.</summary>
+    public ObservableCollection<TemplateParameterViewModel> Parameters { get; } = [];
+
     [ObservableProperty]
     private TemplateGroup? selectedTemplate;
 
@@ -153,7 +158,9 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
                 return $"'{TargetDirectory}' already exists and isn't empty.";
             }
 
-            return null;
+            return TemplateParameters.AllRequiredAnswered(Parameters.Select(p => p.ToValue()))
+                ? null
+                : "Fill in the required options.";
         }
     }
 
@@ -224,7 +231,36 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
         // The first entry is the highest-precedence band's default, which is what plain
         // `dotnet new <template>` would pick.
         SelectedFramework = Frameworks.FirstOrDefault();
+
+        RebuildParameters();
     }
+
+    /// <summary>Parameters belong to the resolved template entry, not the group - a different band or
+    /// language can declare different ones, so this follows the framework as well as the
+    /// template.</summary>
+    private void RebuildParameters()
+    {
+        foreach (var existing in Parameters)
+        {
+            existing.Changed -= NotifyTargetChanged;
+        }
+
+        Parameters.Clear();
+
+        if (SelectedTemplate?.Resolve(SelectedLanguage, SelectedFramework) is not { } template)
+        {
+            return;
+        }
+
+        foreach (var parameter in TemplateParameters.UserEditable(template))
+        {
+            var viewModel = new TemplateParameterViewModel(parameter);
+            viewModel.Changed += NotifyTargetChanged;
+            Parameters.Add(viewModel);
+        }
+    }
+
+    partial void OnSelectedFrameworkChanged(string? value) => RebuildParameters();
 
     partial void OnProjectNameChanged(string value)
     {
@@ -346,7 +382,8 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
             CreatesItsOwnSolution ? SolutionName : ProjectName,
             outputDirectory,
             Languages.Count > 1 ? SelectedLanguage : null,
-            template.FrameworkChoices.Count > 0 ? SelectedFramework : null);
+            template.FrameworkChoices.Count > 0 ? SelectedFramework : null,
+            Parameters: TemplateParameters.ToArguments(Parameters.Select(p => p.ToValue())));
 
     private static string DescribeFailure(TemplateCreationResult result) =>
         result.WouldOverwriteExistingFiles

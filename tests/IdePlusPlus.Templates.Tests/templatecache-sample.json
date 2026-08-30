@@ -129,6 +129,40 @@
             "IsRequired": false,
             "CanBeRequired": false
           }
+        },
+        {
+          "Name": "langVersion",
+          "DisplayName": "Language version",
+          "Description": "Sets the LangVersion property in the created project file",
+          "Documentation": "Sets the LangVersion property in the created project file",
+          "DataType": "text",
+          "DefaultValue": "",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "skipRestore",
+          "DisplayName": "Skip restore",
+          "Description": "If specified, skips the automatic restore of the project on create.",
+          "Documentation": "If specified, skips the automatic restore of the project on create.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
         }
       ]
     },
@@ -259,6 +293,40 @@
             "IsRequired": false,
             "CanBeRequired": false
           }
+        },
+        {
+          "Name": "langVersion",
+          "DisplayName": "Language version",
+          "Description": "Sets the LangVersion property in the created project file",
+          "Documentation": "Sets the LangVersion property in the created project file",
+          "DataType": "text",
+          "DefaultValue": "",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "skipRestore",
+          "DisplayName": "Skip restore",
+          "Description": "If specified, skips the automatic restore of the project on create.",
+          "Documentation": "If specified, skips the automatic restore of the project on create.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
         }
       ]
     },
@@ -381,6 +449,40 @@
               "Description": "Target netstandard2.0"
             }
           },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "langVersion",
+          "DisplayName": "Language version",
+          "Description": "Sets the LangVersion property in the created project file",
+          "Documentation": "Sets the LangVersion property in the created project file",
+          "DataType": "text",
+          "DefaultValue": "",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "skipRestore",
+          "DisplayName": "Skip restore",
+          "Description": "If specified, skips the automatic restore of the project on create.",
+          "Documentation": "If specified, skips the automatic restore of the project on create.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
           "IsName": false,
           "Precedence": {
             "PrecedenceDefinition": 2,
@@ -1166,6 +1268,28 @@
           }
         },
         {
+          "Name": "editorTreatAs",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "solution",
+          "Choices": {
+            "solution": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
           "Name": "Framework",
           "DisplayName": "",
           "Description": "The target framework for the project.",
@@ -1191,6 +1315,308 @@
             "PrecedenceDefinition": 2,
             "IsRequiredCondition": null,
             "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "UseRedisCache",
+          "DisplayName": "_Use Redis for caching (requires a supported container runtime)",
+          "Description": "Configures whether to setup the application to use Redis for caching. Requires a supported container runtime to run locally, see https://aka.ms/aspire/containers for more details.",
+          "Documentation": "Configures whether to setup the application to use Redis for caching. Requires a supported container runtime to run locally, see https://aka.ms/aspire/containers for more details.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "TestFx",
+          "DisplayName": "Create a _test project",
+          "Description": "Configures whether to create a project for integration tests using the AppHost project.",
+          "Documentation": "Configures whether to create a project for integration tests using the AppHost project.",
+          "DataType": "choice",
+          "DefaultValue": "None",
+          "Choices": {
+            "None": {
+              "DisplayName": "",
+              "Description": "Do not create a test project."
+            },
+            "MSTest": {
+              "DisplayName": "",
+              "Description": "Creates an MSTest test project using the AppHost project."
+            },
+            "NUnit": {
+              "DisplayName": "",
+              "Description": "Creates an NUnit test project using the AppHost project."
+            },
+            "xUnit.net": {
+              "DisplayName": "",
+              "Description": "Creates an xUnit.net test project using the AppHost project."
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "XUnitVersion",
+          "DisplayName": "xUnit.net version",
+          "Description": "The version of xUnit.net to use.",
+          "Documentation": "The version of xUnit.net to use.",
+          "DataType": "choice",
+          "DefaultValue": "v2",
+          "Choices": {
+            "v2": {
+              "DisplayName": "v2",
+              "Description": "Chooses xUnit.net v2 with VSTest"
+            },
+            "v3": {
+              "DisplayName": "v3",
+              "Description": "Chooses xUnit.net v3 with VSTest"
+            },
+            "v3mtp": {
+              "DisplayName": "v3 with Microsoft Test Platform",
+              "Description": "Chooses xUnit.net v3 with Microsoft Test Platform"
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 4,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": "(TestFx == xUnit.net)",
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "appHostHttpPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the HTTP endpoint in launchSettings.json of the AppHost project.",
+          "Documentation": "Port number to use for the HTTP endpoint in launchSettings.json of the AppHost project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "appHostOtlpHttpPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the OTLP HTTP endpoint in launchSettings.json of the AppHost project.",
+          "Documentation": "Port number to use for the OTLP HTTP endpoint in launchSettings.json of the AppHost project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "appHostResourceHttpPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the resource service HTTP endpoint in launchSettings.json of the AppHost project.",
+          "Documentation": "Port number to use for the resource service HTTP endpoint in launchSettings.json of the AppHost project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "appHostHttpsPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the HTTPS endpoint in launchSettings.json of the AppHost project. This option is only applicable when the parameter no-https is not used.",
+          "Documentation": "Port number to use for the HTTPS endpoint in launchSettings.json of the AppHost project. This option is only applicable when the parameter no-https is not used.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "appHostOtlpHttpsPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the OTLP HTTPS endpoint in launchSettings.json of the AppHost project.",
+          "Documentation": "Port number to use for the OTLP HTTPS endpoint in launchSettings.json of the AppHost project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "appHostResourceHttpsPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the resource service HTTPS endpoint in launchSettings.json of the AppHost project.",
+          "Documentation": "Port number to use for the resource service HTTPS endpoint in launchSettings.json of the AppHost project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "webHttpPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the HTTP endpoint in launchSettings.json of the Web project.",
+          "Documentation": "Port number to use for the HTTP endpoint in launchSettings.json of the Web project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "webHttpsPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the HTTPS endpoint in launchSettings.json of the Web project. This option is only applicable when the parameter no-https is not used.",
+          "Documentation": "Port number to use for the HTTPS endpoint in launchSettings.json of the Web project. This option is only applicable when the parameter no-https is not used.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "apiServiceHttpPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the HTTP endpoint in launchSettings.json of the ApiService project.",
+          "Documentation": "Port number to use for the HTTP endpoint in launchSettings.json of the ApiService project.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "apiServiceHttpsPort",
+          "DisplayName": "",
+          "Description": "Port number to use for the HTTPS endpoint in launchSettings.json of the ApiService project. This option is only applicable when the parameter no-https is not used.",
+          "Documentation": "Port number to use for the HTTPS endpoint in launchSettings.json of the ApiService project. This option is only applicable when the parameter no-https is not used.",
+          "DataType": "integer",
+          "DefaultValue": "0",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "skipRestore",
+          "DisplayName": "",
+          "Description": "If specified, skips the automatic restore of the project on create.",
+          "Documentation": "If specified, skips the automatic restore of the project on create.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "NoHttps",
+          "DisplayName": "",
+          "Description": "Whether to turn off HTTPS.",
+          "Documentation": "Whether to turn off HTTPS.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "LocalhostTld",
+          "DisplayName": "Use the .dev.localhost TLD in the application URL",
+          "Description": "Whether to combine the project name with the .dev.localhost TLD in the application URL for local development, e.g. https://myapp.dev.localhost:12345. Supported on .NET 10 and later.",
+          "Documentation": "Whether to combine the project name with the .dev.localhost TLD in the application URL for local development, e.g. https://myapp.dev.localhost:12345. Supported on .NET 10 and later.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 4,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": "Framework == net10.0",
             "IsRequired": false,
             "CanBeRequired": false
           }
@@ -1249,6 +1675,23 @@
           "IsName": false,
           "Precedence": {
             "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "Empty",
+          "DisplayName": "Empty",
+          "Description": "Creates empty .editorconfig instead of the defaults for .NET.",
+          "Documentation": "Creates empty .editorconfig instead of the defaults for .NET.",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
             "IsRequiredCondition": null,
             "IsEnabledCondition": null,
             "IsRequired": false,

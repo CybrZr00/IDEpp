@@ -26,7 +26,8 @@ public sealed record ItemCreationPlan(
         string projectDirectory,
         string rootNamespace,
         string? language = null,
-        string? projectPath = null)
+        string? projectPath = null,
+        IReadOnlyDictionary<string, string?>? parameters = null)
     {
         var desired = NamespaceResolver.Resolve(rootNamespace, projectDirectory, targetDirectory);
         var declaresParameter = template.DeclaresNamespaceParameter;
@@ -41,7 +42,8 @@ public sealed record ItemCreationPlan(
                 // Passed only where it is accepted: an unrecognized option is a hard CLI error, and
                 // class/interface/enum/record/struct genuinely do not take one.
                 Namespace: declaresParameter ? desired : null,
-                ProjectPath: projectPath),
+                ProjectPath: projectPath,
+                Parameters: parameters),
             desired,
             rootNamespace,
             CorrectAfterCreation: !declaresParameter && desired != rootNamespace);
