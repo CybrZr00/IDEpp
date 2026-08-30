@@ -612,6 +612,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)
                 .ToList());
+            CopilotChat.SetSolutionProjects(root.Flatten()
+                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, FullPath: not null })
+                .Select(n => (n.FullPath!, n.TargetFramework))
+                .ToList());
 
             var projects = root.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project).ToList();
 

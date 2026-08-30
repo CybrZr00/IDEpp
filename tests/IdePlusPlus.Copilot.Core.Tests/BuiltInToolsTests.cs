@@ -31,6 +31,7 @@ public class BuiltInToolsTests
         names.ShouldContain(GitTools.DiffToolName);
         names.ShouldContain(GitTools.StatusToolName);
         names.ShouldContain(BuildTools.BuildToolName);
+        names.ShouldContain(PublishTools.PublishToolName);
         names.ShouldContain(TestTools.RunTestsToolName);
         names.ShouldContain(DiagnosticTools.GetDiagnosticsToolName);
         names.ShouldContain(SymbolTools.FindSymbolToolName);

@@ -15,6 +15,7 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
@@ -169,6 +170,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly PluginChatToolRegistry _pluginChatToolRegistry;
     private readonly GitService _gitService;
     private readonly BuildService _buildService;
+    private readonly PublishService _publishService;
     private readonly TestRunService _testRunService;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
@@ -192,6 +194,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private Func<string>? _currentConfiguration;
     private IReadOnlyList<string> _indexableFiles = [];
     private IReadOnlyList<string> _testProjectPaths = [];
+
+    /// <summary>Every project in the solution with the framework the solution tree resolved for it,
+    /// so publish_project can default to the only project and pass --framework for a multi-targeted
+    /// one. Same arrangement as _testProjectPaths: the chat pane never sees the solution tree.</summary>
+    private IReadOnlyList<(string Path, string? TargetFramework)> _solutionProjects = [];
     private CancellationTokenSource? _streamCancellation;
 
     /// <summary>The request that produced whatever is currently uncommitted, for
@@ -214,6 +221,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         PluginChatToolRegistry pluginChatToolRegistry,
         GitService gitService,
         BuildService buildService,
+        PublishService publishService,
         TestRunService testRunService,
         RoslynWorkspaceService roslynWorkspaceService,
         WorkspaceFileReader workspaceFileReader,
@@ -233,6 +241,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _pluginChatToolRegistry = pluginChatToolRegistry;
         _gitService = gitService;
         _buildService = buildService;
+        _publishService = publishService;
         _testRunService = testRunService;
         _roslynWorkspaceService = roslynWorkspaceService;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
@@ -427,6 +436,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// during solution load (see TestProjectDetector); the chat pane never sees the solution tree
     /// itself.</summary>
     public void SetTestProjects(IReadOnlyList<string> projectPaths) => _testProjectPaths = projectPaths;
+
+    /// <summary>The solution's projects and their target frameworks, for publish_project.</summary>
+    public void SetSolutionProjects(IReadOnlyList<(string Path, string? TargetFramework)> projects) =>
+        _solutionProjects = projects;
 
     public void SetIndexableFiles(IReadOnlyList<string> filePaths)
     {
@@ -697,6 +710,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
+            case PublishTools.PublishToolName:
+                return await RunPublishAsync(
+                    arguments?["profile"]?.GetValue<string>(),
+                    arguments?["project"]?.GetValue<string>(),
+                    cancellationToken);
+
             case ShellTools.RunCommandToolName:
                 return await RunShellCommandAsync(
                     arguments?["command"]?.GetValue<string>(),
@@ -851,6 +870,160 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
+    }
+
+    /// <summary>
+    /// Publishes with an existing profile and reports what happened.
+    ///
+    /// Every refusal here names what would have made it work - the profiles that do exist, the
+    /// projects that do exist - because the alternative is the model guessing at a second call.
+    ///
+    /// Container profiles are declined. One with a registry configured pushes an image to that
+    /// registry, which is outward-facing and has no undo; this codebase gates actions like that
+    /// behind an explicit per-action prompt, and publish has no equivalent yet. Creating or editing a
+    /// profile is likewise not offered - what gets shipped and where is the user's decision, made in
+    /// a dialog built for it.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunPublishAsync(
+        string? profileName, string? project, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is nothing to publish.");
+        }
+
+        var (projectPath, targetFramework, projectError) = ResolvePublishProject(project);
+        if (projectError is not null)
+        {
+            return (true, projectError);
+        }
+
+        var profiles = PublishProfileStore.Load(projectPath!);
+        if (profiles.Count == 0)
+        {
+            return (true,
+                $"{Path.GetFileName(projectPath)} has no publish profiles. The user can create one from " +
+                "Build > Publish Settings; this tool cannot create one.");
+        }
+
+        if (string.IsNullOrWhiteSpace(profileName))
+        {
+            return (true, $"Which profile? {Path.GetFileName(projectPath)} has: {NameList(profiles)}.");
+        }
+
+        if (profiles.FirstOrDefault(p => string.Equals(p.Name, profileName, StringComparison.OrdinalIgnoreCase)) is not { } profile)
+        {
+            return (true, $"No publish profile named '{profileName}'. {Path.GetFileName(projectPath)} has: {NameList(profiles)}.");
+        }
+
+        if (profile.Kind != PublishKind.Folder)
+        {
+            return (true,
+                $"'{profile.Name}' is a {profile.Kind.ToString().ToLowerInvariant()} profile, which this tool will not run. " +
+                "Ask the user to publish it from Build > Publish Settings instead.");
+        }
+
+        if (_buildService.IsRunning)
+        {
+            return (true, "A build is already running - wait for it to finish before publishing.");
+        }
+
+        var saved = _dispatcher.Invoke(_editApplicationService.SaveDirtyDocuments);
+        var outputLines = new List<string>();
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(BuildTimeout);
+
+        int exitCode;
+        try
+        {
+            exitCode = await _publishService.PublishAsync(
+                projectPath!, profile, line => { lock (outputLines) { outputLines.Add(line); } },
+                targetFramework, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return (true, $"The publish was still running after {BuildTimeout.TotalMinutes:0} minutes and was stopped.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (true, ex.Message);
+        }
+
+        return (false, FormatPublishReport(exitCode, profile, projectPath!, targetFramework, saved, outputLines));
+    }
+
+    /// <summary>Resolves the project to publish, defaulting to the solution's only project. Anything
+    /// ambiguous or outside the solution root comes back as a message rather than a guess.</summary>
+    private (string? Path, string? TargetFramework, string? Error) ResolvePublishProject(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project))
+        {
+            return _solutionProjects.Count == 1
+                ? (_solutionProjects[0].Path, _solutionProjects[0].TargetFramework, null)
+                : (null, null,
+                    "This solution has more than one project, so 'project' is required. It has: " +
+                    string.Join(", ", _solutionProjects.Select(p => Path.GetFileName(p.Path))) + ".");
+        }
+
+        if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory!, project) is not { } resolved)
+        {
+            return (null, null, $"Refused: '{project}' resolves outside the open solution directory.");
+        }
+
+        if (!File.Exists(resolved))
+        {
+            return (null, null, $"Project not found: {project}");
+        }
+
+        // The framework comes from the solution tree where the project is one this solution knows
+        // about; a path that resolves to something else still publishes, just without --framework.
+        var known = _solutionProjects.FirstOrDefault(p => string.Equals(p.Path, resolved, StringComparison.OrdinalIgnoreCase));
+        return (resolved, known.TargetFramework, null);
+    }
+
+    private static string NameList(IReadOnlyList<PublishProfile> profiles) =>
+        string.Join(", ", profiles.Select(p => p.Kind == PublishKind.Folder ? p.Name : $"{p.Name} ({p.Kind})"));
+
+    private static string FormatPublishReport(
+        int exitCode,
+        PublishProfile profile,
+        string projectPath,
+        string? targetFramework,
+        IReadOnlyList<string> saved,
+        IReadOnlyList<string> outputLines)
+    {
+        var report = new StringBuilder();
+        report.Append(exitCode == 0
+            ? $"Publish succeeded with profile '{profile.Name}' ({profile.Configuration})."
+            : $"Publish FAILED with profile '{profile.Name}' ({profile.Configuration}), exit code {exitCode}.");
+
+        if (saved.Count > 0)
+        {
+            report.Append($" Saved {saved.Count} file(s) with unsaved changes first.");
+        }
+
+        if (exitCode == 0)
+        {
+            if (PublishArguments.ResolvePublishDirectory(projectPath, profile, targetFramework) is { } directory
+                && Directory.Exists(directory))
+            {
+                report.Append($" Output is in {directory}.");
+            }
+
+            return report.ToString();
+        }
+
+        // Publish failures are usually MSBuild's or the SDK's own (NETSDK####, MSB####) rather than
+        // compiler diagnostics, so the raw tail is the useful thing rather than a parsed list.
+        var raw = string.Join("\n", outputLines.TakeLast(40));
+        if (raw.Length > PublishTools.MaxRawOutputChars)
+        {
+            raw = raw[^PublishTools.MaxRawOutputChars..];
+        }
+
+        report.Append($"\n\nOutput (tail):\n{raw}");
+        return report.ToString();
     }
 
     /// <summary>
