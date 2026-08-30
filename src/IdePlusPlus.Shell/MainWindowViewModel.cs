@@ -10,6 +10,7 @@ using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.NuGet;
 using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell.ToolPanes;
@@ -36,6 +37,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ThemeService _themeService;
     private readonly McpServerManager _mcpServerManager;
     private readonly NuGetService _nuGetService;
+    private readonly PublishService _publishService;
     private readonly AppSettingsStore _appSettingsStore;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly Dispatcher _dispatcher;
@@ -60,6 +62,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private List<StartupConfiguration> _startupConfigurations = [];
 
     private string? _activeConfigurationName;
+
+    private string? _activePublishProfileName;
 
     /// <summary>Extra <see cref="RunService"/> instances for this launch's Action.StartWithoutDebugging
     /// entries - separate from the DI-singleton <see cref="_runService"/> (which only ever tracks the
@@ -92,6 +96,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ThemeService themeService,
         McpServerManager mcpServerManager,
         NuGetService nuGetService,
+        PublishService publishService,
         AppSettingsStore appSettingsStore,
         RoslynWorkspaceService roslynWorkspaceService)
     {
@@ -114,6 +119,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _themeService = themeService;
         _mcpServerManager = mcpServerManager;
         _nuGetService = nuGetService;
+        _publishService = publishService;
         _appSettingsStore = appSettingsStore;
         _roslynWorkspaceService = roslynWorkspaceService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
@@ -307,6 +313,101 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(ActiveStartupConfigurationName));
+    }
+
+    /// <summary>Names of the publish profiles belonging to <see cref="PublishTargetProject"/>, for the
+    /// status-bar picker - kept in sync by <see cref="SyncPublishProfiles"/>. Empty for a project with
+    /// no Properties/PublishProfiles folder, which is most of them.</summary>
+    public ObservableCollection<string> PublishProfileNames { get; } = [];
+
+    /// <summary>Which profile Build > Publish runs. Hand-written rather than [ObservableProperty]
+    /// because selecting one persists it, the same way ActiveStartupConfigurationName does.</summary>
+    public string? ActivePublishProfileName
+    {
+        get => _activePublishProfileName;
+        set
+        {
+            if (value is null || value == _activePublishProfileName || !PublishProfileNames.Contains(value))
+            {
+                return;
+            }
+
+            _activePublishProfileName = value;
+            OnPropertyChanged();
+            PersistPublishSelection();
+            PublishCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// The project Build &gt; Publish and the status-bar picker act on: the active startup
+    /// configuration's first runnable entry, falling back to the solution's first project.
+    ///
+    /// Deliberately the same choice the quick-Run button makes, so Run and Publish never disagree
+    /// about which project the solution is really about. Publishing any other project is done from
+    /// its own Solution Explorer context menu.
+    /// </summary>
+    private SolutionTreeNode? PublishTargetProject
+    {
+        get
+        {
+            var projects = (_solutionRoot?.Flatten() ?? [])
+                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, FullPath: not null })
+                .ToList();
+
+            return RunnableEntry is { } entry
+                   && projects.FirstOrDefault(p => p.FullPath == entry.ProjectPath) is { } startupProject
+                ? startupProject
+                : projects.FirstOrDefault();
+        }
+    }
+
+    private void SyncPublishProfiles()
+    {
+        PublishProfileNames.Clear();
+        _activePublishProfileName = null;
+
+        if (PublishTargetProject?.FullPath is { } projectPath)
+        {
+            foreach (var profileName in PublishProfileStore.Load(projectPath).Select(p => p.Name))
+            {
+                PublishProfileNames.Add(profileName);
+            }
+
+            if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory
+                && PublishSelectionStore.Load(solutionDirectory)
+                    .TryGetValue(PublishSelectionStore.KeyFor(solutionDirectory, projectPath), out var storedName)
+                && PublishProfileNames.Contains(storedName))
+            {
+                _activePublishProfileName = storedName;
+            }
+
+            _activePublishProfileName ??= PublishProfileNames.FirstOrDefault();
+        }
+
+        OnPropertyChanged(nameof(ActivePublishProfileName));
+        PublishCommand.NotifyCanExecuteChanged();
+        OpenPublishSettingsCommand.NotifyCanExecuteChanged();
+    }
+
+    private void PersistPublishSelection()
+    {
+        if (Path.GetDirectoryName(CurrentSolutionPath) is not { } solutionDirectory
+            || PublishTargetProject?.FullPath is not { } projectPath
+            || _activePublishProfileName is not { } profileName)
+        {
+            return;
+        }
+
+        // Merged into whatever is already stored, because the file holds one entry per project and
+        // the other projects' selections must survive this one changing.
+        var selections = new Dictionary<string, string>(
+            PublishSelectionStore.Load(solutionDirectory), StringComparer.OrdinalIgnoreCase)
+        {
+            [PublishSelectionStore.KeyFor(solutionDirectory, projectPath)] = profileName,
+        };
+
+        PublishSelectionStore.Save(solutionDirectory, selections);
     }
 
     [ObservableProperty]
@@ -545,6 +646,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     && ActiveConfiguration?.Entries.Any(e => e.ProjectPath == project.FullPath && e.Action != StartupAction.None) == true;
             }
 
+            SyncPublishProfiles();
             RunCommand.NotifyCanExecuteChanged();
             StartDebuggingCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");
@@ -637,6 +739,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         SyncStartupConfigurationNames();
+        SyncPublishProfiles();
 
         if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
         {
@@ -745,6 +848,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             project.IsStartupProject = IsStartupProject(project);
         }
 
+        SyncPublishProfiles();
         RunCommand.NotifyCanExecuteChanged();
         StartDebuggingCommand.NotifyCanExecuteChanged();
         Output.AppendLine($"Active startup configuration: {_activeConfigurationName}.");
@@ -755,6 +859,94 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// activating/focusing an AvalonDock anchorable (ErrorList/SourceControl don't do it either) - so
     /// this is MVP-scoped to just populating the pane; the user clicks its tab manually.</summary>
     public void OpenNuGetPane(SolutionTreeNode node) => _ = NuGet.SetProjectAsync(node);
+
+    /// <summary>Called from the Solution Explorer Project node's "Publish..." context menu item -
+    /// publishes that project rather than <see cref="PublishTargetProject"/>.</summary>
+    public void OpenPublishDialog(SolutionTreeNode node) => ShowPublishDialog(node);
+
+    [RelayCommand(CanExecute = nameof(HasPublishTarget))]
+    private void OpenPublishSettings()
+    {
+        if (PublishTargetProject is { } project)
+        {
+            ShowPublishDialog(project);
+        }
+    }
+
+    /// <summary>
+    /// The dialog writes .pubxml files itself and publishes in place, so there is no result to commit
+    /// here - only the status-bar picker to refresh, and only when the project it edited is the one
+    /// that picker is about.
+    /// </summary>
+    private void ShowPublishDialog(SolutionTreeNode project)
+    {
+        if (project.FullPath is not { } projectPath)
+        {
+            return;
+        }
+
+        var viewModel = new PublishDialogViewModel(
+            projectPath,
+            project.TargetFramework,
+            PublishProfileStore.Load(projectPath),
+            _publishService,
+            OnBuildOutputLine);
+
+        var dialog = new PublishDialog(viewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+        dialog.ShowDialog();
+
+        if (PublishTargetProject?.FullPath != projectPath)
+        {
+            return;
+        }
+
+        SyncPublishProfiles();
+        if (dialog.ResultSelectedProfileName is { } selected)
+        {
+            ActivePublishProfileName = selected;
+        }
+    }
+
+    /// <summary>Build menu "Publish" - runs the profile chosen in the status bar without opening the
+    /// dialog, for the repeat-the-last-publish case.</summary>
+    [RelayCommand(CanExecute = nameof(CanPublish))]
+    private async Task PublishAsync()
+    {
+        if (PublishTargetProject is not { FullPath: { } projectPath } project
+            || _activePublishProfileName is not { } profileName)
+        {
+            return;
+        }
+
+        // Re-read rather than caching: the .pubxml is an ordinary file the user may have edited (or
+        // deleted) in the editor since the picker was last populated.
+        if (PublishProfileStore.Load(projectPath).FirstOrDefault(p => p.Name == profileName) is not { } profile)
+        {
+            Output.AppendLine($"Publish profile '{profileName}' no longer exists.");
+            SyncPublishProfiles();
+            return;
+        }
+
+        var exitCode = await RunBuildVerbAsync(
+            $"Publish ({profileName})",
+            () => _publishService.PublishAsync(projectPath, profile, OnBuildOutputLine, project.TargetFramework),
+            profile.Configuration,
+            projectPath);
+
+        if (exitCode == 0
+            && PublishArguments.ResolvePublishDirectory(projectPath, profile, project.TargetFramework) is { } directory
+            && Directory.Exists(directory))
+        {
+            Output.AppendLine($"Published to {directory}");
+        }
+    }
+
+    private bool HasPublishTarget() => PublishTargetProject is not null;
+
+    private bool CanPublish() => PublishTargetProject is not null && _activePublishProfileName is not null;
 
     public void OpenTreeNode(SolutionTreeNode node)
     {
@@ -830,8 +1022,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     ///
     /// The already-running check comes before Output.Clear() so a refused second build doesn't wipe
     /// the running one's output; the catch covers losing the race between the two.
+    ///
+    /// Publish goes through here too - BuildService.IsRunning covers it, since a publish writes the
+    /// same obj/bin - but reports its own configuration and target, because a publish uses the
+    /// profile's configuration rather than the status bar's and acts on one project rather than the
+    /// solution.
     /// </summary>
-    private async Task<int?> RunBuildVerbAsync(string label, Func<Task<int>> run)
+    private async Task<int?> RunBuildVerbAsync(
+        string label, Func<Task<int>> run, string? configurationLabel = null, string? targetPath = null)
     {
         if (_buildService.IsRunning)
         {
@@ -841,7 +1039,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Output.Clear();
         ErrorList.ClearBuildDiagnostics();
-        Output.AppendLine($"{label} started ({Configuration}): {CurrentSolutionPath}");
+        Output.AppendLine($"{label} started ({configurationLabel ?? Configuration}): {targetPath ?? CurrentSolutionPath}");
 
         try
         {

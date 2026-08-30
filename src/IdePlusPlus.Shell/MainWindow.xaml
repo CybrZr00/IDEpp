@@ -439,6 +439,9 @@
                 <MenuItem Header="_Clean Solution" Command="{Binding CleanCommand}" />
                 <MenuItem Header="_Rebuild Solution" Command="{Binding RebuildCommand}" />
                 <Separator />
+                <MenuItem Header="_Publish" Command="{Binding PublishCommand}" />
+                <MenuItem Header="Publish _Settings..." Command="{Binding OpenPublishSettingsCommand}" />
+                <Separator />
                 <MenuItem Header="_Run" Command="{Binding RunCommand}" />
                 <MenuItem Header="_Stop" Command="{Binding StopCommand}" />
             </MenuItem>
@@ -617,6 +620,14 @@
                           Width="120"
                           FontSize="11"
                           ToolTip="Active startup configuration - which projects Run/Start Debugging launch" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <ComboBox ItemsSource="{Binding PublishProfileNames}"
+                          SelectedItem="{Binding ActivePublishProfileName}"
+                          Margin="8,0,0,0"
+                          Width="120"
+                          FontSize="11"
+                          ToolTip="Active publish profile - the one Build &gt; Publish runs" />
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <StackPanel Orientation="Horizontal">

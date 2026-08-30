@@ -17,6 +17,7 @@ using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.NuGet;
@@ -306,6 +307,7 @@ public partial class App : Application
         services.AddSingleton<GitService>();
         services.AddSingleton<SourceControlPaneViewModel>();
         services.AddSingleton<NuGetService>();
+        services.AddSingleton<PublishService>();
         services.AddSingleton<NuGetSearchClient>();
         services.AddSingleton<NuGetPaneViewModel>();
         services.AddSingleton<TestDiscoveryService>();

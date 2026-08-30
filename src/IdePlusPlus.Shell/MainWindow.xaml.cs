@@ -540,6 +540,10 @@ public partial class MainWindow : Window
             var nuGetMenuItem = new MenuItem { Header = "Manage NuGet Packages..." };
             nuGetMenuItem.Click += (_, _) => viewModel.OpenNuGetPane(node);
             contextMenu.Items.Add(nuGetMenuItem);
+
+            var publishMenuItem = new MenuItem { Header = "Publish..." };
+            publishMenuItem.Click += (_, _) => viewModel.OpenPublishDialog(node);
+            contextMenu.Items.Add(publishMenuItem);
         }
 
         // Folder nodes have no FullPath in this tree (see SolutionTreeNode.GetOrCreateFolder) - a
