@@ -10,8 +10,12 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       own `templatecache.json` (parsing `dotnet new list` is not viable: it truncates the template-name
       column and is localized), collapsing the SDK's side-by-side 8.0/9.0/10.0 template bands into one
       row each, and a New Project dialog on File > New > Project and the Solution Explorer's solution
-      node. See [project-templates-design.md](project-templates-design.md); Phases 2 (New Item) and 3
-      (parameters, template packages) not started.
+      node. Phase 2 adds New Item: a File > New shortlist (Class, Interface, Enum, Record, API
+      Controller) and Add New Item... on the Solution Explorer, with the namespace computed from the
+      project's RootNamespace plus the target folder — `dotnet new` will not do it, binding instead to
+      msbuild:RootNamespace, which is folder-blind. See
+      [project-templates-design.md](project-templates-design.md); Phase 3 (template parameter UI,
+      installable template packages, copilot tools) not started.
 - [x] Reliability & safety net (Part 2) — global exception handler, Serilog wiring, plugin crash guards,
       missing-file/save-cancel/ghost-text bug fixes, secrets pruning, `.bak` backup, new
       `IdePlusPlus.Infrastructure.Tests` project.

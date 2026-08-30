@@ -166,7 +166,7 @@ and a re-create returning 73 rather than overwriting.
 
 ---
 
-## Phase 2 — New Item
+## Phase 2 — New Item *(shipped)*
 
 **Summary**: The same catalog, filtered to `type: item`, behind two entry points: a curated
 shortlist directly on `File > New` (Class, Interface, Enum, Record, API Controller — the ones asked
@@ -237,6 +237,21 @@ languages other than C#/VB beyond whatever the catalog reports.
   `LoadSolutionAsync`. Until it does, a new file gets no diagnostics or completion until the
   solution is reopened. That is the one real cost of skipping the reload, and it should be a known,
   stated limitation rather than a surprise; a narrow `NotifyDocumentAdded` is the follow-up.
+
+**What shipping it changed**: the namespace work landed as designed - `NamespaceResolver` plus a
+targeted rewrite for the templates that declare no `namespace` parameter - with one addition the
+design missed. Folder names that are C# keywords become verbatim identifiers (`@event`) rather than
+the bare keyword Visual Studio emits, which does not compile.
+
+Three failures showed up only on running it, all in the ordinary case of adding the first file to a
+folder that does not exist yet. `Process.Start` fails outright on a working directory that does not
+exist, so creation died with "Could not run dotnet - is the SDK installed and on PATH?"; the working
+directory now walks up to the nearest ancestor that does. Underneath that sat the real refusal: the
+item templates' `project-capability` constraint resolves the project **from the `--output` path**
+rather than by walking up from it, so a folder with no project in it reports "No project was found at
+the path" and refuses — verified that `--project` fixes exactly this, so every item plan now names its
+project. And the solution root needed expanding along with the project, since WPF only realizes a
+`TreeViewItem` once its parents are expanded.
 
 ---
 
