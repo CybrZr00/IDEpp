@@ -51,6 +51,39 @@ public sealed class TemplateInstantiationService(BuildService buildService)
     }
 
     /// <summary>
+    /// Creates one item and makes sure it ends up in the right namespace - passing
+    /// <c>--namespace</c> where the template takes one, and rewriting what was emitted where it does
+    /// not. See <see cref="ItemCreationPlan"/> for which templates fall on which side.
+    ///
+    /// <para>A failed correction is not a failed creation: the file exists and is usable, it just has
+    /// the namespace `dotnet new` chose, so it is reported rather than thrown.</para>
+    /// </summary>
+    public async Task<TemplateCreationResult> CreateItemAsync(
+        ItemCreationPlan plan,
+        Action<string> onOutputLine,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await CreateAsync(plan.Request, onOutputLine, cancellationToken);
+
+        if (!result.Succeeded || !plan.CorrectAfterCreation)
+        {
+            return result;
+        }
+
+        var corrected = result.CreatedFiles
+            .Count(file => NamespaceCorrector.TryCorrect(file, plan.BoundNamespace, plan.DesiredNamespace));
+
+        if (corrected == 0)
+        {
+            onOutputLine(
+                $"Created the file, but couldn't set its namespace to {plan.DesiredNamespace} - " +
+                $"it will have the project's root namespace ({plan.BoundNamespace}) instead.");
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Adds a project to a solution. Separate from <see cref="CreateAsync"/> because a solution-kind
     /// template brings its own solution file and must not be added to another one.
     /// </summary>

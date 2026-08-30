@@ -45,21 +45,37 @@ public sealed partial class SolutionTreeNode(string name, string? fullPath, Solu
     /// </summary>
     public string? TargetFramework { get; init; }
 
+    /// <summary>
+    /// The project's evaluated $(RootNamespace), for working out what namespace a new file should
+    /// get. Always set for a Project node in practice - the SDK defaults it to the project name when
+    /// the .csproj doesn't say - and null for every other node kind.
+    /// </summary>
+    public string? RootNamespace { get; init; }
+
     /// <summary>True when TestProjectDetector identified this project as a test project at load
     /// time (via $(IsTestProject) or a known test-framework PackageReference) - best-effort, set
     /// once and never re-evaluated.</summary>
     public bool IsTestProject { get; init; }
 
     /// <summary>Finds or creates the folder chain for a relative path's directory parts, returning the leaf folder to add files under.</summary>
-    public SolutionTreeNode GetOrCreateFolder(IEnumerable<string> pathParts)
+    /// <param name="directory">The directory <paramref name="pathParts"/> is relative to - the
+    /// project's own directory when called on a Project node. Given one, each folder created here
+    /// gets a real <see cref="FullPath"/>, which is what lets a folder be the target of "Add New
+    /// Item" and what gives plugin context-menu commands a path to act on. Omitted, folders have no
+    /// path, which is how this behaved before.</param>
+    public SolutionTreeNode GetOrCreateFolder(IEnumerable<string> pathParts, string? directory = null)
     {
         var current = this;
+        var currentDirectory = directory;
+
         foreach (var part in pathParts)
         {
+            currentDirectory = currentDirectory is null ? null : Path.Combine(currentDirectory, part);
+
             var existing = current.Children.FirstOrDefault(c => c.Kind == SolutionTreeNodeKind.Folder && c.Name == part);
             if (existing is null)
             {
-                existing = new SolutionTreeNode(part, null, SolutionTreeNodeKind.Folder);
+                existing = new SolutionTreeNode(part, currentDirectory, SolutionTreeNodeKind.Folder);
                 current.Children.Add(existing);
             }
 

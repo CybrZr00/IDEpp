@@ -19,8 +19,13 @@ using IdePlusPlus.Tasks;
 using IdePlusPlus.Templates;
 using IdePlusPlus.Shell.Views;
 using Microsoft.Win32;
+using Serilog;
 
 namespace IdePlusPlus.Shell;
+
+/// <summary>One File &gt; New shortlist entry - the template's display name, and the short name the
+/// New Item dialog opens pre-selected on.</summary>
+public sealed record NewItemShortcut(string Header, string ShortName);
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
@@ -60,6 +65,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly HashSet<DebugSession> _browserLaunchedSessions = [];
 
     private SolutionTreeNode? _solutionRoot;
+
+    /// <summary>Reset on every solution load - see WarnAboutNewFileAnalysis.</summary>
+    private bool _warnedAboutNewFileAnalysis;
 
     /// <summary>Every named startup configuration saved for the current solution (see
     /// <see cref="StartupConfigurationStore"/>) - what the Startup Configuration Manager dialog edits.
@@ -514,6 +522,166 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// New Item, from the dialog or from a File > New shortlist entry (which pre-picks the template
+    /// and leaves only the name to type).
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(HasSolution))]
+    private void NewItem(string? shortName)
+    {
+        if (ResolveItemTarget() is not { } target)
+        {
+            Output.AppendLine("Open a solution with at least one project before adding an item.");
+            return;
+        }
+
+        var viewModel = new NewItemDialogViewModel(
+            _templateCatalog, _templateInstantiation, target, OnBuildOutputLine, shortName);
+
+        var dialog = new NewItemDialog(viewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        // No solution reload: an SDK-style project globs its sources, so the file is already a
+        // project item and only the tree needs telling. See WarnAboutNewFileAnalysis for the one
+        // thing that does not follow from that.
+        AddFilesToTree(target, dialog.ResultFiles);
+
+        foreach (var file in dialog.ResultFiles)
+        {
+            OpenPath(file);
+        }
+
+        WarnAboutNewFileAnalysis(dialog.ResultFiles);
+    }
+
+    /// <summary>
+    /// Where a new item goes. Visual Studio uses the Solution Explorer selection; File &gt; New has no
+    /// selection of its own, so the fallback chain is spelled out rather than left implicit - and
+    /// whichever wins is shown as an editable path in the dialog, so it is never silently wrong.
+    /// </summary>
+    private NewItemTarget? ResolveItemTarget()
+    {
+        if (_solutionRoot is null)
+        {
+            return null;
+        }
+
+        var nodes = _solutionRoot.Flatten().ToList();
+
+        var candidates = new[]
+        {
+            DirectoryForNode(nodes.FirstOrDefault(n => n.IsSelected)),
+            ActiveDocument?.FilePath is { } filePath ? Path.GetDirectoryName(filePath) : null,
+            DirectoryForNode(nodes.FirstOrDefault(n => n.IsStartupProject)),
+            DirectoryForNode(nodes.FirstOrDefault(n => n.Kind == SolutionTreeNodeKind.Project)),
+        };
+
+        foreach (var directory in candidates.OfType<string>())
+        {
+            if (FindProjectContaining(directory) is { FullPath: { } projectPath } project &&
+                Path.GetDirectoryName(projectPath) is { } projectDirectory)
+            {
+                return new NewItemTarget(
+                    projectPath,
+                    projectDirectory,
+                    project.RootNamespace ?? project.Name,
+                    directory);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The directory a tree node stands for - a project's or a file's containing folder, a
+    /// folder's own path. The solution node stands for no project, so it yields nothing.</summary>
+    private static string? DirectoryForNode(SolutionTreeNode? node) => node switch
+    {
+        { Kind: SolutionTreeNodeKind.Project, FullPath: { } path } => Path.GetDirectoryName(path),
+        { Kind: SolutionTreeNodeKind.Folder, FullPath: { } path } => path,
+        { Kind: SolutionTreeNodeKind.File, FullPath: { } path } => Path.GetDirectoryName(path),
+        _ => null,
+    };
+
+    /// <summary>The project owning a directory - longest matching project directory wins, so a
+    /// project nested inside another beats its parent.</summary>
+    private SolutionTreeNode? FindProjectContaining(string directory) =>
+        (_solutionRoot?.Flatten() ?? [])
+            .Where(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath is not null)
+            .Select(n => (Project: n, Directory: Path.GetDirectoryName(n.FullPath!)))
+            .Where(candidate => candidate.Directory is not null && IsInside(directory, candidate.Directory))
+            .OrderByDescending(candidate => candidate.Directory!.Length)
+            .Select(candidate => candidate.Project)
+            .FirstOrDefault();
+
+    private static bool IsInside(string directory, string projectDirectory)
+    {
+        var relative = Path.GetRelativePath(projectDirectory, directory);
+        return !relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative);
+    }
+
+    /// <summary>
+    /// Puts newly created files into the tree without a reload, building the same folder chain
+    /// SolutionLoader would have. Files outside the project directory are skipped: an SDK-style
+    /// project's globs would not have picked them up either, so showing them under the project would
+    /// claim something untrue.
+    /// </summary>
+    private void AddFilesToTree(NewItemTarget target, IReadOnlyList<string> files)
+    {
+        if ((_solutionRoot?.Flatten() ?? []).FirstOrDefault(n =>
+                n.Kind == SolutionTreeNodeKind.Project &&
+                string.Equals(n.FullPath, target.ProjectPath, StringComparison.OrdinalIgnoreCase)) is not { } project)
+        {
+            return;
+        }
+
+        project.IsExpanded = true;
+
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(target.ProjectDirectory, file);
+            if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            {
+                continue;
+            }
+
+            var parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var folder = project.GetOrCreateFolder(parts[..^1], target.ProjectDirectory);
+            folder.IsExpanded = true;
+
+            if (!folder.Children.Any(c => c.Kind == SolutionTreeNodeKind.File && c.Name == parts[^1]))
+            {
+                folder.Children.Add(new SolutionTreeNode(parts[^1], file, SolutionTreeNodeKind.File));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Says once per solution that a newly added code file has no IntelliSense yet.
+    /// RoslynWorkspaceService has no add-document path - only LoadSolutionAsync - so a file created
+    /// here is unknown to it until the solution is reopened. Stated rather than left to be
+    /// discovered, and said once rather than on every add.
+    /// </summary>
+    private void WarnAboutNewFileAnalysis(IReadOnlyList<string> files)
+    {
+        if (_warnedAboutNewFileAnalysis ||
+            !files.Any(f => Path.GetExtension(f) is ".cs" or ".vb"))
+        {
+            return;
+        }
+
+        _warnedAboutNewFileAnalysis = true;
+        Output.AppendLine(
+            "Note: IntelliSense and diagnostics for files added this way start working once the " +
+            "solution is reopened.");
+    }
+
     /// <summary>Selects a project node by its file path, expanding the solution so the container
     /// actually exists to be selected.</summary>
     private void RevealProject(string projectPath)
@@ -671,6 +839,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = solutionPath;
             _solutionRoot = root;
+
+            _warnedAboutNewFileAnalysis = false;
+            NewItemCommand.NotifyCanExecuteChanged();
+            _ = RefreshNewItemShortcutsAsync(Path.GetDirectoryName(solutionPath));
 
             var recentSolutions = RecentSolutionsStore.Touch(solutionPath);
             RecentSolutions.Clear();
@@ -1114,6 +1286,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     private bool HasSolution() => CurrentSolutionPath is not null;
+
+    /// <summary>
+    /// The item templates File > New offers directly. Populated from the catalog rather than
+    /// assumed, so a machine missing one simply doesn't show it - and empty until a solution is
+    /// open, since an item needs a project to go in.
+    /// </summary>
+    public ObservableCollection<NewItemShortcut> NewItemShortcuts { get; } = [];
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync, same posture as test discovery - reading the
+    /// template cache must never delay or fail a solution load.</summary>
+    private async Task RefreshNewItemShortcutsAsync(string? solutionDirectory)
+    {
+        try
+        {
+            var groups = await _templateCatalog.GetGroupsAsync(TemplateKind.Item, solutionDirectory);
+            var shortcuts = ItemTemplateShortlist.From(groups);
+
+            _dispatcher.Invoke(() =>
+            {
+                NewItemShortcuts.Clear();
+                foreach (var group in shortcuts)
+                {
+                    NewItemShortcuts.Add(new NewItemShortcut(group.Name, group.ShortName));
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Couldn't list item templates for the File > New menu");
+        }
+    }
 
     private void OnBuildOutputLine(string line) => _dispatcher.Invoke(() =>
     {

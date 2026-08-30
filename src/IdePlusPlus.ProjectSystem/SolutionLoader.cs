@@ -108,6 +108,9 @@ public static class SolutionLoader
         {
             TargetFramework = windowsTargetFramework,
             IsTestProject = isTestProject,
+            RootNamespace = evaluated.GetPropertyValue("RootNamespace") is { Length: > 0 } rootNamespace
+                ? rootNamespace
+                : projectName,
         };
 
         var visibleItemTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -120,7 +123,7 @@ public static class SolutionLoader
             var relativePath = item.EvaluatedInclude.Replace('/', Path.DirectorySeparatorChar);
             var parts = relativePath.Split(Path.DirectorySeparatorChar);
             var fileName = parts[^1];
-            var folder = projectNode.GetOrCreateFolder(parts[..^1]);
+            var folder = projectNode.GetOrCreateFolder(parts[..^1], projectDirectory);
 
             if (!folder.Children.Any(c => c.Kind == SolutionTreeNodeKind.File && c.Name == fileName))
             {

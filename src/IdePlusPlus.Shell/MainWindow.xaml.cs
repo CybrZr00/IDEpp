@@ -531,6 +531,20 @@ public partial class MainWindow : Window
             contextMenu.Items.Add(newProjectMenuItem);
         }
 
+        // Project, folder and file nodes all stand for a directory an item can go in - see
+        // MainWindowViewModel.DirectoryForNode. The node is selected first so the command's own
+        // target resolution picks it up, which is also what a right-click implies visually.
+        if (node.Kind is SolutionTreeNodeKind.Project or SolutionTreeNodeKind.Folder or SolutionTreeNodeKind.File)
+        {
+            var newItemMenuItem = new MenuItem { Header = "Add New Item..." };
+            newItemMenuItem.Click += (_, _) =>
+            {
+                node.IsSelected = true;
+                viewModel.NewItemCommand.Execute(null);
+            };
+            contextMenu.Items.Add(newItemMenuItem);
+        }
+
         if (node.Kind == SolutionTreeNodeKind.Project)
         {
             var menuItem = new MenuItem { Header = "Set as Startup Project" };
@@ -555,9 +569,8 @@ public partial class MainWindow : Window
             contextMenu.Items.Add(publishMenuItem);
         }
 
-        // Folder nodes have no FullPath in this tree (see SolutionTreeNode.GetOrCreateFolder) - a
-        // plugin command can't be offered a meaningful path for one, so it's skipped for those,
-        // same as it would be for any node kind a plugin's canExecute itself rejects.
+        // Folder nodes carry a real path now (see SolutionTreeNode.GetOrCreateFolder), so plugin
+        // commands are offered on them too rather than being silently skipped for want of one.
         if (node.FullPath is { } fullPath)
         {
             var context = new SolutionExplorerContextMenuContext(fullPath, node.Kind == SolutionTreeNodeKind.Folder);
@@ -585,6 +598,41 @@ public partial class MainWindow : Window
         }
 
         contextMenu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Rebuilds the item-template shortlist between the two placeholder separators each time the
+    /// menu opens, so a template package installed mid-session shows up without a restart.
+    /// </summary>
+    private void NewMenuItem_OnSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        var viewModel = (MainWindowViewModel)DataContext;
+        var start = NewMenuItem.Items.IndexOf(NewMenuShortlistStart);
+        var end = NewMenuItem.Items.IndexOf(NewMenuShortlistEnd);
+
+        for (var i = end - 1; i > start; i--)
+        {
+            NewMenuItem.Items.RemoveAt(i);
+        }
+
+        var insertAt = start + 1;
+        foreach (var shortcut in viewModel.NewItemShortcuts)
+        {
+            var menuItem = new MenuItem
+            {
+                Header = shortcut.Header,
+                Command = viewModel.NewItemCommand,
+                CommandParameter = shortcut.ShortName,
+            };
+            NewMenuItem.Items.Insert(insertAt++, menuItem);
+        }
+
+        // With no solution open there is nothing between them, and two separators in a row reads as
+        // a rendering bug rather than an empty section.
+        NewMenuShortlistStart.Visibility = viewModel.NewItemShortcuts.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        NewMenuShortlistEnd.Visibility = NewMenuShortlistStart.Visibility;
     }
 
     private void OutputTextBox_OnTextChanged(object sender, TextChangedEventArgs e) => ((TextBox)sender).ScrollToEnd();

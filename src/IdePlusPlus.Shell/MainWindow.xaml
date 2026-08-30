@@ -458,10 +458,17 @@
               Background="{DynamicResource WindowBackgroundBrush}"
               Foreground="{DynamicResource WindowForegroundBrush}">
             <MenuItem Header="_File">
-                <MenuItem Header="_New">
+                <!-- The shortlist between the two separators is rebuilt on open from
+                     NewItemShortcuts - see NewMenuItem_OnSubmenuOpened. Built in code rather than
+                     bound, because splicing a live collection between static entries in a WPF menu
+                     needs a CompositeCollection and a binding proxy, and this file already builds
+                     the Solution Explorer's menu the same way. -->
+                <MenuItem x:Name="NewMenuItem" Header="_New" SubmenuOpened="NewMenuItem_OnSubmenuOpened">
                     <MenuItem Header="_Project..." Command="{Binding NewProjectCommand}" />
-                    <Separator />
-                    <MenuItem Header="_File" Command="{Binding NewDocumentCommand}" />
+                    <MenuItem Header="_Item..." Command="{Binding NewItemCommand}" />
+                    <Separator x:Name="NewMenuShortlistStart" />
+                    <Separator x:Name="NewMenuShortlistEnd" />
+                    <MenuItem Header="Text _File" Command="{Binding NewDocumentCommand}" />
                 </MenuItem>
                 <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
                 <MenuItem Header="Open _Solution..." Command="{Binding OpenSolutionCommand}" />
