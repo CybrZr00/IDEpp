@@ -14,8 +14,12 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       Controller) and Add New Item... on the Solution Explorer, with the namespace computed from the
       project's RootNamespace plus the target folder — `dotnet new` will not do it, binding instead to
       msbuild:RootNamespace, which is folder-blind. See
-      [project-templates-design.md](project-templates-design.md); Phase 3 (template parameter UI,
-      installable template packages, copilot tools) not started.
+      [project-templates-design.md](project-templates-design.md). Phase 3 renders each template's own
+      parameters in both dialogs, adds Tools > Template Packages for `dotnet new install`/`uninstall`,
+      and gives the copilot `list_templates`/`create_project`/`add_item` — installing a package
+      deliberately has no tool, since it is arbitrary code fetched by name that later runs as a
+      template. Follow-up landed alongside: `RoslynWorkspaceService.NotifyDocumentAddedAsync`, so a
+      file added through New Item is analysed without reopening the solution.
 - [x] Reliability & safety net (Part 2) — global exception handler, Serilog wiring, plugin crash guards,
       missing-file/save-cancel/ghost-text bug fixes, secrets pruning, `.bak` backup, new
       `IdePlusPlus.Infrastructure.Tests` project.

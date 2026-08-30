@@ -255,7 +255,7 @@ project. And the solution root needed expanding along with the project, since WP
 
 ---
 
-## Phase 3 — parameters, installed template packages, and the copilot
+## Phase 3 — parameters, installed template packages, and the copilot *(shipped)*
 
 **Summary**: Surface the template parameters the cache already describes, let template packages be
 installed from inside the IDE, and give the copilot a tool for both features.
@@ -272,6 +272,21 @@ tools, routed through the same service and subject to the same guard.
 in a solution-local folder; template parameter *conditions* (`IsEnabledCondition` /
 `IsRequiredCondition` in the cache are expressions the engine evaluates — honoring them properly
 means an expression evaluator, so the MVP shows such parameters unconditionally).
+
+**What shipping it changed**: the parameter rendering landed as designed. Two decisions the design
+did not anticipate. Installing a template package deliberately has **no copilot tool** — it is
+arbitrary code fetched by name from a public feed that later runs as a template on the user's
+machine, which is the same shape as the `run_command` and MCP-trust prompts elsewhere here, so it
+stays user-initiated. And the copilot's `create_project` refuses solution templates for the reason
+Phase 1 already found: they bring their own solution file and would replace the one that is open.
+
+`add_item` is the tool that earns its place — writing a class with `propose_edit` guesses at the
+project's language version, implicit usings and namespace, while the template knows all three, so
+the description says to prefer it. `list_templates` exists because short names vary by machine and
+SDK version, and guessing one is the failure the other two would otherwise hit first.
+
+Not verified against a live model: the tools are registered, routed and unit-tested, but exercising
+them end to end means a real provider call.
 
 ---
 
