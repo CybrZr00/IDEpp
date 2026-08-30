@@ -20,6 +20,7 @@ using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.TestRunner;
+using IdePlusPlus.Templates;
 using Serilog;
 
 namespace IdePlusPlus.Shell.ToolPanes;
@@ -189,6 +190,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
+    private readonly TemplateCatalog _templateCatalog;
+
+    private readonly TemplateInstantiationService _templateInstantiation;
+
     private string? _solutionDirectory;
     private string? _solutionPath;
     private Func<string>? _currentConfiguration;
@@ -198,7 +203,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// <summary>Every project in the solution with the framework the solution tree resolved for it,
     /// so publish_project can default to the only project and pass --framework for a multi-targeted
     /// one. Same arrangement as _testProjectPaths: the chat pane never sees the solution tree.</summary>
-    private IReadOnlyList<(string Path, string? TargetFramework)> _solutionProjects = [];
+    private IReadOnlyList<(string Path, string? TargetFramework, string? RootNamespace)> _solutionProjects = [];
     private CancellationTokenSource? _streamCancellation;
 
     /// <summary>The request that produced whatever is currently uncommitted, for
@@ -225,7 +230,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         TestRunService testRunService,
         RoslynWorkspaceService roslynWorkspaceService,
         WorkspaceFileReader workspaceFileReader,
-        ReadOnlyToolDispatcher readOnlyToolDispatcher)
+        ReadOnlyToolDispatcher readOnlyToolDispatcher,
+        TemplateCatalog templateCatalog,
+        TemplateInstantiationService templateInstantiation)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -245,6 +252,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _testRunService = testRunService;
         _roslynWorkspaceService = roslynWorkspaceService;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
+        _templateCatalog = templateCatalog;
+        _templateInstantiation = templateInstantiation;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -437,8 +446,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// itself.</summary>
     public void SetTestProjects(IReadOnlyList<string> projectPaths) => _testProjectPaths = projectPaths;
 
-    /// <summary>The solution's projects and their target frameworks, for publish_project.</summary>
-    public void SetSolutionProjects(IReadOnlyList<(string Path, string? TargetFramework)> projects) =>
+    /// <summary>The solution's projects, for publish_project (target framework) and add_item (root
+    /// namespace).</summary>
+    public void SetSolutionProjects(
+        IReadOnlyList<(string Path, string? TargetFramework, string? RootNamespace)> projects) =>
         _solutionProjects = projects;
 
     public void SetIndexableFiles(IReadOnlyList<string> filePaths)
@@ -713,6 +724,28 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case PublishTools.PublishToolName:
                 return await RunPublishAsync(
                     arguments?["profile"]?.GetValue<string>(),
+                    arguments?["project"]?.GetValue<string>(),
+                    cancellationToken);
+
+            case TemplateTools.ListTemplatesToolName:
+                return await RunListTemplatesAsync(
+                    arguments?["kind"]?.GetValue<string>(),
+                    arguments?["search"]?.GetValue<string>(),
+                    cancellationToken);
+
+            case TemplateTools.CreateProjectToolName:
+                return await RunCreateProjectAsync(
+                    arguments?["template"]?.GetValue<string>(),
+                    arguments?["name"]?.GetValue<string>(),
+                    arguments?["framework"]?.GetValue<string>(),
+                    arguments?["solutionFolder"]?.GetValue<string>(),
+                    cancellationToken);
+
+            case TemplateTools.AddItemToolName:
+                return await RunAddItemAsync(
+                    arguments?["template"]?.GetValue<string>(),
+                    arguments?["name"]?.GetValue<string>(),
+                    arguments?["folder"]?.GetValue<string>(),
                     arguments?["project"]?.GetValue<string>(),
                     cancellationToken);
 

@@ -38,6 +38,9 @@ public class BuiltInToolsTests
         names.ShouldContain(SymbolTools.FindReferencesToolName);
         names.ShouldContain(SkillTools.ReadSkillToolName);
         names.ShouldContain(SubAgentTools.InvestigateParallelToolName);
+        names.ShouldContain(TemplateTools.ListTemplatesToolName);
+        names.ShouldContain(TemplateTools.CreateProjectToolName);
+        names.ShouldContain(TemplateTools.AddItemToolName);
     }
 
     [Fact]

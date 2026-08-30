@@ -18,6 +18,7 @@ public static class BuiltInTools
         .. GitTools.All,
         .. BuildTools.All,
         .. PublishTools.All,
+        .. TemplateTools.All,
         .. TestTools.All,
         .. DiagnosticTools.All,
         .. SymbolTools.All,
