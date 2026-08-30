@@ -23,6 +23,12 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
 
     private IReadOnlyList<TemplateGroup> _allTemplates = [];
 
+    /// <summary>Stops the default name from overwriting one the user typed. Set by any change that
+    /// did not come from <see cref="ApplyDefaultName"/>.</summary>
+    private bool _nameEditedByUser;
+
+    private bool _settingDefaultName;
+
     /// <param name="solutionPath">The open solution, or null - which is what decides whether this
     /// creates a solution as well as a project.</param>
     public NewProjectDialogViewModel(
@@ -194,9 +200,11 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
 
         SelectedLanguage = Languages.FirstOrDefault();
 
-        if (value is not null && string.IsNullOrWhiteSpace(ProjectName))
+        // Follows the template until the user types a name of their own - picking Class Library
+        // after looking at Console App should not leave "ConsoleApp1" in the box.
+        if (value is not null && !_nameEditedByUser)
         {
-            ProjectName = value.Primary.DefaultName ?? value.Name.Replace(" ", string.Empty);
+            ApplyDefaultName(value.Primary.DefaultName ?? value.Name.Replace(" ", string.Empty));
         }
 
         NotifyTargetChanged();
@@ -220,6 +228,11 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
 
     partial void OnProjectNameChanged(string value)
     {
+        if (!_settingDefaultName)
+        {
+            _nameEditedByUser = true;
+        }
+
         if (NeedsSolutionName && string.IsNullOrWhiteSpace(SolutionName))
         {
             SolutionName = value;
@@ -360,9 +373,26 @@ public sealed partial class NewProjectDialogViewModel : ObservableObject
             Templates.Add(group);
         }
 
-        if (SelectedTemplate is not null && !Templates.Contains(SelectedTemplate))
+        // Not guarded on SelectedTemplate being non-null: clearing the collection above drives the
+        // ListBox's SelectedItem to null through the two-way binding, so by this point it always is.
+        // Without this, typing in the search box leaves nothing selected and the whole right-hand
+        // side blank until something is clicked.
+        if (SelectedTemplate is null || !Templates.Contains(SelectedTemplate))
         {
             SelectedTemplate = Templates.FirstOrDefault();
+        }
+    }
+
+    private void ApplyDefaultName(string name)
+    {
+        _settingDefaultName = true;
+        try
+        {
+            ProjectName = name;
+        }
+        finally
+        {
+            _settingDefaultName = false;
         }
     }
 
