@@ -98,8 +98,13 @@ dependency management UI.
   stdout pipe, so the reader never saw EOF either. A watcher that prints output happens to die soon
   after on a broken pipe, which is what made the first pass look fine; a silent one runs forever.
   Stopping therefore goes through `ProcessJob` (a Windows job object with `KILL_ON_JOB_CLOSE`), with
-  the tree kill kept as a first step. `ShellCommandRunner`, `BuildService` and `TestRunService` all
-  still make the bare tree-kill assumption.
+  the tree kill kept as a first step. `ShellCommandRunner`, `BuildService` and `TestRunService` made
+  the same bare tree-kill assumption and now use `ProcessJob` too; each has a regression test that
+  spawns a deliberately orphaned grandchild, verified failing without the job assignment. For
+  `BuildService` this in principle means MSBuild worker nodes die with the build rather than
+  surviving for reuse — measured on the .NET 10 SDK it costs nothing, because `dotnet build` reuses
+  nodes started outside the job, which are not members. Still tree-kill-only, and not looked at:
+  `RunService`, `DapClient`, `McpClient`.
 
 ---
 

@@ -118,4 +118,35 @@ public sealed class ShellCommandRunnerTests : IDisposable
 
         result.TimedOut.ShouldBeFalse();
     }
+
+    /// <summary>
+    /// The tree kill alone does not do what this class used to claim it did. A grandchild whose own
+    /// parent has already exited is orphaned, so Kill(entireProcessTree: true)'s parent-PID walk
+    /// never reaches it - the measured shape of a stopped `npm run watch`. Waiting for the launcher
+    /// to exit before cancelling is what makes this a test of that case rather than of an ordinary
+    /// child.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenCancelled_KillsAGrandchildThatHasBeenOrphaned()
+    {
+        using var orphan = new OrphanedSleeper();
+        using var cancellation = new CancellationTokenSource();
+
+        var task = RunAsync(
+            $"{orphan.LauncherCommandLine}; Start-Sleep -Seconds 60",
+            timeout: TimeSpan.FromMinutes(5),
+            ct: cancellation.Token);
+
+        var sleeperPid = orphan.WaitForSleeperPid();
+        var launcherPid = orphan.WaitForLauncherPid();
+        OrphanedSleeper.WaitUntilGone(launcherPid)
+            .ShouldBeTrue("the launcher has to exit for the sleeper to be orphaned at all");
+        OrphanedSleeper.IsAlive(sleeperPid).ShouldBeTrue("the orphan should still be running before the cancel");
+
+        await cancellation.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => task);
+
+        OrphanedSleeper.WaitUntilGone(sleeperPid)
+            .ShouldBeTrue("cancelling should have taken the orphaned grandchild with it");
+    }
 }

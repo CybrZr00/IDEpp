@@ -1,18 +1,24 @@
 using System.Diagnostics;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.TestRunner;
 
 /// <summary>
 /// Runs `dotnet test` with a TRX logger, streaming raw output lines live (mirroring BuildService's
 /// ProcessStartInfo/ArgumentList/OutputDataReceived pattern) and parsing the resulting .trx once the
-/// process exits. Cancel() mirrors RunService.Stop() exactly - the only real process-cancellation
-/// precedent in this codebase - since BuildService's own CancellationToken parameter is dead code
-/// today (nothing wires a cancel button to it; it only stops awaiting, not the process itself).
+/// process exits.
+///
+/// Cancel() kills the process tree and then a <see cref="ProcessJob"/> the run was assigned to. The
+/// tree kill alone is not enough: its walk is over parent PIDs, so a grandchild whose own parent has
+/// already exited is orphaned and survives it - measured under a real `npm run watch`, and reachable
+/// here through any test that leaves a process behind. `dotnet test` has plenty under it to lose
+/// track of, testhost and MSBuild's worker nodes included.
 /// </summary>
 public sealed class TestRunService
 {
     private readonly object _stateLock = new();
     private Process? _process;
+    private ProcessJob? _job;
     private bool _starting;
 
     public bool IsRunning
@@ -80,10 +86,19 @@ public sealed class TestRunService
             process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
             process.ErrorDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
 
+            // Created before Start so assignment can happen as soon as possible afterwards - see
+            // ProcessJob for the race that narrows but cannot fully close. Disposing it at the end
+            // of the run is the backstop for anything a finished run left behind, which is also why
+            // the temp results directory becomes deletable again.
+            using var job = ProcessJob.TryCreate();
+
             process.Start();
+            job?.TryAssign(process);
+
             lock (_stateLock)
             {
                 _process = process;
+                _job = job;
                 _starting = false;
             }
 
@@ -111,6 +126,7 @@ public sealed class TestRunService
                 if (ReferenceEquals(_process, process))
                 {
                     _process = null;
+                    _job = null;
                 }
             }
 
@@ -140,9 +156,11 @@ public sealed class TestRunService
     public void Cancel()
     {
         Process? process;
+        ProcessJob? job;
         lock (_stateLock)
         {
             process = _process;
+            job = _job;
         }
 
         try
@@ -157,5 +175,9 @@ public sealed class TestRunService
             // Already gone, or refused to die - nothing further to do, and throwing from a
             // cancellation callback would replace the caller's cancellation with a worse error.
         }
+
+        // After the tree kill, not instead of it: the tree kill reaches anything spawned in the
+        // window before the job assignment, and the job reaches the orphans the tree walk cannot.
+        job?.Kill();
     }
 }

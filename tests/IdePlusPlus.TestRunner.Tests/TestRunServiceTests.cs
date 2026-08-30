@@ -179,4 +179,67 @@ public sealed class TestRunServiceTests : IDisposable
 
         _runService.IsRunning.ShouldBeFalse();
     }
+
+    /// <summary>
+    /// Cancel()'s tree kill walks parent PIDs, so a grandchild whose own parent has already exited
+    /// is orphaned and outlives it - measured under a real `npm run watch`, and reachable here
+    /// through any test that leaves a process behind. This spawns exactly that shape from inside a
+    /// test and waits for the launcher to exit before cancelling, so it pins the orphan case rather
+    /// than an ordinary child of `dotnet test`.
+    /// </summary>
+    [Fact]
+    public async Task Cancel_KillsAGrandchildATestOrphaned()
+    {
+        using var orphan = new OrphanedSleeper();
+        using var project = new ScratchXunitProject("OrphanRunFixture", "OrphanTests.cs", OrphanSourceCode(orphan.LauncherScriptPath));
+        project.Build();
+
+        var runTask = _runService.RunAsync(project.CsprojPath, filterFullyQualifiedNames: null, onOutputLine: _ => { });
+
+        var sleeperPid = orphan.WaitForSleeperPid();
+        var launcherPid = orphan.WaitForLauncherPid();
+        OrphanedSleeper.WaitUntilGone(launcherPid)
+            .ShouldBeTrue("the launcher has to exit for the sleeper to be orphaned at all");
+        OrphanedSleeper.IsAlive(sleeperPid).ShouldBeTrue("the orphan should still be running before the cancel");
+
+        _runService.Cancel();
+        await runTask;
+
+        OrphanedSleeper.WaitUntilGone(sleeperPid)
+            .ShouldBeTrue("Cancel() should have taken the orphaned grandchild with it");
+        _runService.IsRunning.ShouldBeFalse();
+    }
+
+    /// <summary>A test that starts a launcher, waits for it to exit - leaving its child orphaned -
+    /// and then stalls for long enough that the run has to be cancelled rather than finishing.</summary>
+    private static string OrphanSourceCode(string launcherScriptPath) => $$"""
+        using System;
+        using System.Diagnostics;
+        using System.Threading;
+        using Xunit;
+
+        namespace ScratchOrphanTests;
+
+        public class OrphanTests
+        {
+            [Fact]
+            public void SpawnsAnOrphanThenStalls()
+            {
+                var startInfo = new ProcessStartInfo("powershell.exe")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                startInfo.ArgumentList.Add("-NoProfile");
+                startInfo.ArgumentList.Add("-NonInteractive");
+                startInfo.ArgumentList.Add("-File");
+                startInfo.ArgumentList.Add(@"{{launcherScriptPath}}");
+
+                using var launcher = Process.Start(startInfo)!;
+                launcher.WaitForExit();
+
+                Thread.Sleep(TimeSpan.FromSeconds(60));
+            }
+        }
+        """;
 }

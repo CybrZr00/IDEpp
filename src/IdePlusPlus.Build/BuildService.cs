@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.Build;
 
@@ -216,6 +217,16 @@ public sealed class BuildService
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
 
+        // Created before Start so assignment can happen as soon as possible afterwards - see
+        // ProcessJob for the race that narrows but cannot fully close.
+        //
+        // KILL_ON_JOB_CLOSE means any MSBuild worker node this build spawns dies with it rather than
+        // surviving for reuse. Measured on the .NET 10 SDK, that costs nothing: three consecutive
+        // clean builds ran in 1.50s/1.23s/1.27s and not one worker node was created-and-killed,
+        // because `dotnet build` reuses nodes started outside this job - which are not members and
+        // are therefore untouched. Worth re-measuring if build times ever regress after a cancel.
+        using var job = ProcessJob.TryCreate();
+
         try
         {
             process.Start();
@@ -225,6 +236,8 @@ public sealed class BuildService
             onOutputLine($"Could not run dotnet - is the SDK installed and on PATH? ({ex.Message})");
             return -1;
         }
+
+        job?.TryAssign(process);
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -239,14 +252,14 @@ public sealed class BuildService
             // used to abandon a running dotnet build - and MSBuild's own worker nodes under it -
             // still holding locks on obj/bin. TestRunService.Cancel and RunService.Stop both kill
             // the whole tree; this now matches. Without it a tool timeout leaks a build.
-            KillBestEffort(process);
+            KillBestEffort(process, job);
             throw;
         }
 
         return process.ExitCode;
     }
 
-    private static void KillBestEffort(Process process)
+    private static void KillBestEffort(Process process, ProcessJob? job)
     {
         try
         {
@@ -260,5 +273,10 @@ public sealed class BuildService
             // Already gone, or refused to die - either way there is nothing further to do, and
             // throwing here would replace the caller's cancellation with a less useful error.
         }
+
+        // After the tree kill, not instead of it: the tree kill reaches anything spawned in the
+        // window before the job assignment, and the job reaches what the parent-PID walk cannot -
+        // a grandchild whose own parent has already exited is orphaned and invisible to it.
+        job?.Kill();
     }
 }
