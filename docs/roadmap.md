@@ -259,6 +259,27 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
         build (0 warnings/errors), full test suite (217 tests across 17 projects, all passing), and a
         real launch smoke test (with no plugin installed, confirming the no-plugin path is unaffected).
 
+- [x] Publish profiles — new `IdePlusPlus.Publish` project reading and writing standard
+      `Properties/PublishProfiles/*.pubxml`, so a profile authored in Visual Studio is consumed
+      as-is and one authored here runs from `dotnet publish -p:PublishProfile=x`. Folder and
+      container-image (`-t:PublishContainer`) targets; both argument forms were verified against a
+      real SDK before being written down. A Publish dialog (Build menu, Solution Explorer project
+      context menu, status-bar profile picker persisted per project in `.ideplusplus/publish.json`)
+      and a `publish_project` copilot tool. Two design points carried most of the weight: unmodelled
+      properties round-trip verbatim and existing files are edited in place, because a writer that
+      emitted only the properties IDE++ understands would delete everything Visual Studio wrote (and
+      the comment block in this repo's own `win-x64.pubxml`) on the first save; and `dotnet publish`
+      runs through a new `BuildService.RunDotnetAsync` rather than a lock of its own, since a publish
+      writes the same `obj/bin` a concurrent build does. Profiles using a protocol IDE++ cannot run
+      (MSDeploy, ClickOnce, Azure, FTP) are listed read-only rather than hidden — hiding them would
+      make a shared solution look like it has fewer profiles than it does — and the writer refuses
+      them outright. The copilot tool runs folder profiles only and never authors one: a container
+      profile with a registry configured pushes an image outward with no undo, and what gets shipped
+      where is the user's decision. 74 new tests across `IdePlusPlus.Publish.Tests` and
+      `IdePlusPlus.Shell.Tests`; full suite 594 tests across 18 projects, all passing. Not yet
+      verified interactively: the dialog's own click-through, and a container publish against a
+      running daemon.
+
 **All five "bigger bet" initiatives are now shipped.** Signature help, go-to-definition,
 find-all-references, rename, debugging a single test, remote/non-local attach, NuGet
 version-conflict UI, and a real out-of-process plugin sandbox (Tier 3) all remain explicitly
@@ -396,6 +417,7 @@ Confirmed asymmetry: MCP tool calls **already** auto-execute in a loop; `propose
 - Add condition/hit-count support to breakpoints, and pass them through the DAP `setBreakpoints` call netcoredbg already supports (M).
 - Add a minimal Watch pane using the DAP `evaluate` request, which is never sent today — `VariableInfo` and the `LocalsPaneViewModel` pattern already exist to reuse (M).
 - No NuGet package management (add/remove/restore) anywhere, no Test Explorer/`dotnet test` integration (the repo's own xUnit suite can't be run from inside IDE++ itself), no New Project/New Item wizards, no multi-project debug or attach-to-process — larger initiatives, roughly in that priority order.
+- No publish of any kind — no `dotnet publish`, no `.pubxml` reading, no deployment UI. The only publish in the repo is IDE++ publishing itself, via a hand-written profile nothing in the app can read (M). *(Shipped — see the execution status above.)*
 
 ### Copilot / AI ecosystem
 

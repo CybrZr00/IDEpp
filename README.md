@@ -28,6 +28,10 @@ never really a notepad to begin with.
 - Git integration: status, stage, commit, push/pull/fetch, branch switching, and an inline diff
   viewer shared with the AI Copilot's own edit-review flow
 - NuGet package management: search, add, remove, restore
+- Publish profiles: reads and writes standard `Properties/PublishProfiles/*.pubxml`, so profiles
+  written by Visual Studio work here and profiles written here work from `dotnet publish`. Folder
+  and container-image targets; profiles using a protocol IDE++ cannot run (MSDeploy, ClickOnce,
+  Azure) are listed read-only rather than hidden or overwritten
 - Test Explorer: discovers and runs `dotnet test` suites, jumps straight to a failing assertion
 - A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings, and
   chat-tool registration) with each plugin isolated in its own `AssemblyLoadContext`
@@ -35,9 +39,9 @@ never really a notepad to begin with.
 ### The AI Copilot agent
 - Works against **OpenRouter** (any hosted model) or a local **LM Studio** server — your choice of
   provider, your call on cost and privacy
-- A real tool-calling loop: reading/searching files and symbols, git diff/status, building, running
-  tests, live diagnostics, and — opt-in, confirmed per use — running shell commands or fetching a
-  public webpage
+- A real tool-calling loop: reading/searching files and symbols, git diff/status, building,
+  publishing with an existing profile, running tests, live diagnostics, and — opt-in, confirmed per
+  use — running shell commands or fetching a public webpage
 - A `propose_edit`/`propose_plan` diff-review workflow, with an Auto Mode toggle for when you'd
   rather it just get on with it
 - **Automated skill creation** — the agent can save a reusable procedure to disk and reload it in a
