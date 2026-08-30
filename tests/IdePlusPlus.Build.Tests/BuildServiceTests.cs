@@ -102,6 +102,43 @@ public sealed class BuildServiceTests : IDisposable
         _buildService.IsRunning.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task RunDotnetAsync_PassesItsArgumentsThroughVerbatim()
+    {
+        var lines = new List<string>();
+
+        var exitCode = await _buildService.RunDotnetAsync(["build", _projectPath, "--verbosity", "quiet"], _directory, lines.Add);
+
+        exitCode.ShouldBe(0);
+        _buildService.IsRunning.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The whole reason RunDotnetAsync lives here rather than in a PublishService of its own: a
+    /// `dotnet publish` writes the same obj/bin a concurrent build would, so the two have to exclude
+    /// each other through one guard rather than two that need to agree.
+    /// </summary>
+    [Fact]
+    public async Task RunDotnetAsync_WhileABuildIsRunning_Throws()
+    {
+        var build = _buildService.BuildAsync(_projectPath, _ => { });
+
+        await Should.ThrowAsync<InvalidOperationException>(
+            () => _buildService.RunDotnetAsync(["publish", _projectPath], _directory, _ => { }));
+
+        await build;
+    }
+
+    [Fact]
+    public async Task BuildAsync_WhileRunDotnetAsyncIsRunning_Throws()
+    {
+        var publish = _buildService.RunDotnetAsync(["publish", _projectPath], _directory, _ => { });
+
+        await Should.ThrowAsync<InvalidOperationException>(() => _buildService.BuildAsync(_projectPath, _ => { }));
+
+        await publish;
+    }
+
     /// <summary>
     /// The reason cancellation now kills the process tree: `using var process` disposes the handle
     /// without touching the process, so a cancelled build used to keep running with MSBuild worker

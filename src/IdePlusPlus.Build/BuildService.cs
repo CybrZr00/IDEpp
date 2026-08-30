@@ -9,10 +9,11 @@ public sealed class BuildService
     private bool _isRunning;
 
     /// <summary>
-    /// Whether a build/clean/rebuild started here is still going. RunService and TestRunService
-    /// have always had a guard like this; BuildService did not, which was survivable while the
-    /// toolbar button was the only caller and stops being so once the copilot can start one too -
-    /// two `dotnet build` processes over the same obj/bin is not a race worth having.
+    /// Whether a build/clean/rebuild - or a publish, which goes through <see cref="RunDotnetAsync"/> -
+    /// started here is still going. RunService and TestRunService have always had a guard like this;
+    /// BuildService did not, which was survivable while the toolbar button was the only caller and
+    /// stops being so once the copilot can start one too - two `dotnet build` processes over the same
+    /// obj/bin is not a race worth having.
     /// </summary>
     public bool IsRunning
     {
@@ -61,12 +62,52 @@ public sealed class BuildService
         return await BuildAsync(projectOrSolutionPath, onOutputLine, targetFramework, configuration, cancellationToken);
     }
 
-    private async Task<int> RunDotnetVerbAsync(
+    /// <summary>
+    /// Runs an arbitrary `dotnet` invocation under the same single-build-at-a-time guard as
+    /// Build/Clean, streaming its output the same way.
+    ///
+    /// This exists so PublishService doesn't need a lock of its own: `dotnet publish` writes the same
+    /// obj/bin a concurrent build would, so the two have to exclude each other, and one guard that
+    /// <see cref="IsRunning"/> reports on is simpler than two that have to agree. Arguments are passed
+    /// through verbatim - assembling them is the caller's business, which keeps publish-profile
+    /// knowledge out of this project entirely.
+    /// </summary>
+    public Task<int> RunDotnetAsync(
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        Action<string> onOutputLine,
+        CancellationToken cancellationToken = default) =>
+        RunGuardedAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
+
+    private Task<int> RunDotnetVerbAsync(
         string verb,
         string projectOrSolutionPath,
         Action<string> onOutputLine,
         string? targetFramework,
         string? configuration,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new List<string> { verb, projectOrSolutionPath };
+        if (targetFramework is not null)
+        {
+            arguments.Add("--framework");
+            arguments.Add(targetFramework);
+        }
+
+        if (configuration is not null)
+        {
+            arguments.Add("--configuration");
+            arguments.Add(configuration);
+        }
+
+        return RunGuardedAsync(
+            arguments, Path.GetDirectoryName(projectOrSolutionPath) ?? "", onOutputLine, cancellationToken);
+    }
+
+    private async Task<int> RunGuardedAsync(
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        Action<string> onOutputLine,
         CancellationToken cancellationToken)
     {
         lock (_stateLock)
@@ -81,8 +122,7 @@ public sealed class BuildService
 
         try
         {
-            return await RunProcessAsync(
-                verb, projectOrSolutionPath, onOutputLine, targetFramework, configuration, cancellationToken);
+            return await RunProcessAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
         }
         finally
         {
@@ -94,11 +134,9 @@ public sealed class BuildService
     }
 
     private static async Task<int> RunProcessAsync(
-        string verb,
-        string projectOrSolutionPath,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
         Action<string> onOutputLine,
-        string? targetFramework,
-        string? configuration,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo("dotnet")
@@ -107,20 +145,11 @@ public sealed class BuildService
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(projectOrSolutionPath),
+            WorkingDirectory = workingDirectory,
         };
-        startInfo.ArgumentList.Add(verb);
-        startInfo.ArgumentList.Add(projectOrSolutionPath);
-        if (targetFramework is not null)
+        foreach (var argument in arguments)
         {
-            startInfo.ArgumentList.Add("--framework");
-            startInfo.ArgumentList.Add(targetFramework);
-        }
-
-        if (configuration is not null)
-        {
-            startInfo.ArgumentList.Add("--configuration");
-            startInfo.ArgumentList.Add(configuration);
+            startInfo.ArgumentList.Add(argument);
         }
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
