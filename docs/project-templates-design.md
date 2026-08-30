@@ -38,7 +38,7 @@ larger ask, and the one that forces every hard question about solution mutation)
 
 ---
 
-## Phase 1 — the template catalog, and New Project
+## Phase 1 — the template catalog, and New Project *(shipped)*
 
 **Summary**: A new `IdePlusPlus.Templates` project that reads the .NET SDK's own template cache to
 enumerate installed templates, and instantiates one by shelling `dotnet new <template>` through
@@ -154,6 +154,15 @@ templates that are really solution templates get a narrow treatment (see risks).
   right call — but it clears the Output pane, which throws away the creation log the user may want
   to read. Worth fixing narrowly (don't clear on a reload triggered from inside the IDE) rather
   than accepting.
+
+**What shipping it changed**: two bugs the design could not have predicted, both found by running the
+dialog rather than reading it. Searching left nothing selected, because
+`ObservableCollection.Clear()` drives the ListBox's `SelectedItem` to null through the two-way
+binding, so the "is the selection still in the filtered list" guard never fired. And the project name
+kept the previously selected template's default. Verified working against the real SDK: 40
+deduplicated rows from 228 cache entries, Class Library offering all five frameworks, `net8.0`
+producing `<TargetFramework>net8.0</TargetFramework>`, `obj/` staying out of the created-file list,
+and a re-create returning 73 rather than overwriting.
 
 ---
 
