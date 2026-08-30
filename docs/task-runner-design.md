@@ -92,6 +92,14 @@ dependency management UI.
   pre-existing issue and out of scope here.)
 - Yarn/pnpm workspaces mean several manifests legitimately share one lockfile; detection is
   per-manifest with a walk up to the nearest lockfile, not per-directory.
+- **`Process.Kill(entireProcessTree: true)` does not stop an npm task.** Found by testing against a
+  real `npm run watch`, which produces `IDE++ → cmd.exe → node (npm) → cmd.exe → node (script)`:
+  after the tree kill the innermost node was still alive, orphaned, and still holding the redirected
+  stdout pipe, so the reader never saw EOF either. A watcher that prints output happens to die soon
+  after on a broken pipe, which is what made the first pass look fine; a silent one runs forever.
+  Stopping therefore goes through `ProcessJob` (a Windows job object with `KILL_ON_JOB_CLOSE`), with
+  the tree kill kept as a first step. `ShellCommandRunner`, `BuildService` and `TestRunService` all
+  still make the bare tree-kill assumption.
 
 ---
 
@@ -147,9 +155,11 @@ plugin failures are handled everywhere else.
 **Real risks**:
 
 - **Watch tasks never exit.** `npm run watch` / `gulp watch` bound to Before Build would hang every
-  build forever. Mitigations: bindings get a timeout (default 2 minutes, then kill the tree and log),
+  build forever. Mitigations: bindings get a timeout (default 2 minutes, then kill and log),
   nothing is ever auto-bound, and the binding UI warns on a task whose name or script matches a
-  watch-ish pattern. VS has this same footgun; IDE++ should at least be recoverable.
+  watch-ish pattern. VS has this same footgun; IDE++ should at least be recoverable — which is only
+  true because Phase 1's stop path goes through a job object rather than a tree kill (see its risks
+  above); a timeout that cannot actually kill the watcher would be theatre.
 - **Double-running.** A web project's `dotnet build` may already invoke npm through an MSBuild target.
   A Before Build binding on top of that runs it twice — worth a note in the docs rather than
   detection heuristics.
