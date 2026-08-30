@@ -41,7 +41,7 @@ larger ask, and the one that forces every hard question about solution mutation)
 ## Phase 1 — the template catalog, and New Project
 
 **Summary**: A new `IdePlusPlus.Templates` project that reads the .NET SDK's own template cache to
-enumerate installed templates, and instantiates one by shelling `dotnet new create` through
+enumerate installed templates, and instantiates one by shelling `dotnet new <template>` through
 `BuildService`. On top of it, a `NewProjectDialog` (File > New > Project…, and Add > New Project… on
 the Solution Explorer's solution node) that creates a project into the open solution — or creates a
 solution first when none is open — and reloads.
@@ -63,7 +63,7 @@ trigger.
 - `TemplateGrouping.cs` — pure dedupe/grouping (see risks; this is the load-bearing piece)
 - `TemplateCatalog.cs` — locate → read → prime-if-missing → group, memoized against the cache
   file's last-write time
-- `TemplateInstantiationService.cs` — builds the `dotnet new create` argument list, runs it via
+- `TemplateInstantiationService.cs` — builds the `dotnet new` argument list, runs it via
   `BuildService.RunDotnetAsync`, and reports which files appeared
 - `SolutionProjectAdder.cs` — `dotnet solution <path> add <project> [--solution-folder …]`
 - `TemplateNameValidator.cs` — pure name validation (see risks)
@@ -116,11 +116,26 @@ templates that are really solution templates get a narrow treatment (see risks).
   the group's `Framework` choices, and picking one re-selects which entry gets instantiated
   (highest precedence among those offering it) rather than passing a flag to a fixed one. Getting
   this wrong looks like "net8.0 isn't in the list" on a machine that has the 8.0 templates installed.
+  Implementation note: the CLI turns out to union the choices the same way for its own `--help`, and
+  to resolve the band itself when handed `--framework net8.0` — verified producing a net8.0 project
+  from a 10.0-default `classlib`. So the grouping decides what the dropdown *offers* and the CLI
+  makes the selection; the resolution logic stays, because it is also what tells the dialog which
+  entry's parameters apply.
 - **Some "project" templates are solution templates.** `aspire-starter`, `maui-multiproject` and
   `maui-blazor-web` are tagged `type: solution` and emit several projects plus their own solution
   file. Adding one to an already-open solution is not meaningful. MVP treatment: show them, tagged,
   and route a solution-kind template to the create-a-new-solution-and-open-it path regardless of
   what is currently open — with the dialog saying so before it runs, not after.
+- **`dotnet new create` silently ignores `--output`.** Found while implementing this, and the single
+  easiest way to ship a feature that appears to work while putting every generated file in the wrong
+  folder. With the explicit `create` verb, `--output` is swallowed as a template argument — in *both*
+  positions, before and after the template name — so the file is written to the working directory
+  instead, while the CLI still prints "created successfully" and exits 0. Measured on 10.0.301:
+  `dotnet new create class -n X -o Sub` writes `./X.cs`; `dotnet new class -n X -o Sub` writes
+  `./Sub/X.cs`. So the implicit form is the one to use, and it has a named regression test. Its one
+  cost: a template whose short name collides with a `dotnet new` sub-command (`list`, `install`,
+  `search`, …) becomes unreachable — none of the 228 stock templates does, but a third-party package
+  is free to, so that is refused loudly rather than silently running the sub-command.
 - **Name collisions do not fail loudly.** `dotnet new` refuses to overwrite with a prose message
   ("Creating this template will make changes to existing files") and **exit code 73**, not a
   non-zero-means-crashed error. The service must treat any non-zero exit as failure and surface the
@@ -251,6 +266,6 @@ integration concern:
   with no explicit `RootNamespace`, and a file at the project root.
 - `TemplateNameValidator` for path characters, reserved Windows device names (`CON`, `PRN`, `NUL`,
   `COM1`…), trailing dots and spaces, and non-identifier names for C# item templates.
-- Argument-list construction for `dotnet new create` and `dotnet solution add` — pure, and the
+- Argument-list construction for `dotnet new` and `dotnet solution add` — pure, and the
   place where a `--namespace`-only-when-declared bug would otherwise hide.
 - The created-files directory diff, over a `TempDirectory`.
