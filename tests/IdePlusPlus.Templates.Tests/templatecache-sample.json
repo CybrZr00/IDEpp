@@ -1,0 +1,1261 @@
+{
+  "Version": "1.0.0.7",
+  "Locale": "en-US",
+  "TemplateInfo": [
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Common",
+        "Library"
+      ],
+      "DefaultName": "ClassLibrary1",
+      "Description": "A project for creating a class library that targets .NET or .NET Standard",
+      "Identity": "Microsoft.Common.Library.CSharp.8.0",
+      "GroupIdentity": "Microsoft.Common.Library",
+      "Precedence": 10000,
+      "Name": "Class Library",
+      "ShortNameList": [
+        "classlib"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "project"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "Company.ClassLibrary1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "project",
+          "Choices": {
+            "project": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "TargetFrameworkOverride",
+          "DisplayName": "Target framework override",
+          "Description": "Overrides the target framework",
+          "Documentation": "Overrides the target framework",
+          "DataType": "string",
+          "DefaultValue": "",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "Framework",
+          "DisplayName": "Framework",
+          "Description": "The target framework for the project.",
+          "Documentation": "The target framework for the project.",
+          "DataType": "choice",
+          "DefaultValue": "net8.0",
+          "Choices": {
+            "net8.0": {
+              "DisplayName": ".NET 8.0",
+              "Description": "Target net8.0"
+            },
+            "netstandard2.1": {
+              "DisplayName": ".NET Standard 2.1",
+              "Description": "Target netstandard2.1"
+            },
+            "netstandard2.0": {
+              "DisplayName": ".NET Standard 2.0",
+              "Description": "Target netstandard2.0"
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Common",
+        "Library"
+      ],
+      "DefaultName": "ClassLibrary1",
+      "Description": "A project for creating a class library that targets .NET or .NET Standard",
+      "Identity": "Microsoft.Common.Library.CSharp.9.0",
+      "GroupIdentity": "Microsoft.Common.Library",
+      "Precedence": 11000,
+      "Name": "Class Library",
+      "ShortNameList": [
+        "classlib"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "project"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "Company.ClassLibrary1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "project",
+          "Choices": {
+            "project": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "TargetFrameworkOverride",
+          "DisplayName": "Target framework override",
+          "Description": "Overrides the target framework",
+          "Documentation": "Overrides the target framework",
+          "DataType": "string",
+          "DefaultValue": "",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "Framework",
+          "DisplayName": "Framework",
+          "Description": "The target framework for the project.",
+          "Documentation": "The target framework for the project.",
+          "DataType": "choice",
+          "DefaultValue": "net9.0",
+          "Choices": {
+            "net9.0": {
+              "DisplayName": ".NET 9.0",
+              "Description": "Target net9.0"
+            },
+            "netstandard2.1": {
+              "DisplayName": ".NET Standard 2.1",
+              "Description": "Target netstandard2.1"
+            },
+            "netstandard2.0": {
+              "DisplayName": ".NET Standard 2.0",
+              "Description": "Target netstandard2.0"
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Common",
+        "Library"
+      ],
+      "DefaultName": "ClassLibrary1",
+      "Description": "A project for creating a class library that targets .NET or .NET Standard",
+      "Identity": "Microsoft.Common.Library.CSharp.10.0",
+      "GroupIdentity": "Microsoft.Common.Library",
+      "Precedence": 12000,
+      "Name": "Class Library",
+      "ShortNameList": [
+        "classlib"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "project"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "Company.ClassLibrary1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "project",
+          "Choices": {
+            "project": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "TargetFrameworkOverride",
+          "DisplayName": "Target framework override",
+          "Description": "Overrides the target framework",
+          "Documentation": "Overrides the target framework",
+          "DataType": "string",
+          "DefaultValue": "",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "Framework",
+          "DisplayName": "Framework",
+          "Description": "The target framework for the project.",
+          "Documentation": "The target framework for the project.",
+          "DataType": "choice",
+          "DefaultValue": "net10.0",
+          "Choices": {
+            "net10.0": {
+              "DisplayName": ".NET 10.0",
+              "Description": "Target net10.0"
+            },
+            "netstandard2.1": {
+              "DisplayName": ".NET Standard 2.1",
+              "Description": "Target netstandard2.1"
+            },
+            "netstandard2.0": {
+              "DisplayName": ".NET Standard 2.0",
+              "Description": "Target netstandard2.0"
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Common"
+      ],
+      "DefaultName": "Class1",
+      "Description": "Creates a new C# class",
+      "Identity": "DotNet.Common.Class.CSharp",
+      "GroupIdentity": "DotNet.Common.Class",
+      "Precedence": 0,
+      "Name": "Class",
+      "ShortNameList": [
+        "class"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "Class1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Common"
+      ],
+      "DefaultName": "Class1",
+      "Description": "Creates a new Visual Basic class",
+      "Identity": "DotNet.Common.Class.VisualBasic",
+      "GroupIdentity": "DotNet.Common.Class",
+      "Precedence": 0,
+      "Name": "Class",
+      "ShortNameList": [
+        "class"
+      ],
+      "TagsCollection": {
+        "language": "VB",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "Class1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "VB",
+          "Choices": {
+            "VB": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Web",
+        "ASP.NET"
+      ],
+      "DefaultName": "ValueController",
+      "Description": "API Controller with or without read/write actions",
+      "Identity": "Microsoft.AspNetCore.Mvc.ApiController.8.0",
+      "GroupIdentity": "Microsoft.AspNetCore.Mvc.ApiController",
+      "Precedence": 9800,
+      "Name": "API Controller",
+      "ShortNameList": [
+        "apicontroller"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "ValueController",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "namespace",
+          "DisplayName": "",
+          "Description": "Namespace for the generated code",
+          "Documentation": "Namespace for the generated code",
+          "DataType": null,
+          "DefaultValue": "MyApp.Namespace",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "actions",
+          "DisplayName": "Add Read/Write Actions",
+          "Description": "Create controller with read/write actions",
+          "Documentation": "Create controller with read/write actions",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Web",
+        "ASP.NET"
+      ],
+      "DefaultName": "ValueController",
+      "Description": "API Controller with or without read/write actions",
+      "Identity": "Microsoft.AspNetCore.Mvc.ApiController.9.0",
+      "GroupIdentity": "Microsoft.AspNetCore.Mvc.ApiController",
+      "Precedence": 9900,
+      "Name": "API Controller",
+      "ShortNameList": [
+        "apicontroller"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "ValueController",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "namespace",
+          "DisplayName": "",
+          "Description": "Namespace for the generated code",
+          "Documentation": "Namespace for the generated code",
+          "DataType": null,
+          "DefaultValue": "MyApp.Namespace",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "actions",
+          "DisplayName": "Add Read/Write Actions",
+          "Description": "Create controller with read/write actions",
+          "Documentation": "Create controller with read/write actions",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Web",
+        "ASP.NET"
+      ],
+      "DefaultName": "ValueController",
+      "Description": "API Controller with or without read/write actions",
+      "Identity": "Microsoft.AspNetCore.Mvc.ApiController.10.0",
+      "GroupIdentity": "Microsoft.AspNetCore.Mvc.ApiController",
+      "Precedence": 10000,
+      "Name": "API Controller",
+      "ShortNameList": [
+        "apicontroller"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "ValueController",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "namespace",
+          "DisplayName": "",
+          "Description": "Namespace for the generated code",
+          "Documentation": "Namespace for the generated code",
+          "DataType": null,
+          "DefaultValue": "MyApp.Namespace",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "actions",
+          "DisplayName": "Add Read/Write Actions",
+          "Description": "Create controller with read/write actions",
+          "Documentation": "Create controller with read/write actions",
+          "DataType": "bool",
+          "DefaultValue": "false",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Aleksei Kharlov aka halex2005 (codeofclimber.ru)",
+      "Classifications": [
+        "Test",
+        "NUnit"
+      ],
+      "DefaultName": "NUnitTestItem",
+      "Description": "A item that contains NUnit tests",
+      "Identity": "NUnit3.DotNetNew.ItemTemplate.CSharp",
+      "GroupIdentity": "NUnit3.DotNetNew.ItemTemplate",
+      "Precedence": 0,
+      "Name": "NUnit 3 Test Item",
+      "ShortNameList": [
+        "nunit-test"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "UnitTest1",
+          "Choices": null,
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Aleksei Kharlov aka halex2005 (codeofclimber.ru)",
+      "Classifications": [
+        "Test",
+        "NUnit"
+      ],
+      "DefaultName": "NUnitTestItem",
+      "Description": "Creates a new NUnit test class",
+      "Identity": "NUnit3.DotNetNew.ItemTemplate.CSharp.9.0",
+      "GroupIdentity": "NUnit3.DotNetNew.ItemTemplate",
+      "Precedence": 12000,
+      "Name": "NUnit Test Item",
+      "ShortNameList": [
+        "nunit-test"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "UnitTest1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Common",
+        "Aspire",
+        "Cloud",
+        "Web",
+        "Web API",
+        "API",
+        "Service",
+        "Blazor",
+        "Test",
+        "MSTest",
+        "NUnit",
+        "xUnit"
+      ],
+      "DefaultName": "AspireApp",
+      "Description": "A project template for creating an Aspire app with a Blazor web frontend and web API backend service, with optional Redis caching.",
+      "Identity": "Aspire.Starter.CSharp.13.4",
+      "GroupIdentity": "Aspire.Starter",
+      "Precedence": 9000,
+      "Name": "Aspire Starter App (ASP.NET Core/Blazor)",
+      "ShortNameList": [
+        "aspire-starter"
+      ],
+      "TagsCollection": {
+        "language": "C#",
+        "type": "solution",
+        "editorTreatAs": "solution"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": "Aspire-StarterApplication.1",
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "language",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "C#",
+          "Choices": {
+            "C#": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "solution",
+          "Choices": {
+            "solution": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "Framework",
+          "DisplayName": "",
+          "Description": "The target framework for the project.",
+          "Documentation": "The target framework for the project.",
+          "DataType": "choice",
+          "DefaultValue": "net10.0",
+          "Choices": {
+            "net8.0": {
+              "DisplayName": "",
+              "Description": "Target net8.0"
+            },
+            "net9.0": {
+              "DisplayName": "",
+              "Description": "Target net9.0"
+            },
+            "net10.0": {
+              "DisplayName": "",
+              "Description": "Target net10.0"
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 2,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    },
+    {
+      "Author": "Microsoft",
+      "Classifications": [
+        "Config"
+      ],
+      "DefaultName": null,
+      "Description": "Creates an .editorconfig file for configuring code style preferences.",
+      "Identity": "Microsoft.Standard.QuickStarts.EditorConfigFile",
+      "GroupIdentity": null,
+      "Precedence": 0,
+      "Name": "EditorConfig file",
+      "ShortNameList": [
+        "editorconfig",
+        ".editorconfig"
+      ],
+      "TagsCollection": {
+        "type": "item"
+      },
+      "Parameters": [
+        {
+          "Name": "name",
+          "DisplayName": null,
+          "Description": "The default name symbol",
+          "Documentation": "The default name symbol",
+          "DataType": "string",
+          "DefaultValue": null,
+          "Choices": null,
+          "IsName": true,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        },
+        {
+          "Name": "type",
+          "DisplayName": null,
+          "Description": null,
+          "Documentation": null,
+          "DataType": "choice",
+          "DefaultValue": "item",
+          "Choices": {
+            "item": {
+              "DisplayName": "",
+              "Description": ""
+            }
+          },
+          "IsName": false,
+          "Precedence": {
+            "PrecedenceDefinition": 3,
+            "IsRequiredCondition": null,
+            "IsEnabledCondition": null,
+            "IsRequired": false,
+            "CanBeRequired": false
+          }
+        }
+      ]
+    }
+  ]
+}

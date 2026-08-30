@@ -22,6 +22,7 @@
     <Project Path="src/IdePlusPlus.Shell/IdePlusPlus.Shell.csproj" />
     <Project Path="src/IdePlusPlus.SourceControl/IdePlusPlus.SourceControl.csproj" />
     <Project Path="src/IdePlusPlus.Tasks/IdePlusPlus.Tasks.csproj" />
+    <Project Path="src/IdePlusPlus.Templates/IdePlusPlus.Templates.csproj" />
     <Project Path="src/IdePlusPlus.TestRunner/IdePlusPlus.TestRunner.csproj" />
   </Folder>
   <Folder Name="/tests/">
@@ -43,6 +44,7 @@
     <Project Path="tests/IdePlusPlus.Shell.Tests/IdePlusPlus.Shell.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.SourceControl.Tests/IdePlusPlus.SourceControl.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Tasks.Tests/IdePlusPlus.Tasks.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Templates.Tests/IdePlusPlus.Templates.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.TestRunner.Tests/IdePlusPlus.TestRunner.Tests.csproj" />
   </Folder>
 </Solution>
