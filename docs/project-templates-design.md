@@ -285,8 +285,16 @@ project's language version, implicit usings and namespace, while the template kn
 the description says to prefer it. `list_templates` exists because short names vary by machine and
 SDK version, and guessing one is the failure the other two would otherwise hit first.
 
-Not verified against a live model: the tools are registered, routed and unit-tested, but exercising
-them end to end means a real provider call.
+Verified end to end against a live model. Asked to add a record, it called `list_templates`, then
+`add_item`, then `get_diagnostics` on the file it had just created - which came back clean, and only
+could because `add_item` registers the new file with the Roslyn workspace. Asked for a class library
+it created one and added it to the solution; asked for `aspire-starter` it was refused with the
+solution-template message, nothing was written, and it relayed the reason and offered
+`aspire-apphost`/`aspire-servicedefaults` instead, which genuinely are project templates.
+
+The package round-trip is verified too: installing `NUnit3.DotNetNew.Template` added six cache
+entries which the grouping collapsed to one row, and uninstalling it restored the machine exactly -
+228 templates before and after.
 
 ---
 
