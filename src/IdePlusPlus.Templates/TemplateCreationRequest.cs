@@ -5,6 +5,11 @@ namespace IdePlusPlus.Templates;
 /// for a project template the CLI creates it if absent, so it is the project directory rather than
 /// its parent.
 /// </summary>
+/// <param name="ProjectPath">The project to evaluate the template against. Needed for item
+/// templates: their project-capability constraint resolves the project from the *output path* rather
+/// than by walking up, so adding a file to a folder that doesn't exist yet fails with "No project was
+/// found at the path" unless this is passed. Null for project and solution templates, which have no
+/// project context.</param>
 /// <param name="Parameters">Template-specific parameters by name, without the leading dashes. A null
 /// value means a switch (<c>--actions</c>), not a missing one.</param>
 public sealed record TemplateCreationRequest(
@@ -14,6 +19,7 @@ public sealed record TemplateCreationRequest(
     string? Language = null,
     string? Framework = null,
     string? Namespace = null,
+    string? ProjectPath = null,
     IReadOnlyDictionary<string, string?>? Parameters = null)
 {
     public IReadOnlyDictionary<string, string?> Parameters { get; init; } =

@@ -39,8 +39,14 @@ public sealed class TemplateInstantiationService(BuildService buildService)
         // The CLI resolves --output relative to the working directory; anchoring it at the output
         // directory's parent keeps a relative path in the request meaningful rather than depending on
         // wherever the IDE process happens to be.
-        var workingDirectory = Path.GetDirectoryName(Path.GetFullPath(request.OutputDirectory))
-            ?? Environment.CurrentDirectory;
+        //
+        // Walked up to something that exists, because Process.Start fails outright on a working
+        // directory that does not - and `dotnet new` is perfectly happy to create a nested --output
+        // whose parents are absent. Adding a class to a folder that doesn't exist yet used to fail
+        // with "Could not run dotnet - is the SDK installed and on PATH?", which is both wrong and
+        // impossible to act on.
+        var workingDirectory = NearestExistingDirectory(
+            Path.GetDirectoryName(Path.GetFullPath(request.OutputDirectory)) ?? request.OutputDirectory);
 
         var exitCode = await _buildService.RunDotnetAsync(
             arguments, workingDirectory, onOutputLine, cancellationToken);
@@ -48,6 +54,26 @@ public sealed class TemplateInstantiationService(BuildService buildService)
         return new TemplateCreationResult(
             exitCode,
             exitCode == 0 ? CreatedFileScanner.NewFilesSince(request.OutputDirectory, before) : []);
+    }
+
+    /// <summary>The nearest ancestor of <paramref name="path"/> that exists on disk, for use as a
+    /// working directory. Falls back to the process's own directory, which always does.</summary>
+    public static string NearestExistingDirectory(string path)
+    {
+        var current = Path.GetFullPath(path);
+
+        while (!Directory.Exists(current))
+        {
+            var parent = Path.GetDirectoryName(current);
+            if (parent is null || parent == current)
+            {
+                return Environment.CurrentDirectory;
+            }
+
+            current = parent;
+        }
+
+        return current;
     }
 
     /// <summary>

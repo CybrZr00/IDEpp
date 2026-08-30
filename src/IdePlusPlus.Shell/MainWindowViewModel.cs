@@ -641,6 +641,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        // The solution node too, not just the project: WPF only realizes a TreeViewItem once its
+        // parents are expanded, so expanding the project alone leaves the new file real but
+        // invisible under a collapsed root.
+        if (_solutionRoot is not null)
+        {
+            _solutionRoot.IsExpanded = true;
+        }
+
         project.IsExpanded = true;
 
         foreach (var file in files)

@@ -190,7 +190,8 @@ public sealed partial class NewItemDialogViewModel : ObservableObject
                 Directory,
                 Target.ProjectDirectory,
                 Target.RootNamespace,
-                Languages.Count > 1 ? SelectedLanguage : null);
+                Languages.Count > 1 ? SelectedLanguage : null,
+                Target.ProjectPath);
 
             var result = await _instantiation.CreateItemAsync(plan, _onOutputLine);
 

@@ -80,6 +80,26 @@ public class TemplateCreationArgumentsTests
         arguments.ShouldNotContain("--namespace");
     }
 
+    /// <summary>
+    /// Without this, adding an item to a folder that does not exist yet fails: the item templates'
+    /// project-capability constraint resolves the project from the --output path rather than by
+    /// walking up from it, so it reports "No project was found at the path" and refuses. Verified on
+    /// 10.0.301 - the same command with --project succeeds.
+    /// </summary>
+    [Fact]
+    public void PassesTheProjectSoItemTemplateConstraintsCanResolveIt()
+    {
+        var arguments = TemplateCreationArguments.ForCreate(
+            Request("class") with { ProjectPath = @"C:\repo\Demo\Demo.csproj" });
+
+        arguments[arguments.ToList().IndexOf("--project") + 1].ShouldBe(@"C:\repo\Demo\Demo.csproj");
+    }
+
+    /// <summary>Project and solution templates have no project context to evaluate against.</summary>
+    [Fact]
+    public void OmitsTheProjectWhenThereIsNone() =>
+        TemplateCreationArguments.ForCreate(Request()).ShouldNotContain("--project");
+
     [Fact]
     public void PassesTemplateParametersWithTheirValues()
     {

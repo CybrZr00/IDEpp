@@ -56,6 +56,16 @@ public static class TemplateCreationArguments
             "--no-update-check",
         };
 
+        // Item templates carry a project-capability constraint that resolves the project from the
+        // --output path rather than by walking up from it, so a folder that does not exist yet has no
+        // project and the template refuses to run: "No project was found at the path". Naming the
+        // project explicitly is the documented way out, and IDE++ always knows which one it is.
+        if (!string.IsNullOrWhiteSpace(request.ProjectPath))
+        {
+            arguments.Add("--project");
+            arguments.Add(request.ProjectPath);
+        }
+
         if (!string.IsNullOrWhiteSpace(request.Language))
         {
             arguments.Add("--language");

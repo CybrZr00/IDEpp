@@ -72,6 +72,15 @@ public class ItemCreationPlanTests
         ItemCreationPlan.For(Class, "Widget", ProjectDirectory, ProjectDirectory, "Demo", "VB")
             .Request.Language.ShouldBe("VB");
 
+    /// <summary>Every item plan names its project, so the template's project-capability constraint
+    /// resolves even when the target folder does not exist yet.</summary>
+    [Fact]
+    public void ThePlanCarriesTheProject() =>
+        ItemCreationPlan.For(
+            Class, "Widget", @"C:\repo\Demo\New\Folder", ProjectDirectory, "Demo",
+            projectPath: @"C:\repo\Demo\Demo.csproj")
+            .Request.ProjectPath.ShouldBe(@"C:\repo\Demo\Demo.csproj");
+
     [Fact]
     public void NestedFoldersReachTheDesiredNamespace() =>
         ItemCreationPlan.For(Class, "Widget", @"C:\repo\Demo\Api\V2", ProjectDirectory, "Demo")
