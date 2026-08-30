@@ -9,6 +9,14 @@ public sealed class BuildService
     private bool _isRunning;
 
     /// <summary>
+    /// Whether the current async flow already holds the guard via <see cref="RunExclusiveAsync"/>.
+    /// AsyncLocal rather than a plain field: it has to follow one logical operation's await chain
+    /// so the inner Build/Clean call recognises the guard as already held by its own caller, while
+    /// an unrelated concurrent caller still sees it as taken and is refused.
+    /// </summary>
+    private readonly AsyncLocal<bool> _holdsGuard = new();
+
+    /// <summary>
     /// Whether a build/clean/rebuild - or a publish, which goes through <see cref="RunDotnetAsync"/> -
     /// started here is still going. RunService and TestRunService have always had a guard like this;
     /// BuildService did not, which was survivable while the toolbar button was the only caller and
@@ -79,6 +87,51 @@ public sealed class BuildService
         CancellationToken cancellationToken = default) =>
         RunGuardedAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
 
+    /// <summary>
+    /// Runs arbitrary work holding the same one-at-a-time guard Build/Clean/publish take, so a
+    /// sequence of them counts as a single build for <see cref="IsRunning"/>'s purposes.
+    ///
+    /// This exists for build bindings: a Before Build task and the `dotnet build` after it have to
+    /// be one indivisible run, or the copilot's build tool can start a second `dotnet build` in the
+    /// gap while the bound task is still writing files the build is about to read. Calls to
+    /// Build/Clean/RunDotnet from inside <paramref name="work"/> see the guard as already held by
+    /// their own caller and proceed, rather than throwing.
+    ///
+    /// Throws <see cref="InvalidOperationException"/> - like the verbs themselves - if something
+    /// else already holds the guard.
+    /// </summary>
+    public async Task<T> RunExclusiveAsync<T>(Func<Task<T>> work)
+    {
+        if (_holdsGuard.Value)
+        {
+            return await work();
+        }
+
+        lock (_stateLock)
+        {
+            if (_isRunning)
+            {
+                throw new InvalidOperationException("A build is already running.");
+            }
+
+            _isRunning = true;
+        }
+
+        _holdsGuard.Value = true;
+        try
+        {
+            return await work();
+        }
+        finally
+        {
+            _holdsGuard.Value = false;
+            lock (_stateLock)
+            {
+                _isRunning = false;
+            }
+        }
+    }
+
     private Task<int> RunDotnetVerbAsync(
         string verb,
         string projectOrSolutionPath,
@@ -110,6 +163,13 @@ public sealed class BuildService
         Action<string> onOutputLine,
         CancellationToken cancellationToken)
     {
+        // An enclosing RunExclusiveAsync on this same flow already holds the guard on this call's
+        // behalf, and taking it again here would refuse the very build it was taken for.
+        if (_holdsGuard.Value)
+        {
+            return await RunProcessAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
+        }
+
         lock (_stateLock)
         {
             if (_isRunning)

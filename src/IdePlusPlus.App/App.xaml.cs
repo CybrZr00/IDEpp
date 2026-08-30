@@ -277,6 +277,7 @@ public partial class App : Application
         services.AddSingleton<PluginToolWindowRegistry>();
         services.AddSingleton<PluginKeyBindingRegistry>();
         services.AddSingleton<PluginChatToolRegistry>();
+        services.AddSingleton<PluginBuildEventRegistry>();
         services.AddSingleton<PluginHost>();
         // PluginLoader depends on the IPluginHost interface (not the concrete PluginHost) so it can be
         // unit-tested without constructing a real MainWindowViewModel/WPF Application - resolve it to

@@ -38,6 +38,8 @@ internal sealed class RecordingPluginHost : IPluginHost
 
     public List<(PluginToolDefinition Definition, Func<JsonNode?, CancellationToken, Task<PluginToolResult>> Execute)> RegisteredChatTools { get; } = [];
 
+    public List<(BuildEventKind Kind, Func<BuildEventContext, CancellationToken, Task> Handler)> RegisteredBuildEventHandlers { get; } = [];
+
     public void RegisterHighlighting(string fileExtension, string xshdFilePath) =>
         RegisteredHighlighting.Add((fileExtension, xshdFilePath));
 
@@ -63,4 +65,7 @@ internal sealed class RecordingPluginHost : IPluginHost
 
     public void RegisterChatTool(PluginToolDefinition definition, Func<JsonNode?, CancellationToken, Task<PluginToolResult>> execute) =>
         RegisteredChatTools.Add((definition, execute));
+
+    public void RegisterBuildEventHandler(BuildEventKind kind, Func<BuildEventContext, CancellationToken, Task> handler) =>
+        RegisteredBuildEventHandlers.Add((kind, handler));
 }
