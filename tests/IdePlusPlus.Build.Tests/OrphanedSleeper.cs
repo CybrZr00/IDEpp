@@ -28,7 +28,7 @@ internal sealed class OrphanedSleeper : IDisposable
         _sleeperPidPath = Path.Combine(_directory, "sleeper.pid");
         _launcherPidPath = Path.Combine(_directory, "launcher.pid");
         var sleeperScript = Path.Combine(_directory, "sleeper.ps1");
-        var launcherScript = Path.Combine(_directory, "launcher.ps1");
+        LauncherScriptPath = Path.Combine(_directory, "launcher.ps1");
 
         File.WriteAllText(sleeperScript, $"""
             $PID | Out-File -Encoding ascii -FilePath '{Literal(_sleeperPidPath)}'
@@ -38,13 +38,16 @@ internal sealed class OrphanedSleeper : IDisposable
         // Records its own PID *after* starting the sleeper and then falls off the end, so a test
         // can wait for this process to exit and know the sleeper is orphaned before it kills
         // anything.
-        File.WriteAllText(launcherScript, $"""
+        File.WriteAllText(LauncherScriptPath, $"""
             Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile -NonInteractive -File "{sleeperScript}"'
             $PID | Out-File -Encoding ascii -FilePath '{Literal(_launcherPidPath)}'
             """);
 
-        LauncherCommandLine = $"powershell.exe -NoProfile -NonInteractive -File \"{launcherScript}\"";
+        LauncherCommandLine = $"powershell.exe -NoProfile -NonInteractive -File \"{LauncherScriptPath}\"";
     }
+
+    /// <summary>The launcher script itself, for a caller that assembles its own command line.</summary>
+    public string LauncherScriptPath { get; }
 
     /// <summary>A command line that starts the launcher as a separate process, for pasting into
     /// whatever the service under test actually runs.</summary>
