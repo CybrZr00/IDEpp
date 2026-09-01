@@ -162,7 +162,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // pane), so "open the file this connection string came from" is wired the same way
         // TaskExplorer.OutputLine is above - a callback handed down rather than an event routed
         // back up.
-        ConnectionsExplorer.OpenFileRequested = OpenPath;
+        ConnectionsExplorer.OpenFileRequested = path => OpenPath(path);
+
+        // Same reasoning as ConnectionsExplorer.OpenFileRequested above - CopilotChatPaneViewModel
+        // has no reference to this view model either, so it opens/focuses a proposed edit's target
+        // file through this handed-down callback instead. Unlike ConnectionsExplorer's, this one
+        // needs the resulting DocumentViewModel back, so OpenPath itself now returns it.
+        CopilotChat.OpenFileRequested = OpenPath;
 
         currentTheme = _themeService.Current;
         _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
@@ -755,7 +761,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenRecentFile(string filePath) => OpenPath(filePath);
 
-    public void OpenPath(string filePath)
+    public DocumentViewModel? OpenPath(string filePath)
     {
         var document = _editorWorkspace.Open(filePath);
         if (document is not null)
@@ -766,6 +772,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             Output.AppendLine($"Couldn't open '{filePath}' - it may have been moved, renamed, or deleted.");
         }
+
+        return document;
     }
 
     [RelayCommand(CanExecute = nameof(HasActiveDocument))]

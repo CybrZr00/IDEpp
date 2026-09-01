@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -377,6 +379,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     public Func<string, string, Task<bool>>? WebFetchApprovalPrompt { get; set; }
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
+
+    /// <summary>Opens/focuses a file in the main editor tab area and returns the resulting document -
+    /// wired to MainWindowViewModel.OpenPath the same way ConnectionsExplorer.OpenFileRequested is,
+    /// since this pane has no reference to MainWindowViewModel. Used by HandleToolCallDelta so a
+    /// proposed edit's diff review happens in the editor rather than the chat pane.</summary>
+    public Func<string, DocumentViewModel?>? OpenFileRequested { get; set; }
 
     /// <summary>
     /// The open solution, as the copilot's tools need to see it.
@@ -1655,6 +1663,27 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         if (proposalEvent.Status == EditProposalStatus.Complete)
         {
             proposal.Complete(proposalEvent, _solutionDirectory);
+
+            // Open/focus the target file and hand the proposal its editor tab to show the diff in -
+            // review now happens there instead of the chat pane. Skipped only for a proposal refused
+            // on arrival (ResolvedFullPath null), which has no valid file to open.
+            if (proposal.ResolvedFullPath is { } fullPath)
+            {
+                // Auto Mode can process several proposals in one turn, each flipping the active tab
+                // for visibility even when nothing needs approving - that shouldn't steal keyboard
+                // focus away from the chat input if the user is still typing there.
+                var previouslyFocused = Keyboard.FocusedElement as IInputElement;
+                var openedDocument = OpenFileRequested?.Invoke(fullPath);
+                if (openedDocument is not null)
+                {
+                    proposal.ShowInEditor(openedDocument);
+                }
+
+                if (previouslyFocused is not null)
+                {
+                    _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => previouslyFocused.Focus());
+                }
+            }
 
             // A saved skill's raw text later gets injected straight into the model's own context as
             // trusted instruction-shaped content (see PrependContextAsync/read_skill) - so unlike an

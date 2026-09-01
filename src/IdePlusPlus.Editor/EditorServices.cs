@@ -15,6 +15,8 @@ public static class EditorServices
 
     public static GoToLineRequest GoToLine { get; set; } = null!;
 
+    public static DiffPreviewRequest DiffPreview { get; set; } = null!;
+
     /// <summary>Null until an inline completion provider (e.g. DeepSeek FIM) has a usable API key configured.</summary>
     public static IInlineCompletionProvider? CompletionProvider { get; set; }
 

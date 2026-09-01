@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -26,6 +27,7 @@ public partial class TextEditorHost : UserControl
     private readonly DispatcherTimer _completionDebounceTimer;
     private FoldingManager? _foldingManager;
     private DocumentViewModel? _boundDocument;
+    private DiffPreview? _currentPreview;
     private CancellationTokenSource? _completionCancellation;
     private CancellationTokenSource? _memberCompletionCancellation;
     private CancellationTokenSource? _hoverCancellation;
@@ -44,6 +46,7 @@ public partial class TextEditorHost : UserControl
         Editor.TextArea.TextView.ElementGenerators.Add(_ghostTextGenerator);
         EditorServices.DebugLocation.Changed += OnDebugLocationChanged;
         EditorServices.GoToLine.Requested += OnGoToLineRequested;
+        EditorServices.DiffPreview.Requested += OnDiffPreviewRequested;
 
         // DiagnosticsProvider is a single app-wide instance set once at startup (see EditorServices'
         // remarks) - subscribed for this control's whole lifetime rather than per-Rebind, with
@@ -93,6 +96,7 @@ public partial class TextEditorHost : UserControl
         {
             EditorServices.DebugLocation.Changed -= OnDebugLocationChanged;
             EditorServices.GoToLine.Requested -= OnGoToLineRequested;
+            EditorServices.DiffPreview.Requested -= OnDiffPreviewRequested;
             EditorTheme.Changed -= ApplyEditorTheme;
             EditorSettings.Changed -= ApplyEditorSettings;
 
@@ -205,6 +209,12 @@ public partial class TextEditorHost : UserControl
         _diagnosticSquiggleRenderer.SetDiagnostics([]);
         Editor.TextArea.TextView.InvalidateLayer(_diagnosticSquiggleRenderer.Layer);
 
+        // The diff panel belongs to whichever document was previously bound - clear it before
+        // rebinding, then below pull whatever preview is current for the newly-bound document (if
+        // any), rather than waiting on the live Requested event, which fires nothing if it fired
+        // before this host was even constructed - see DiffPreviewRequest's remarks.
+        ClearDiffPreview();
+
         _boundDocument = DataContext as DocumentViewModel;
         _breakpointMargin.FilePath = _boundDocument?.FilePath;
 
@@ -217,6 +227,11 @@ public partial class TextEditorHost : UserControl
 
         Editor.Document = _boundDocument.TextDocument;
         Editor.SyntaxHighlighting = _boundDocument.SyntaxHighlighting;
+
+        if (EditorServices.DiffPreview.CurrentFor(_boundDocument) is { } pendingPreview)
+        {
+            ShowDiffPreview(pendingPreview);
+        }
 
         if (_boundDocument.SyntaxHighlighting is not null)
         {
@@ -308,6 +323,47 @@ public partial class TextEditorHost : UserControl
         Editor.ScrollToLine(clampedLine);
         Editor.Focus();
     }
+
+    private void OnDiffPreviewRequested(DocumentViewModel document, DiffPreview? preview)
+    {
+        if (!ReferenceEquals(_boundDocument, document))
+        {
+            return;
+        }
+
+        if (preview is null)
+        {
+            ClearDiffPreview();
+        }
+        else
+        {
+            ShowDiffPreview(preview);
+        }
+    }
+
+    private void ShowDiffPreview(DiffPreview preview)
+    {
+        _currentPreview = preview;
+        ChangeSummaryText.Text = preview.ChangeSummary;
+        DiffLinesControl.ItemsSource = preview.Lines;
+        DecisionButtonsPanel.Visibility = preview.IsDecided ? Visibility.Collapsed : Visibility.Visible;
+        DecisionTextBlock.Text = preview.DecisionText;
+        DecisionTextBlock.Visibility = preview.IsDecided ? Visibility.Visible : Visibility.Collapsed;
+        DiffReviewPanel.Visibility = Visibility.Visible;
+    }
+
+    private void ClearDiffPreview()
+    {
+        _currentPreview = null;
+        DiffReviewPanel.Visibility = Visibility.Collapsed;
+        DiffLinesControl.ItemsSource = null;
+    }
+
+    private void AcceptPreviewButton_OnClick(object sender, RoutedEventArgs e) => _currentPreview?.Accept?.Invoke();
+
+    private void RejectPreviewButton_OnClick(object sender, RoutedEventArgs e) => _currentPreview?.Reject?.Invoke();
+
+    private void DismissPreviewButton_OnClick(object sender, RoutedEventArgs e) => _currentPreview?.Dismiss.Invoke();
 
     private void UpdateCurrentLineHighlight()
     {

@@ -75,6 +75,7 @@ public partial class App : Application
         EditorServices.DiagnosticsProvider = _serviceProvider.GetRequiredService<RoslynWorkspaceService>();
         EditorServices.MemberCompletionProvider = _serviceProvider.GetRequiredService<RoslynCompletionService>();
         EditorServices.GoToLine = new GoToLineRequest();
+        EditorServices.DiffPreview = new DiffPreviewRequest();
 
         // Both delegates re-query PluginHost fresh on every invocation (not memoized here), so it
         // doesn't matter that PluginLoader.LoadPlugins() below hasn't run yet - by the time either

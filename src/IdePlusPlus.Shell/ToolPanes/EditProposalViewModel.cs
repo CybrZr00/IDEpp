@@ -61,10 +61,62 @@ public sealed partial class EditProposalViewModel : ObservableObject
     [ObservableProperty]
     private bool isLargeDeletion;
 
+    /// <summary>The chat pane's compact status line, now that the diff itself lives in the editor
+    /// tab instead: empty while streaming, "Reviewing in editor..." once complete and awaiting a
+    /// decision, and DecisionText once one has been made. Kept explicit (set by
+    /// RefreshEditorAndStatus) rather than derived via bindings, since it depends on both IsDecided
+    /// and DecisionText together.</summary>
+    [ObservableProperty]
+    private string statusText = "";
+
     /// <summary>True only once Accept() has actually written the change - false for Reject, and
     /// false for a conflict (the file changed since this was proposed). Auto Mode uses this to
     /// decide whether it's safe to let the model keep going past this proposal.</summary>
     public bool WasApplied { get; private set; }
+
+    /// <summary>The resolved on-disk target once Complete() has run - null before that, and null
+    /// (permanently) for a proposal refused on arrival for having no valid target (outside the
+    /// workspace, no solution open). CopilotChatPaneViewModel uses this to decide whether there's a
+    /// real file to open/focus in the editor.</summary>
+    public string? ResolvedFullPath => _fullPath;
+
+    private DocumentViewModel? _attachedDocument;
+
+    /// <summary>Called once the target file has been opened/focused in the editor - pushes this
+    /// proposal's diff into that document's editor tab, docked above the code. Accept()/Reject() call
+    /// RefreshEditorAndStatus() again once decided, so the panel there stays in sync with the
+    /// decision regardless of whether it came from the panel itself or from Auto Mode's synchronous
+    /// auto-accept.</summary>
+    public void ShowInEditor(DocumentViewModel document)
+    {
+        _attachedDocument = document;
+        PushEditorPreview();
+    }
+
+    /// <summary>Refreshes both the chat pane's compact status line and the editor-docked diff panel
+    /// (if the target document has been opened). Called explicitly at the end of every place that
+    /// finishes setting IsComplete/IsDecided/DecisionText, rather than from an OnIsDecidedChanged
+    /// property-changed hook - IsDecided is set before DecisionText in every caller below, so reading
+    /// DecisionText from that hook would see the previous (usually null) value.</summary>
+    private void RefreshEditorAndStatus()
+    {
+        StatusText = IsDecided ? DecisionText ?? "" : "Reviewing in editor...";
+        PushEditorPreview();
+    }
+
+    private void PushEditorPreview()
+    {
+        if (_attachedDocument is not { } document)
+        {
+            return;
+        }
+
+        EditorServices.DiffPreview.Request(document, new DiffPreview(
+            DiffLines, ChangeSummary, IsLargeDeletion, IsDecided, DecisionText,
+            Accept: IsDecided ? null : () => AcceptCommand.Execute(null),
+            Reject: IsDecided ? null : () => RejectCommand.Execute(null),
+            Dismiss: () => EditorServices.DiffPreview.Request(document, null)));
+    }
 
     /// <summary>True once this proposal is complete and its resolved target lies inside the given
     /// absolute directory - used to hold specific paths (e.g. saved skills) back from Auto Mode's
@@ -151,6 +203,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
                 ? "Not applied: no solution is open, so there is nowhere for this edit to go."
                 : $"Not applied: {_operation.FilePath} is outside the open solution directory. "
                   + "Only files inside the open solution can be edited.";
+            RefreshEditorAndStatus();
             return;
         }
 
@@ -166,6 +219,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
             IsDecided = true;
             DecisionText = $"Refused - {rangeError}";
             ToolResultText = $"Not applied to {_operation.FilePath}: {rangeError}";
+            RefreshEditorAndStatus();
             return;
         }
 
@@ -188,6 +242,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
               + "Nothing has been written yet.";
 
         IsComplete = true;
+        RefreshEditorAndStatus();
     }
 
     private static int CountLines(string text) =>
@@ -250,6 +305,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
                 $"Not applied to {FilePath}: the file changed after this edit was proposed. Re-read "
                 + "it and send the edit again against its current contents.",
         };
+        RefreshEditorAndStatus();
     }
 
     [RelayCommand(CanExecute = nameof(CanDecide))]
@@ -260,6 +316,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
         ToolResultText =
             $"The user rejected this edit to {FilePath}; nothing was written. Do not apply it again "
             + "unless they ask for it.";
+        RefreshEditorAndStatus();
     }
 
     partial void OnIsCompleteChanged(bool value)
