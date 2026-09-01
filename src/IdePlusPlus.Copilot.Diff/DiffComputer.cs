@@ -2,6 +2,7 @@ using DiffPlex;
 using DiffPlex.Chunkers;
 using DiffPlex.DiffBuilder;
 using DiffPlex.DiffBuilder.Model;
+using IdePlusPlus.Editor.Diff;
 
 namespace IdePlusPlus.Copilot.Diff;
 

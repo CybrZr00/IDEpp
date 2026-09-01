@@ -4,6 +4,8 @@ using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.Editor;
+using IdePlusPlus.Editor.Diff;
 
 namespace IdePlusPlus.Shell.ToolPanes;
 

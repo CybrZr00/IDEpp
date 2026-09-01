@@ -1,4 +1,4 @@
-namespace IdePlusPlus.Copilot.Diff;
+namespace IdePlusPlus.Editor.Diff;
 
 public enum DiffLineKind
 {
