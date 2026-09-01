@@ -71,6 +71,32 @@ public sealed class EditorWorkspace
         return document;
     }
 
+    /// <summary>
+    /// Like Open, but a target that doesn't exist on disk yet is not an error here - it's the
+    /// normal case for reviewing a propose_edit that creates a new file. Opens an empty,
+    /// not-yet-saved document bound to that path instead of failing, so there's a real editor tab
+    /// for the diff review panel to attach to before the file exists.
+    /// </summary>
+    public DocumentViewModel? OpenOrCreate(string filePath)
+    {
+        if (File.Exists(filePath))
+        {
+            return Open(filePath);
+        }
+
+        var existing = OpenDocuments.FirstOrDefault(d =>
+            string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var document = DocumentViewModel.ForNewFile(Path.GetFileName(filePath));
+        document.AttachToFile(filePath);
+        OpenDocuments.Add(document);
+        return document;
+    }
+
     private void RemoveFromRecentFiles(string filePath)
     {
         if (RecentFiles.Remove(filePath))

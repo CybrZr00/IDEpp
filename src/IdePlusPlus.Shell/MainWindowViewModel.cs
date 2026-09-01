@@ -166,9 +166,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         // Same reasoning as ConnectionsExplorer.OpenFileRequested above - CopilotChatPaneViewModel
         // has no reference to this view model either, so it opens/focuses a proposed edit's target
-        // file through this handed-down callback instead. Unlike ConnectionsExplorer's, this one
-        // needs the resulting DocumentViewModel back, so OpenPath itself now returns it.
-        CopilotChat.OpenFileRequested = OpenPath;
+        // file through this handed-down callback instead. OpenOrCreatePath rather than OpenPath: a
+        // propose_edit that creates a new file targets a path that doesn't exist yet, which is the
+        // normal case here rather than the "moved/renamed/deleted" error OpenPath's other callers
+        // mean by a missing file.
+        CopilotChat.OpenFileRequested = OpenOrCreatePath;
 
         currentTheme = _themeService.Current;
         _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
@@ -764,6 +766,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public DocumentViewModel? OpenPath(string filePath)
     {
         var document = _editorWorkspace.Open(filePath);
+        if (document is not null)
+        {
+            ActiveDocument = document;
+        }
+        else
+        {
+            Output.AppendLine($"Couldn't open '{filePath}' - it may have been moved, renamed, or deleted.");
+        }
+
+        return document;
+    }
+
+    /// <summary>Like OpenPath, but for a proposed edit's target: unlike every other OpenPath caller
+    /// (Solution Explorer, recent files, ...) a target that doesn't exist on disk yet is not an
+    /// error here - it's the normal case for a propose_edit that creates a new file.</summary>
+    public DocumentViewModel? OpenOrCreatePath(string filePath)
+    {
+        var document = _editorWorkspace.OpenOrCreate(filePath);
         if (document is not null)
         {
             ActiveDocument = document;

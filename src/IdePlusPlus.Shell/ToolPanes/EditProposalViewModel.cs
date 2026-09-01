@@ -81,15 +81,24 @@ public sealed partial class EditProposalViewModel : ObservableObject
     public string? ResolvedFullPath => _fullPath;
 
     private DocumentViewModel? _attachedDocument;
+    private bool _openedForReview;
 
     /// <summary>Called once the target file has been opened/focused in the editor - pushes this
     /// proposal's diff into that document's editor tab, docked above the code. Accept()/Reject() call
     /// RefreshEditorAndStatus() again once decided, so the panel there stays in sync with the
     /// decision regardless of whether it came from the panel itself or from Auto Mode's synchronous
-    /// auto-accept.</summary>
-    public void ShowInEditor(DocumentViewModel document)
+    /// auto-accept.
+    ///
+    /// openedForReview is false if the file was already open before this proposal touched it (the
+    /// user had it open independently), true if opening it for review is what made it "open" -
+    /// which matters to Accept() below, since EditApplicationService.Apply only writes straight to
+    /// disk for a file that is closed at the moment it applies. Every proposal now opens its target
+    /// before a decision is made, so without this distinction Apply's disk write would silently stop
+    /// happening for every closed-file edit, not just the already-open ones it was always meant for.</summary>
+    public void ShowInEditor(DocumentViewModel document, bool openedForReview)
     {
         _attachedDocument = document;
+        _openedForReview = openedForReview;
         PushEditorPreview();
     }
 
@@ -280,6 +289,18 @@ public sealed partial class EditProposalViewModel : ObservableObject
     {
         var result = _applicationService.Apply(
             _operation!, _fullPath!, _originalContentSnapshot!, _workspaceDirectory);
+
+        // Apply just wrote straight to disk if the file was closed, or mutated the now-open buffer
+        // if not - and thanks to ShowInEditor, it is now always open. For a file that was already
+        // open independently, that buffer-only outcome is correct and expected (see ShowInEditor's
+        // remarks). For one that's only open because this proposal opened it for review, flush it
+        // ourselves so a closed file's accepted edit is still durable immediately, same as before
+        // every proposal started opening its target.
+        if (result == ApplyResult.Applied && _openedForReview && _attachedDocument is { } document)
+        {
+            _applicationService.SaveDocument(document);
+        }
+
         WasApplied = result == ApplyResult.Applied;
         IsDecided = true;
         DecisionText = result switch

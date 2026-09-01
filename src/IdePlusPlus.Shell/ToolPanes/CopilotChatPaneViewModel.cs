@@ -1669,6 +1669,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             // on arrival (ResolvedFullPath null), which has no valid file to open.
             if (proposal.ResolvedFullPath is { } fullPath)
             {
+                // Captured before opening, for ShowInEditor's openedForReview - see its remarks on
+                // why Accept() needs to know whether opening the file for review is what made it
+                // "open" (this call), rather than it already being open independently.
+                var wasAlreadyOpen = _editApplicationService.IsOpen(fullPath);
+
                 // Auto Mode can process several proposals in one turn, each flipping the active tab
                 // for visibility even when nothing needs approving - that shouldn't steal keyboard
                 // focus away from the chat input if the user is still typing there.
@@ -1676,7 +1681,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 var openedDocument = OpenFileRequested?.Invoke(fullPath);
                 if (openedDocument is not null)
                 {
-                    proposal.ShowInEditor(openedDocument);
+                    proposal.ShowInEditor(openedDocument, openedForReview: !wasAlreadyOpen);
                 }
 
                 if (previouslyFocused is not null)

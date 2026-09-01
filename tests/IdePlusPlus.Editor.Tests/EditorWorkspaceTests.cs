@@ -141,6 +141,47 @@ public sealed class EditorWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void OpenOrCreate_ExistingFile_BehavesLikeOpen()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var path = CreateTempFile("content");
+
+        var document = workspace.OpenOrCreate(path);
+
+        document.ShouldNotBeNull();
+        document.TextDocument.Text.ShouldBe("content");
+        workspace.RecentFiles.ShouldContain(path);
+    }
+
+    [Fact]
+    public void OpenOrCreate_MissingFile_OpensAnEmptyUnsavedDocumentBoundToThatPath()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var path = Path.Combine(Path.GetTempPath(), "does-not-exist-" + Guid.NewGuid() + ".txt");
+
+        var document = workspace.OpenOrCreate(path);
+
+        document.ShouldNotBeNull();
+        document.FilePath.ShouldBe(path);
+        document.TextDocument.Text.ShouldBe("");
+        document.IsDirty.ShouldBeFalse();
+        workspace.OpenDocuments.ShouldContain(document);
+    }
+
+    [Fact]
+    public void OpenOrCreate_SameMissingPathTwice_ReturnsTheSameDocumentInstance()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var path = Path.Combine(Path.GetTempPath(), "does-not-exist-" + Guid.NewGuid() + ".txt");
+
+        var first = workspace.OpenOrCreate(path);
+        var second = workspace.OpenOrCreate(path);
+
+        second.ShouldBeSameAs(first);
+        workspace.OpenDocuments.Count.ShouldBe(1);
+    }
+
+    [Fact]
     public void Close_RemovesFromOpenDocuments()
     {
         var workspace = new EditorWorkspace(_recentFilesPath);
