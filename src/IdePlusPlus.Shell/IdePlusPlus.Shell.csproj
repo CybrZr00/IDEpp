@@ -58,6 +58,7 @@
     <ProjectReference Include="..\IdePlusPlus.Tasks\IdePlusPlus.Tasks.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Templates\IdePlusPlus.Templates.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Roslyn\IdePlusPlus.Roslyn.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.Connections\IdePlusPlus.Connections.csproj" />
   </ItemGroup>
 
 </Project>

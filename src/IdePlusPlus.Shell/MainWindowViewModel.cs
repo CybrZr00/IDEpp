@@ -101,6 +101,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         NuGetPaneViewModel nuGet,
         TestExplorerPaneViewModel testExplorer,
         TaskExplorerPaneViewModel taskExplorer,
+        ConnectionsExplorerPaneViewModel connectionsExplorer,
         ScheduledAutomationsPaneViewModel scheduledAutomations,
         ScheduledAutomationService scheduledAutomationService,
         WelcomeDocumentViewModel welcome,
@@ -129,6 +130,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         NuGet = nuGet;
         TestExplorer = testExplorer;
         TaskExplorer = taskExplorer;
+        ConnectionsExplorer = connectionsExplorer;
         ScheduledAutomations = scheduledAutomations;
         _scheduledAutomationService = scheduledAutomationService;
         Welcome = welcome;
@@ -155,6 +157,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // Deliberately not OnBuildOutputLine: that also feeds ErrorList.AddIfDiagnostic, whose parser
         // is MSBuild-specific, and npm output is not MSBuild output.
         TaskExplorer.OutputLine = line => _dispatcher.Invoke(() => Output.AppendLine(line));
+
+        // ConnectionsExplorerPaneViewModel has no reference to this view model (same as every other
+        // pane), so "open the file this connection string came from" is wired the same way
+        // TaskExplorer.OutputLine is above - a callback handed down rather than an event routed
+        // back up.
+        ConnectionsExplorer.OpenFileRequested = OpenPath;
 
         currentTheme = _themeService.Current;
         _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
@@ -228,6 +236,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public TestExplorerPaneViewModel TestExplorer { get; }
 
     public TaskExplorerPaneViewModel TaskExplorer { get; }
+
+    public ConnectionsExplorerPaneViewModel ConnectionsExplorer { get; }
 
     public ScheduledAutomationsPaneViewModel ScheduledAutomations { get; }
 
@@ -944,6 +954,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // are already on disk (see PackageJsonReader).
             _ = DiscoverTasksAsync(solutionDirectory, solutionFilePaths);
 
+            // Same posture: a plain config-file scan, nothing built or restored first.
+            _ = DiscoverConnectionsAsync(solutionDirectory, solutionFilePaths, projects);
+
             // Default-on: only skipped if the user has explicitly turned it off in Settings.
             var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
 
@@ -1285,6 +1298,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (Exception ex)
         {
             Output.AppendLine($"Task discovery failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync, same posture as DiscoverTasksAsync - a
+    /// solution with no connection strings anywhere is the common case and must stay silent.</summary>
+    private async Task DiscoverConnectionsAsync(
+        string? solutionDirectory, IReadOnlyList<string> solutionFilePaths, IReadOnlyList<SolutionTreeNode> projects)
+    {
+        try
+        {
+            var projectDirectories = projects
+                .Where(p => p.FullPath is not null)
+                .Select(p => (ProjectPath: p.FullPath!, ProjectDirectory: Path.GetDirectoryName(p.FullPath!)!))
+                .ToList();
+
+            await ConnectionsExplorer.SetSolutionAsync(solutionDirectory, solutionFilePaths, projectDirectories);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Connection discovery failed: {ex.Message}");
         }
     }
 

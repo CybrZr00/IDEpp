@@ -85,6 +85,7 @@ public partial class MainWindow : Window
         SolutionExplorerAnchorable.Content = viewModel.SolutionExplorer;
         SourceControlAnchorable.Content = viewModel.SourceControl;
         NuGetAnchorable.Content = viewModel.NuGet;
+        ConnectionsExplorerAnchorable.Content = viewModel.ConnectionsExplorer;
         OutputAnchorable.Content = viewModel.Output;
         ErrorListAnchorable.Content = viewModel.ErrorList;
         TestExplorerAnchorable.Content = viewModel.TestExplorer;
@@ -100,6 +101,7 @@ public partial class MainWindow : Window
             [SolutionExplorerPaneViewModel.PaneContentId] = viewModel.SolutionExplorer,
             [SourceControlPaneViewModel.PaneContentId] = viewModel.SourceControl,
             [NuGetPaneViewModel.PaneContentId] = viewModel.NuGet,
+            [ConnectionsExplorerPaneViewModel.PaneContentId] = viewModel.ConnectionsExplorer,
             [OutputPaneViewModel.PaneContentId] = viewModel.Output,
             [ErrorListPaneViewModel.PaneContentId] = viewModel.ErrorList,
             [TestExplorerPaneViewModel.PaneContentId] = viewModel.TestExplorer,

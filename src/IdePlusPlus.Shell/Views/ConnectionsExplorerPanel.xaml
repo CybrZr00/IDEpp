@@ -1,0 +1,135 @@
+<UserControl x:Class="IdePlusPlus.Shell.Views.ConnectionsExplorerPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:connections="clr-namespace:IdePlusPlus.Connections;assembly=IdePlusPlus.Connections"
+             xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes">
+
+    <UserControl.Resources>
+        <HierarchicalDataTemplate DataType="{x:Type connections:SqlObjectNode}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Name}" FontSize="11" Foreground="{DynamicResource WindowForegroundBrush}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Kind}" Value="Column">
+                                    <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                                    <Setter Property="FontStyle" Value="Italic" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Kind}" Value="Database">
+                                    <Setter Property="FontWeight" Value="Bold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock Text=" loading…"
+                           FontSize="10"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           Visibility="{Binding IsLoading, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+                <TextBlock Text="{Binding LoadError}"
+                           FontSize="10"
+                           Foreground="OrangeRed"
+                           Margin="4,0,0,0"
+                           Visibility="{Binding LoadError, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+            </StackPanel>
+            <HierarchicalDataTemplate.ItemContainerStyle>
+                <Style TargetType="TreeViewItem">
+                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                </Style>
+            </HierarchicalDataTemplate.ItemContainerStyle>
+        </HierarchicalDataTemplate>
+
+        <!-- CanBrowseSchema (not the presence of DatabaseNodes) governs whether an expand arrow
+             appears at all: a non-SQL-Server connection's DatabaseNodes simply never gets populated,
+             which the TreeView already renders as a leaf with no arrow - no extra Visibility logic
+             needed, and none was added, since hiding the row itself would wrongly hide the
+             connection-string entry along with its (non-applicable) schema tree. -->
+        <HierarchicalDataTemplate DataType="{x:Type toolPanes:ConnectionEntryViewModel}" ItemsSource="{Binding DatabaseNodes}">
+            <StackPanel Margin="0,2" MaxWidth="300">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Name}"
+                               FontWeight="Bold"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource WindowForegroundBrush}" />
+                    <Button Grid.Column="1"
+                            Content="⧉"
+                            Command="{Binding CopyConnectionStringCommand}"
+                            Width="18"
+                            Height="18"
+                            Padding="0"
+                            FontSize="10"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            ToolTip="Copy the full (unredacted) connection string" />
+                    <Button Grid.Column="2"
+                            Content="↗"
+                            Command="{Binding OpenSourceFileCommand}"
+                            Width="18"
+                            Height="18"
+                            Padding="0"
+                            FontSize="10"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            Visibility="{Binding SourceFilePath, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}"
+                            ToolTip="Open the file this connection string came from" />
+                </Grid>
+                <TextBlock Text="{Binding RedactedConnectionString}"
+                           FontFamily="Consolas"
+                           FontSize="10"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                <TextBlock FontSize="9" Foreground="{DynamicResource MutedForegroundBrush}">
+                    <Run Text="{Binding ProjectDisplayName, Mode=OneWay}" />
+                    <Run Text=" • " />
+                    <Run Text="{Binding SourceKind, Mode=OneWay}" />
+                </TextBlock>
+                <TextBlock Text="{Binding SchemaStatusMessage}"
+                           FontSize="9"
+                           FontStyle="Italic"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           Visibility="{Binding SchemaStatusMessage, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+            </StackPanel>
+            <HierarchicalDataTemplate.ItemContainerStyle>
+                <Style TargetType="TreeViewItem">
+                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                </Style>
+            </HierarchicalDataTemplate.ItemContainerStyle>
+        </HierarchicalDataTemplate>
+    </UserControl.Resources>
+
+    <Grid Margin="4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="6,0" FontSize="11" />
+            <Button Content="Add Connection..." Command="{Binding AddConnectionCommand}" Margin="4,0,0,0" Padding="6,0" FontSize="11" />
+        </StackPanel>
+
+        <TreeView Grid.Row="1"
+                  ItemsSource="{Binding Connections}"
+                  Background="{DynamicResource PanelBackgroundBrush}"
+                  Foreground="{DynamicResource WindowForegroundBrush}"
+                  BorderThickness="0"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling" />
+
+        <TextBlock Grid.Row="2"
+                   Text="{Binding StatusMessage}"
+                   Foreground="{DynamicResource MutedForegroundBrush}"
+                   FontSize="10"
+                   TextWrapping="Wrap"
+                   Margin="0,4,0,0" />
+    </Grid>
+</UserControl>

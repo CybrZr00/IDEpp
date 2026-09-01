@@ -13,6 +13,7 @@ using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
+using IdePlusPlus.Connections;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
@@ -364,6 +365,8 @@ public partial class App : Application
         services.AddSingleton<TaskExplorerPaneViewModel>();
         services.AddSingleton<RoslynWorkspaceService>();
         services.AddSingleton<RoslynCompletionService>();
+        services.AddSingleton<SqlSchemaService>();
+        services.AddSingleton<ConnectionsExplorerPaneViewModel>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

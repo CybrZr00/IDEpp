@@ -381,6 +381,9 @@
         <DataTemplate DataType="{x:Type toolPanes:NuGetPaneViewModel}">
             <views:NuGetPanel />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:ConnectionsExplorerPaneViewModel}">
+            <views:ConnectionsExplorerPanel />
+        </DataTemplate>
         <DataTemplate DataType="{x:Type local:WelcomeDocumentViewModel}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Image Source="pack://application:,,,/IdePlusPlus.Shell;component/Assets/Logo.png" Width="160" Height="160" Margin="0,0,0,16" />
@@ -632,6 +635,10 @@
                         <avalonDock:LayoutAnchorable x:Name="NuGetAnchorable"
                                                       ContentId="{x:Static toolPanes:NuGetPaneViewModel.PaneContentId}"
                                                       Title="NuGet"
+                                                      CanClose="False" />
+                        <avalonDock:LayoutAnchorable x:Name="ConnectionsExplorerAnchorable"
+                                                      ContentId="{x:Static toolPanes:ConnectionsExplorerPaneViewModel.PaneContentId}"
+                                                      Title="Connections"
                                                       CanClose="False" />
                     </avalonDock:LayoutAnchorablePane>
 

@@ -10,6 +10,7 @@
     <Project Path="src/IdePlusPlus.Copilot.Mcp/IdePlusPlus.Copilot.Mcp.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Memory/IdePlusPlus.Copilot.Memory.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.OpenRouter/IdePlusPlus.Copilot.OpenRouter.csproj" />
+    <Project Path="src/IdePlusPlus.Connections/IdePlusPlus.Connections.csproj" />
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />
     <Project Path="src/IdePlusPlus.Editor/IdePlusPlus.Editor.csproj" />
     <Project Path="src/IdePlusPlus.Infrastructure/IdePlusPlus.Infrastructure.csproj" />
@@ -34,6 +35,7 @@
     <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Connections.Tests/IdePlusPlus.Connections.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Debug.Tests/IdePlusPlus.Debug.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Infrastructure.Tests/IdePlusPlus.Infrastructure.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.NuGet.Tests/IdePlusPlus.NuGet.Tests.csproj" />
