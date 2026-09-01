@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Diff;
@@ -189,6 +190,31 @@ public sealed partial class EditProposalViewModel : ObservableObject
 
     private static int CountLines(string text) =>
         text.Length == 0 ? 0 : text.Replace("\r\n", "\n").Split('\n').Length;
+
+    /// <summary>Plain-text rendering of this proposal for the chat pane's copy-message button - the
+    /// diff itself is otherwise only ever shown as styled, unselectable segments.</summary>
+    public string BuildPlainTextSummary()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(FilePath);
+        if (ChangeSummary.Length > 0)
+        {
+            builder.AppendLine(ChangeSummary);
+        }
+
+        foreach (var line in DiffLines)
+        {
+            var prefix = line.Kind switch
+            {
+                DiffLineKind.Added => "+ ",
+                DiffLineKind.Removed => "- ",
+                _ => "  ",
+            };
+            builder.AppendLine(prefix + line.Text);
+        }
+
+        return builder.ToString();
+    }
 
     private bool CanDecide() => IsComplete && !IsDecided;
 

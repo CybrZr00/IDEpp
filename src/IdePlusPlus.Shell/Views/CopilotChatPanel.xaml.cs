@@ -1,4 +1,6 @@
 using System.Collections.Specialized;
+using System.Linq;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using IdePlusPlus.Shell.ToolPanes;
@@ -43,6 +45,33 @@ public partial class CopilotChatPanel : UserControl
         if (_boundViewModel?.SendCommand.CanExecute(null) == true)
         {
             _boundViewModel.SendCommand.Execute(null);
+        }
+    }
+
+    /// <summary>Copies one chat bubble's content as plain text. Shared across every bubble type
+    /// rather than a RelayCommand per view model, since this is pure presentation - it needs no
+    /// state the view models don't already expose as properties.</summary>
+    private void CopyBubbleText_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: { } boundMessage })
+        {
+            return;
+        }
+
+        var text = boundMessage switch
+        {
+            ChatMessageViewModel message => message.Text,
+            ReviewMessageViewModel review => review.Text,
+            EditProposalViewModel proposal => proposal.BuildPlainTextSummary(),
+            PlanProposalViewModel plan =>
+                plan.Summary + "\n" + string.Join("\n", plan.Steps.Select(step => $"- {step}")),
+            McpToolCallViewModel toolCall => $"{toolCall.ToolName}: {toolCall.Status}\n{toolCall.ResultPreview}",
+            _ => null,
+        };
+
+        if (!string.IsNullOrEmpty(text))
+        {
+            Clipboard.SetText(text);
         }
     }
 }
