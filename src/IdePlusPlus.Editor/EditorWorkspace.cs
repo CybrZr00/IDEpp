@@ -112,6 +112,17 @@ public sealed class EditorWorkspace
             throw new InvalidOperationException($"{nameof(Save)} requires a file path; call {nameof(SaveAs)} for a new document.");
         }
 
+        // The directory may not exist yet - e.g. OpenOrCreate's document for a propose_edit that
+        // creates a file in a new subfolder, or a manual Save As into one. EditApplicationService.
+        // Apply's direct-disk-write branch already creates it for the same reason; this is that
+        // same guard for every other route to a first write, so an unhandled DirectoryNotFoundException
+        // doesn't take the save down.
+        var directory = Path.GetDirectoryName(document.FilePath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
         File.WriteAllText(document.FilePath, document.TextDocument.Text);
         document.IsDirty = false;
         TouchRecentFile(document.FilePath);

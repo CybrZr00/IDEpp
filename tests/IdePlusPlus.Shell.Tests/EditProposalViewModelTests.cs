@@ -198,6 +198,25 @@ public class EditProposalViewModelTests : IDisposable
         File.ReadAllText(path).ShouldBe("hello");
     }
 
+    /// <summary>The subfolder case specifically - a real crash caught by live-testing this feature:
+    /// creating a file inside a subfolder that doesn't exist yet reached EditorWorkspace.Save (via
+    /// SaveDocument) before Save started creating the directory itself, throwing an unhandled
+    /// DirectoryNotFoundException that aborted Accept partway through, leaving IsDecided false.</summary>
+    [Fact]
+    public void Accept_ForANewlyCreatedFileInANewSubfolder_CreatesTheDirectoryAndWritesIt()
+    {
+        var path = Path.Combine(_root, "scratch", "new.md");
+        var proposal = Complete(new EditOperation(path, "whole_file", null, null, "hello"), _root);
+        var document = _workspace.OpenOrCreate(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.IsDecided.ShouldBeTrue();
+        proposal.WasApplied.ShouldBeTrue();
+        File.ReadAllText(path).ShouldBe("hello");
+    }
+
     /// <summary>The tripwire for silent truncation: the model can only notice it deleted most of a
     /// file if the result says how much of it is left.</summary>
     [Fact]

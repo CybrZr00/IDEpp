@@ -126,6 +126,31 @@ public sealed class EditorWorkspaceTests : IDisposable
         document.IsDirty.ShouldBeFalse();
     }
 
+    /// <summary>Regression coverage for a real crash hit via OpenOrCreate + Save: a propose_edit
+    /// that creates a file in a subfolder that doesn't exist yet (e.g. "scratch/new.md") threw an
+    /// unhandled DirectoryNotFoundException here before Save started creating the directory itself.</summary>
+    [Fact]
+    public void Save_ToAPathWhoseDirectoryDoesNotExistYet_CreatesItAndWrites()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var directory = Path.Combine(Path.GetTempPath(), $"ideplusplus-ws-newdir-{Guid.NewGuid()}");
+        var path = Path.Combine(directory, "new.md");
+        var document = workspace.OpenOrCreate(path)!;
+        document.TextDocument.Text = "content";
+
+        try
+        {
+            workspace.Save(document);
+
+            File.ReadAllText(path).ShouldBe("content");
+            document.IsDirty.ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void SaveAs_AttachesToNewPathAndWritesContent()
     {
