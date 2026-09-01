@@ -400,6 +400,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             Messages.Clear();
             foreach (var stored in _chatHistoryStore.Load(directory))
             {
+                // Tool-call/tool-result entries (see BuildChatHistory/PersistChatHistory) are stored
+                // for the model's benefit, not the UI's - there is no proposal card to reconstruct
+                // them into, so showing their raw text as a chat bubble would just be visual noise.
+                // Restoring these into the model's context too, not just plain prose, is tracked as a
+                // deliberately separate follow-up (see BuildChatHistory's doc comment).
+                if (stored.ToolCallId is not null || stored.ToolCalls is not null)
+                {
+                    continue;
+                }
+
                 if (Enum.TryParse<ChatRole>(stored.Role, out var role))
                 {
                     Messages.Add(new ChatMessageViewModel(role) { Text = stored.Text });
@@ -432,13 +442,67 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return;
         }
 
-        var stored = Messages
-            .OfType<ChatMessageViewModel>()
-            .Where(m => !string.IsNullOrWhiteSpace(m.Text))
-            .Select(m => new StoredChatMessage(m.Role.ToString(), m.Text))
+        // ToolCalls/ToolCallId are only ever set on the synthetic entries BuildChatHistory produces
+        // for a decided EditProposalViewModel/McpToolCallViewModel - their Content is deliberately
+        // blank (the call) or always non-blank (the result), so this keeps filtering out only the
+        // empty streaming placeholder the original blank-text check existed for.
+        var stored = BuildChatHistory(Messages)
+            .Where(m => m.ToolCalls is not null || m.ToolCallId is not null || !string.IsNullOrWhiteSpace(m.Content))
+            .Select(m => new StoredChatMessage(
+                m.Role.ToString(),
+                m.Content,
+                m.ToolCallId,
+                m.ToolCalls?.Select(c => new StoredToolCall(c.Id, c.FunctionName, c.ArgumentsJson)).ToList()))
             .ToList();
 
         _chatHistoryStore.Save(_solutionDirectory, stored);
+    }
+
+    /// <summary>
+    /// Rebuilds the ChatMessage/ChatToolCall shape RunAssistantTurnsAsync already produces in-memory
+    /// mid-turn, but from a resting Messages collection instead. Without this, a proposal decided
+    /// after its own turn already stopped - the common manual-mode case, since AssistantTurnPolicy
+    /// stops the turn the moment a proposal needs a human - only ever existed in the UI: SendAsync's
+    /// history rebuild used to walk ChatMessageViewModel entries alone, so the model had no way to
+    /// find out what became of a held-back edit unless the user explained it by hand. Every call site
+    /// that reconstructs history from Messages should go through this one, so a decided outcome is
+    /// visible on the next turn regardless of which flow re-enters the model.
+    ///
+    /// Only decided entries (IsComplete, and for McpToolCallViewModel that means Complete() has run)
+    /// can answer for themselves this way - anything still mid-stream is skipped rather than replayed
+    /// half-formed, the same as it would be if the app were restarted before it were included at all
+    /// (see SetSolutionContext, which does not restore proposal cards from storage).
+    /// </summary>
+    internal static List<ChatMessage> BuildChatHistory(IEnumerable<ObservableObject> messages)
+    {
+        var history = new List<ChatMessage>();
+        foreach (var message in messages)
+        {
+            switch (message)
+            {
+                case ChatMessageViewModel chatMessage:
+                    history.Add(new ChatMessage(chatMessage.Role, chatMessage.Text));
+                    break;
+
+                case EditProposalViewModel { IsComplete: true } proposal:
+                    history.Add(new ChatMessage(
+                        ChatRole.Assistant,
+                        "",
+                        ToolCalls: [new ChatToolCall(proposal.ToolCallId, ProposeEditTool.ToolName, proposal.ArgumentsJson ?? "{}")]));
+                    history.Add(new ChatMessage(ChatRole.Tool, proposal.ToolResultText, ToolCallId: proposal.ToolCallId));
+                    break;
+
+                case McpToolCallViewModel { ResultText: { } resultText } toolCall:
+                    history.Add(new ChatMessage(
+                        ChatRole.Assistant,
+                        "",
+                        ToolCalls: [new ChatToolCall(toolCall.ToolCallId, toolCall.ToolName, toolCall.ArgumentsJson ?? "{}")]));
+                    history.Add(new ChatMessage(ChatRole.Tool, resultText, ToolCallId: toolCall.ToolCallId));
+                    break;
+            }
+        }
+
+        return history;
     }
 
     /// <summary>The solution's test projects, so run_tests can default to all of them. Detected
@@ -475,11 +539,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // the response never arrives.
         PersistChatHistory();
 
-        var history = Messages
-            .OfType<ChatMessageViewModel>()
-            .Where(m => m != userMessage)
-            .Select(m => new ChatMessage(m.Role, m.Text))
-            .ToList();
+        var history = BuildChatHistory(Messages.Where(m => m != userMessage));
 
         await PrependContextAsync(history, userText);
         history.Add(new ChatMessage(ChatRole.User, userText));
@@ -594,7 +654,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                     foreach (var call in turn.Calls)
                     {
-                        var callViewModel = new McpToolCallViewModel(call.Name!);
+                        var callViewModel = new McpToolCallViewModel(call.EffectiveId, call.Name!, call.Arguments.ToString());
                         _dispatcher.Invoke(() =>
                         {
                             CurrentActivity = $"Calling {call.Name}...";
@@ -1676,11 +1736,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             """;
         _lastUserRequestText = instruction;
 
-        var history = Messages
-            .OfType<ChatMessageViewModel>()
-            .Where(m => m != marker)
-            .Select(m => new ChatMessage(m.Role, m.Text))
-            .ToList();
+        var history = BuildChatHistory(Messages.Where(m => m != marker));
         history.Add(new ChatMessage(ChatRole.User, instruction));
 
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);

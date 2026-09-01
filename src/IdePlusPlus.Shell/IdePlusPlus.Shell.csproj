@@ -12,6 +12,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lets the test project exercise CopilotChatPaneViewModel.BuildChatHistory directly - it's a
+         pure static helper with no dependency on the view model's own (large) constructor, so this
+         is cheaper than standing up the whole view model just to reach it via reflection. -->
+    <InternalsVisibleTo Include="IdePlusPlus.Shell.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- MainWindowViewModel now depends (transitively, via IdePlusPlus.Roslyn) on
          Microsoft.CodeAnalysis.Workspaces.MSBuild, which drags in Microsoft.Build.Framework and
          Microsoft.NET.StringTools without the runtime-asset exclusion Microsoft.Build.Locator's own
