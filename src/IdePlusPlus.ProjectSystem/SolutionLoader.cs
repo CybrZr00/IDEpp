@@ -78,6 +78,7 @@ public static class SolutionLoader
                 projectInSolution.ProjectName, projectInSolution.AbsolutePath, projectCollection));
         }
 
+        root.SortChildrenRecursively();
         return root;
     }
 

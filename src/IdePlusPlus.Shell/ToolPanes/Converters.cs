@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.TestRunner;
 
 namespace IdePlusPlus.Shell.ToolPanes;
@@ -117,5 +119,48 @@ public sealed class DiffLinePrefixConverter : IValueConverter
     };
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Per-node icon glyph for Solution Explorer, keyed off SolutionTreeNodeKind and (for a
+/// File node) its extension. Kind and Name are both set once at construction and never change (see
+/// SolutionTreeNode), so a MultiBinding on them needs no live-refresh wiring the way a folder
+/// open/closed variant driven off IsExpanded would. No icon assets exist anywhere in the codebase,
+/// so this is a small glyph lookup - following the same static-Instance shape as
+/// TestOutcomeToGlyphConverter above - rather than an icon font or image set.</summary>
+public sealed class SolutionTreeIconConverter : IMultiValueConverter
+{
+    public static readonly SolutionTreeIconConverter Instance = new();
+
+    public object Convert(object[] values, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (values is not [SolutionTreeNodeKind kind, string name, ..])
+        {
+            return "";
+        }
+
+        return kind switch
+        {
+            SolutionTreeNodeKind.Solution => "🗂",
+            SolutionTreeNodeKind.Project => "📦",
+            SolutionTreeNodeKind.Folder => "📁",
+            SolutionTreeNodeKind.File => IconForExtension(Path.GetExtension(name)),
+            _ => "",
+        };
+    }
+
+    private static string IconForExtension(string extension) => extension.ToLowerInvariant() switch
+    {
+        ".cs" => "🔷",
+        ".xaml" => "🎨",
+        ".csproj" or ".vbproj" or ".fsproj" => "📦",
+        ".sln" or ".slnx" => "🗂",
+        ".json" => "🔧",
+        ".md" => "📝",
+        ".xml" or ".config" or ".resx" => "📃",
+        _ => "📄",
+    };
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }

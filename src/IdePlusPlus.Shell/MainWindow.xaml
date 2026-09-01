@@ -193,26 +193,39 @@
         </Style>
 
         <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
-            <!-- Foreground must be set explicitly here, not just on the TreeView - the default
-                 themed TreeViewItem template hardcodes its own (light-theme) text color via
-                 SystemColors, which otherwise wins over the TreeView's inherited Foreground. -->
-            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource WindowForegroundBrush}">
-                <TextBlock.Style>
-                    <Style TargetType="TextBlock">
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsStartupProject}" Value="True">
-                                <Setter Property="FontWeight" Value="Bold" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </TextBlock.Style>
-            </TextBlock>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Margin="0,0,4,0" VerticalAlignment="Center">
+                    <TextBlock.Text>
+                        <MultiBinding Converter="{x:Static toolPanes:SolutionTreeIconConverter.Instance}">
+                            <Binding Path="Kind" />
+                            <Binding Path="Name" />
+                        </MultiBinding>
+                    </TextBlock.Text>
+                </TextBlock>
+                <!-- Foreground must be set explicitly here, not just on the TreeView - the default
+                     themed TreeViewItem template hardcodes its own (light-theme) text color via
+                     SystemColors, which otherwise wins over the TreeView's inherited Foreground. -->
+                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource WindowForegroundBrush}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsStartupProject}" Value="True">
+                                    <Setter Property="FontWeight" Value="Bold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </StackPanel>
         </HierarchicalDataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
             <TreeView ItemsSource="{Binding RootNodes}"
                       Background="{DynamicResource PanelBackgroundBrush}"
                       Foreground="{DynamicResource WindowForegroundBrush}"
                       BorderThickness="0"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel"
                       MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick"
                       PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown">
                 <!-- Two-way, so the IDE can reveal a node it just created. Expansion is bound too:

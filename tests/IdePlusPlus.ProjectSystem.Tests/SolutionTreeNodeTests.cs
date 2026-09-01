@@ -76,4 +76,30 @@ public class SolutionTreeNodeTests
 
         project.Flatten().Select(n => n.Name).ShouldBe(["Demo", "Api", "V2", "Thing.cs"]);
     }
+
+    [Fact]
+    public void SortChildrenRecursively_OrdersFoldersBeforeFilesThenAlphabetically()
+    {
+        var project = Project();
+        project.Children.Add(new SolutionTreeNode("Zeta.cs", null, SolutionTreeNodeKind.File));
+        project.Children.Add(new SolutionTreeNode("Api", null, SolutionTreeNodeKind.Folder));
+        project.Children.Add(new SolutionTreeNode("Alpha.cs", null, SolutionTreeNodeKind.File));
+
+        project.SortChildrenRecursively();
+
+        project.Children.Select(c => c.Name).ShouldBe(["Api", "Alpha.cs", "Zeta.cs"]);
+    }
+
+    [Fact]
+    public void SortChildrenRecursively_RecursesIntoFolders()
+    {
+        var project = Project();
+        var folder = project.GetOrCreateFolder(["Api"]);
+        folder.Children.Add(new SolutionTreeNode("Zeta.cs", null, SolutionTreeNodeKind.File));
+        folder.Children.Add(new SolutionTreeNode("Alpha.cs", null, SolutionTreeNodeKind.File));
+
+        project.SortChildrenRecursively();
+
+        folder.Children.Select(c => c.Name).ShouldBe(["Alpha.cs", "Zeta.cs"]);
+    }
 }

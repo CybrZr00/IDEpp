@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace IdePlusPlus.ProjectSystem;
@@ -95,6 +96,34 @@ public sealed partial class SolutionTreeNode(string name, string? fullPath, Solu
             {
                 yield return descendant;
             }
+        }
+    }
+
+    /// <summary>Sorts this node's children folders-before-files, then alphabetically, and recurses
+    /// into each - called once after the whole tree is built (see SolutionLoader.LoadCore), since
+    /// Children is otherwise populated in raw MSBuild item/glob declaration order, which reads as
+    /// arbitrary on a large solution. ObservableCollection&lt;T&gt; has no in-place sort, so this
+    /// reorders via Move rather than clear-and-re-add, which would raise a Reset instead of tracked
+    /// per-item moves - order-independent either way for GetOrCreateFolder's name-based lookup.</summary>
+    public void SortChildrenRecursively()
+    {
+        var sorted = Children
+            .OrderBy(c => c.Kind == SolutionTreeNodeKind.File ? 1 : 0)
+            .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            var currentIndex = Children.IndexOf(sorted[i]);
+            if (currentIndex != i)
+            {
+                Children.Move(currentIndex, i);
+            }
+        }
+
+        foreach (var child in Children)
+        {
+            child.SortChildrenRecursively();
         }
     }
 }
