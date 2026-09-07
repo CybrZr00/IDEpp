@@ -59,9 +59,12 @@ public sealed class AccessVbaPluginCompatibilityTests
             host.RegisteredToolWindows.ShouldContain(w => w.Title == "Access VBA");
             host.LoggedMessages.ShouldContain(m => m.Contains("registered the Access VBA tool window"));
 
-            // The factory itself constructs a real WPF UserControl (with an embedded AvalonEdit editor
-            // and an in-process AccessTools instance) - that needs an STA thread, which xunit's own
-            // thread pool doesn't provide.
+            // The factory itself constructs a real WPF UserControl (with an embedded AvalonEdit editor,
+            // syntax highlighting, and an in-process AccessTools instance) - that needs an STA thread,
+            // which xunit's own thread pool doesn't provide. Setting AvalonEdit's SyntaxHighlighting can
+            // queue Dispatcher work (e.g. an async re-highlight pass), so this pumps the thread's own
+            // Dispatcher briefly after construction - a bare STA thread with no message loop at all is
+            // not representative of the real app, which always has one running.
             var (_, factory) = host.RegisteredToolWindows.Single(w => w.Title == "Access VBA");
             Exception? capturedError = null;
             var sta = new Thread(() =>
@@ -69,6 +72,8 @@ public sealed class AccessVbaPluginCompatibilityTests
                 try
                 {
                     factory();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        () => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 }
                 catch (Exception ex)
                 {
@@ -77,7 +82,8 @@ public sealed class AccessVbaPluginCompatibilityTests
             });
             sta.SetApartmentState(ApartmentState.STA);
             sta.Start();
-            sta.Join();
+            var joined = sta.Join(TimeSpan.FromSeconds(30));
+            joined.ShouldBeTrue("the STA thread constructing the tool window did not finish within 30s - looks hung, not crashed.");
 
             capturedError.ShouldBeNull(capturedError?.ToString());
 

@@ -23,4 +23,10 @@
     <PackageReference Include="AvalonEdit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Vba.xshd">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

@@ -1,7 +1,11 @@
 using System.IO;
+using System.Reflection;
 using System.Text.Json;
 using System.Windows.Controls;
+using System.Xml;
 using AccessMCP;
+using ICSharpCode.AvalonEdit.Highlighting;
+using ICSharpCode.AvalonEdit.Highlighting.Xshd;
 using IdePlusPlus.PluginContracts;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -23,8 +27,31 @@ public partial class AccessVbaToolWindow : UserControl
         _tools = new AccessTools(_options, NullLoggerFactory.Instance);
 
         ExportFolderTextBox.Text = DefaultExportFolder(_options);
+        Editor.SyntaxHighlighting = LoadVbaHighlighting();
 
         Loaded += async (_, _) => await RefreshModulesAsync();
+    }
+
+    /// <summary>
+    /// Loads Vba.xshd (shipped alongside the plugin DLL) directly into this window's own AvalonEdit
+    /// instance - not via IPluginHost.RegisterHighlighting, which only applies to file-based
+    /// documents opened in IDE++'s main editor. Falls back to no highlighting (not a crash) if the
+    /// file is missing or malformed, since this is cosmetic, not load-bearing.
+    /// </summary>
+    private IHighlightingDefinition? LoadVbaHighlighting()
+    {
+        try
+        {
+            var pluginDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+            var xshdPath = Path.Combine(pluginDirectory, "Vba.xshd");
+            using var reader = XmlReader.Create(xshdPath);
+            return HighlightingLoader.Load(reader, HighlightingManager.Instance);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"VBA syntax highlighting unavailable: {ex.Message}");
+            return null;
+        }
     }
 
     private static string DefaultExportFolder(AccessMcpOptions options)
