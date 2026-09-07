@@ -6,6 +6,46 @@ this repo and the separate [AccessMCP](https://github.com/) repo
 (`C:\Users\markp\source\repos\AccessMCP`), which already has COM automation
 against Access's VBE object model.
 
+## Progress (updated 2026-09-07)
+
+Phases 0-3 are done and verified live against the real production database
+(`C:\FAM\FAM_form.mdb`, a private working copy, 1116 VBA modules). What
+actually shipped diverged from the original plan in one real way: **the
+plugin references `AccessMCP.Core` in-process rather than going through
+`McpClient`** — `IPluginHost` has no "open a file in the main editor"
+capability, so instead of routing through `EditorWorkspace`, the tool window
+embeds its own AvalonEdit editor directly. This also means Push gets the real
+exception message on failure (including the self-verifying-write/rollback
+outcome below), not the MCP tool surface's generic error wrapper.
+
+- **Phase 0**: done. `AccessMCP.exe` wired into `mcp-servers.json`.
+- **Phase 1**: done, and hardened further than planned. Real live testing
+  found `access_import_module_code` could silently corrupt content or throw
+  partway through a rewrite — a genuine Access COM automation reliability
+  issue, reproduced independent of this codebase via plain PowerShell
+  automation. Fixed with a self-verifying write: every write is read back
+  immediately, and on any failure it attempts to restore the pre-write
+  content and reports plainly whether that rollback verified. The write
+  mechanism itself moved from `AddFromString` to line-by-line `InsertLines`,
+  which held up better in testing, though the self-verifying wrapper is what
+  actually guarantees safety. IDEpp side: `samples/AccessVbaPlugin` (a tool
+  window with a module list, Pull/Push, and an
+  `access_export_all_modules_to_folder` "Export All to Folder" button — the
+  git-version-control deliverable originally slated for Phase 2, built here
+  instead since it fit naturally alongside Pull/Push).
+- **Phase 2**: partially done. VBA syntax highlighting shipped (`Vba.xshd`,
+  loaded directly into the tool window's embedded editor rather than via
+  `RegisterHighlighting`, which only applies to file-based documents).
+  Switching export to real `VBComponent.Export` for `Attribute VB_Name=`
+  header fidelity, and a module↔file↔project manifest, are still open.
+- **Phase 3**: done. A Compile Check button wraps the existing
+  `access_compile_vba` tool. Tested carefully given the real risk of a hidden
+  compile-error dialog hanging automation (`Visible=false`) — completed in
+  ~11s with no hang, and turned out lower-risk than expected: every
+  successful write test had already exercised this same compile+save command
+  as a side effect of `access_import_module_code`'s default `compile=true`.
+- **Phase 4**: not started.
+
 ## Recommendation
 
 Build the phased hybrid: file-based export/import through AccessMCP, edited as
