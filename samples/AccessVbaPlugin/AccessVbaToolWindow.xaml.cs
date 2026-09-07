@@ -10,6 +10,7 @@ namespace AccessVbaPlugin;
 public partial class AccessVbaToolWindow : UserControl
 {
     private readonly IPluginHost _host;
+    private readonly AccessMcpOptions _options;
     private readonly AccessTools _tools;
     private string? _currentModuleName;
     private string? _lastPulledCode;
@@ -18,9 +19,21 @@ public partial class AccessVbaToolWindow : UserControl
     {
         InitializeComponent();
         _host = host;
-        _tools = new AccessTools(LoadOptions(), NullLoggerFactory.Instance);
+        _options = LoadOptions();
+        _tools = new AccessTools(_options, NullLoggerFactory.Instance);
+
+        ExportFolderTextBox.Text = DefaultExportFolder(_options);
 
         Loaded += async (_, _) => await RefreshModulesAsync();
+    }
+
+    private static string DefaultExportFolder(AccessMcpOptions options)
+    {
+        var dbDirectory = options.DefaultDatabasePath is { Length: > 0 }
+            ? Path.GetDirectoryName(options.DefaultDatabasePath)
+            : null;
+
+        return Path.Combine(dbDirectory ?? Environment.CurrentDirectory, "_vba_export");
     }
 
     /// <summary>
@@ -157,11 +170,40 @@ public partial class AccessVbaToolWindow : UserControl
         }
     }
 
+    private async void ExportAll_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        var folderPath = ExportFolderTextBox.Text;
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            SetStatus("Enter a folder to export into.");
+            return;
+        }
+
+        SetBusy(true);
+        SetStatus($"Exporting all modules to '{folderPath}'...");
+        try
+        {
+            var json = await _tools.ExportAllModulesToFolderAsync(folderPath);
+            using var doc = JsonDocument.Parse(json);
+            var count = doc.RootElement.GetProperty("exportedCount").GetInt32();
+            SetStatus($"Exported {count} modules to '{folderPath}'.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Export failed: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
     private void SetBusy(bool busy)
     {
         PullButton.IsEnabled = !busy;
         PushButton.IsEnabled = !busy;
         ModuleComboBox.IsEnabled = !busy;
+        ExportAllButton.IsEnabled = !busy;
     }
 
     private void SetStatus(string message)

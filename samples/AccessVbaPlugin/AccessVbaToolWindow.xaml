@@ -5,6 +5,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -14,11 +15,18 @@
             <ComboBox x:Name="ModuleComboBox" SelectionChanged="ModuleComboBox_SelectionChanged" />
         </DockPanel>
 
-        <avalonEdit:TextEditor x:Name="Editor" Grid.Row="1" Margin="4"
+        <DockPanel Grid.Row="1" Margin="4,0,4,4">
+            <Button DockPanel.Dock="Right" x:Name="ExportAllButton" Content="Export All to Folder"
+                    Click="ExportAll_Click" Margin="4,0,0,0" />
+            <TextBlock Text="Git export folder:" VerticalAlignment="Center" Margin="0,0,4,0" />
+            <TextBox x:Name="ExportFolderTextBox" VerticalAlignment="Center" />
+        </DockPanel>
+
+        <avalonEdit:TextEditor x:Name="Editor" Grid.Row="2" Margin="4"
                                 FontFamily="Consolas" FontSize="13"
                                 ShowLineNumbers="True" WordWrap="False" />
 
-        <DockPanel Grid.Row="2" Margin="4">
+        <DockPanel Grid.Row="3" Margin="4">
             <TextBlock x:Name="StatusText" DockPanel.Dock="Right" VerticalAlignment="Center"
                        TextWrapping="Wrap" MaxWidth="320" Margin="12,0,0,0" />
             <Button x:Name="PullButton" Content="Pull" Click="Pull_Click" Width="80" />
