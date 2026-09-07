@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    An IIdePlugin for editing VBA code that lives inside a Microsoft Access application, built
+    independently of IdePlusPlus.slnx (like SamplePlugin), then its output DLL is copied into
+    %LOCALAPPDATA%\IdePlusPlus\plugins for IDE++ to discover at startup.
+
+    References AccessMCP.Core in-process (no MCP/stdio layer) - that project is built specifically
+    to be referenced this way; see the comment at the top of its own .csproj.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>AnyCPU;x64</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\IdePlusPlus.PluginContracts\IdePlusPlus.PluginContracts.csproj" />
+    <ProjectReference Include="C:\Users\markp\source\repos\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj" />
+    <PackageReference Include="AvalonEdit" />
+  </ItemGroup>
+
+</Project>
