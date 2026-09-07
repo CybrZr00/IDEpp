@@ -225,12 +225,32 @@ public partial class AccessVbaToolWindow : UserControl
         }
     }
 
+    private async void CompileCheck_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        SetBusy(true);
+        SetStatus("Compiling all modules...");
+        try
+        {
+            await _tools.CompileVbaAsync();
+            SetStatus("Compile check passed - all modules compiled and saved.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Compile check FAILED: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
     private void SetBusy(bool busy)
     {
         PullButton.IsEnabled = !busy;
         PushButton.IsEnabled = !busy;
         ModuleComboBox.IsEnabled = !busy;
         ExportAllButton.IsEnabled = !busy;
+        CompileCheckButton.IsEnabled = !busy;
     }
 
     private void SetStatus(string message)
