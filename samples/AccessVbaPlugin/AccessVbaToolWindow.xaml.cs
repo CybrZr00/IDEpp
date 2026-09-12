@@ -207,17 +207,78 @@ public partial class AccessVbaToolWindow : UserControl
         }
 
         SetBusy(true);
-        SetStatus($"Exporting all modules to '{folderPath}'...");
+        SetStatus($"Exporting all modules to '{folderPath}' (this takes a minute or two for a large project)...");
         try
         {
             var json = await _tools.ExportAllModulesToFolderAsync(folderPath);
             using var doc = JsonDocument.Parse(json);
-            var count = doc.RootElement.GetProperty("exportedCount").GetInt32();
-            SetStatus($"Exported {count} modules to '{folderPath}'.");
+            var root = doc.RootElement;
+            var count = root.GetProperty("exportedCount").GetInt32();
+            var preserved = root.GetProperty("preservedLocalChanges").EnumerateArray().Select(e => e.GetString()).ToList();
+            var notSafe = root.GetProperty("notRoundTripSafe").GetArrayLength();
+
+            var status = $"Exported {count} modules to '{folderPath}'.";
+            if (preserved.Count > 0)
+            {
+                status += $" {preserved.Count} file(s) with unpushed local edits were left alone ({string.Join(", ", preserved.Take(5))}{(preserved.Count > 5 ? ", ..." : "")}) - import them first.";
+            }
+            if (notSafe > 0)
+            {
+                status += $" {notSafe} module(s) can't be round-tripped from their files and will be skipped on import.";
+            }
+            SetStatus(status);
         }
         catch (Exception ex)
         {
             SetStatus($"Export failed: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void ImportChanged_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        var folderPath = ExportFolderTextBox.Text;
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            SetStatus("Enter the folder to import from.");
+            return;
+        }
+
+        SetBusy(true);
+        SetStatus($"Importing changed modules from '{folderPath}'...");
+        try
+        {
+            var json = await _tools.ImportChangedModulesFromFolderAsync(folderPath, compile: CompileCheckBox.IsChecked == true);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var updated = root.GetProperty("updated").EnumerateArray().Select(u => u.GetProperty("module").GetString()).ToList();
+            var stale = root.GetProperty("stale").EnumerateArray().Select(s => s.GetString()).ToList();
+            var failed = root.GetProperty("failed").EnumerateArray()
+                .Select(f => $"{f.GetProperty("module").GetString()}: {f.GetProperty("error").GetString()}").ToList();
+            var unchanged = root.GetProperty("unchangedCount").GetInt32();
+
+            var status = $"Imported {updated.Count} changed module(s), {unchanged} unchanged.";
+            if (stale.Count > 0)
+            {
+                status += $" REFUSED as changed in Access since export: {string.Join(", ", stale)} - re-export and merge by hand.";
+            }
+            if (failed.Count > 0)
+            {
+                status += $" FAILED: {string.Join(" | ", failed)}";
+            }
+            SetStatus(status);
+
+            if (_currentModuleName is not null && updated.Contains(_currentModuleName))
+            {
+                await PullModuleAsync(_currentModuleName);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Import failed: {ex.Message}");
         }
         finally
         {
@@ -250,6 +311,7 @@ public partial class AccessVbaToolWindow : UserControl
         PushButton.IsEnabled = !busy;
         ModuleComboBox.IsEnabled = !busy;
         ExportAllButton.IsEnabled = !busy;
+        ImportChangedButton.IsEnabled = !busy;
         CompileCheckButton.IsEnabled = !busy;
     }
 

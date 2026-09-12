@@ -79,6 +79,13 @@ public sealed class AccessVbaPluginCompatibilityTests
                 {
                     capturedError = ex;
                 }
+                finally
+                {
+                    // Shut the thread's Dispatcher down properly so WPF/AvalonEdit release their
+                    // timers and hooks in an orderly way, rather than leaving them for finalizers
+                    // to trip over after the thread is gone.
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+                }
             });
             sta.SetApartmentState(ApartmentState.STA);
             sta.Start();
@@ -87,9 +94,12 @@ public sealed class AccessVbaPluginCompatibilityTests
 
             capturedError.ShouldBeNull(capturedError?.ToString());
 
-            loader.TryUnload(loader.LoadedPlugins[0], out _);
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
+            // Deliberately NOT unloading the plugin's collectible load context here, unlike
+            // SamplePluginCompatibilityTests: this plugin created real WPF controls, and forcing an
+            // unload plus finalization with those around crashed the test host intermittently (an
+            // exception in a finalizer takes the whole process down). Unload correctness is covered by
+            // the sample plugin's test; this one is about loading and constructing. The load context
+            // keeps its DLLs open, so the temp directory cleanup below is best-effort, as it is there.
         }
         finally
         {

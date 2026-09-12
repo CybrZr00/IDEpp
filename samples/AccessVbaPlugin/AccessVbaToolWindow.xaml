@@ -16,6 +16,8 @@
         </DockPanel>
 
         <DockPanel Grid.Row="1" Margin="4,0,4,4">
+            <Button DockPanel.Dock="Right" x:Name="ImportChangedButton" Content="Import Changed from Folder"
+                    Click="ImportChanged_Click" Margin="4,0,0,0" />
             <Button DockPanel.Dock="Right" x:Name="ExportAllButton" Content="Export All to Folder"
                     Click="ExportAll_Click" Margin="4,0,0,0" />
             <TextBlock Text="Git export folder:" VerticalAlignment="Center" Margin="0,0,4,0" />
