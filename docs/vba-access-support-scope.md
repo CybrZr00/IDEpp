@@ -33,11 +33,31 @@ outcome below), not the MCP tool surface's generic error wrapper.
   `access_export_all_modules_to_folder` "Export All to Folder" button — the
   git-version-control deliverable originally slated for Phase 2, built here
   instead since it fit naturally alongside Pull/Push).
-- **Phase 2**: partially done. VBA syntax highlighting shipped (`Vba.xshd`,
+- **Phase 2**: done (2026-09-13). VBA syntax highlighting shipped (`Vba.xshd`,
   loaded directly into the tool window's embedded editor rather than via
-  `RegisterHighlighting`, which only applies to file-based documents).
-  Switching export to real `VBComponent.Export` for `Attribute VB_Name=`
-  header fidelity, and a module↔file↔project manifest, are still open.
+  `RegisterHighlighting`, which only applies to file-based documents). Export
+  now uses `VBComponent.Export` (hidden `Attribute VB_Name=`/class-header
+  lines preserved, files re-saved as UTF-8) and writes a manifest of each
+  module's code-body hash; every module is individually verified to be
+  round-trippable (stripping the headers reproduces `CodeModule.Lines`
+  exactly — all 1116 modules in the real database verified). A new
+  `access_import_changed_modules_from_folder` tool, with an "Import Changed
+  from Folder" button, pushes back only files whose body changed since the
+  export, refuses modules that changed inside Access meanwhile (stale), and
+  reuses the backed-up/self-verifying write per module in one Access session.
+  Re-export preserves files with unpushed local edits unless told otherwise.
+  This makes the export folder a genuine two-way, git-backed workflow —
+  the file-based round trip the original plan called for, on top of the
+  live Pull/Push.
+  Along the way the write itself was fixed for real: the earlier
+  "content did not verify" failures were traced to Access leaving one phantom
+  empty trailing line when a module is emptied and re-inserted line by line.
+  The write is now a minimal line-level edit (`ReplaceLine` where lines
+  differ, insert/delete only at the tail, trailing-blank fixup) and never
+  empties the module. The earlier garbage-bytes corruption traced back to
+  `AddFromString`, which is no longer used anywhere. Note that a full export
+  takes ~1.5-2 minutes for this project (`VBComponent.Export` is much slower
+  than reading `Lines()`); import of a handful of changed modules is seconds.
 - **Phase 3**: done. A Compile Check button wraps the existing
   `access_compile_vba` tool. Tested carefully given the real risk of a hidden
   compile-error dialog hanging automation (`Visible=false`) — completed in
