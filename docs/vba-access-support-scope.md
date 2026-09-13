@@ -79,7 +79,32 @@ outcome below), not the MCP tool surface's generic error wrapper.
   database end to end, including the full conflict path through to importing
   the merged result. A check or pull takes ~10s (it reads every module's code
   but only re-exports what changed).
-- **Phase 4**: not started.
+- **Phase 4**: done, first cut (2026-09-13). Completion and hover in the tool
+  window's own editor — auto on `.` or Ctrl+Space, tooltips on identifiers —
+  so no core IDEpp change was needed after all (`IMemberCompletionProvider`
+  only serves the main editor). Symbols come from a purpose-built,
+  declaration-level VBA parser over the export folder (`Symbols/`): every
+  module's procedures with parameters and locals, fields, constants,
+  Declares, Events, Enums and Types. Member completion resolves locals,
+  parameters and fields typed as class modules, enums or user types,
+  standard modules, `Me` in form/report code-behind, `With` receivers, and a
+  curated table of Access/DAO objects (`DoCmd`, `Recordset`, `Form`,
+  `Control`, ...) whose members live in COM type libraries the plugin never
+  reads. Global completion is prefix-filtered and ordered locals > module >
+  project > language, with the language vocabulary read from `Vba.xshd`.
+  **Decision:** this was chosen over embedding Rubberduck's full ANTLR
+  grammar for the first cut — much smaller integration surface, verifiable
+  now, and the parser sits behind an interface a real grammar could replace
+  later for precision (e.g. expression typing beyond declared types). Tested
+  by a new `samples/AccessVbaPlugin.Tests` project (parser, index, engine,
+  and the real 1116-module corpus when present). Not exercised by hand in
+  the running IDE yet — the popup and tooltip mechanics are AvalonEdit's
+  standard `CompletionWindow`/`ToolTip`, but worth a real try.
+  Also learned: the "intermittent crash" of `AccessVbaPluginCompatibilityTests`
+  was almost certainly the external `timeout` wrapper I was running it under
+  killing a slow from-scratch Release build inside the test (vstest reports a
+  killed host as "crashed"); no crash was ever recorded in the event log, and
+  it has never failed unwrapped. Don't run that test under a tight timeout.
 
 ## Recommendation
 
