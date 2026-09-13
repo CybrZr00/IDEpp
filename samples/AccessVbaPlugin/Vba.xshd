@@ -30,10 +30,16 @@
   <RuleSet ignoreCase="true">
     <Span color="Comment" begin="'" />
 
+    <!--
+      AvalonEdit compiles these with RegexOptions.IgnorePatternWhitespace, where an unescaped "#"
+      starts a comment to the end of the pattern - so every "#" outside a character class below MUST
+      be written "\#", or the rule silently becomes an empty regex and the highlighter throws
+      "A highlighting rule matched 0 characters" the first time it renders any text.
+    -->
     <Rule color="String">&quot;([^&quot;]|&quot;&quot;)*&quot;</Rule>
-    <Rule color="DateLiteral">#[^#\r\n]*#</Rule>
+    <Rule color="DateLiteral">\#[^\#\r\n]*\#</Rule>
 
-    <Rule color="Preprocessor">#\s*(If|ElseIf|Else|End\s*If|Const)\b</Rule>
+    <Rule color="Preprocessor">\#\s*(If|ElseIf|Else|End\s*If|Const)\b</Rule>
 
     <Rule color="Attribute">^Attribute\s+VB_\w+</Rule>
 
@@ -216,7 +222,8 @@
       <Word>Null</Word>
       <Word>Empty</Word>
     </Keywords>
-    <Rule color="Constant">\bvb[A-Z]\w*\b</Rule>
+    <!-- (?-i:) keeps the third character case-sensitive despite the rule set's ignoreCase, so "vba" isn't colored as a constant. -->
+    <Rule color="Constant">\bvb(?-i:[A-Z])\w*\b</Rule>
 
     <Keywords color="DataType">
       <Word>Boolean</Word>
