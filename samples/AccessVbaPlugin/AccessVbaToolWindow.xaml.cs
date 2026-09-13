@@ -148,7 +148,16 @@ public partial class AccessVbaToolWindow : UserControl
             _currentModuleName = moduleName;
             _lastPulledCode = code;
             Editor.Text = code;
-            SetStatus($"Pulled '{moduleName}' ({code.Length} chars).");
+
+            var status = $"Pulled '{moduleName}' ({code.Length} chars).";
+            var baseHash = TryGetExportBaseHash(ExportFolderTextBox.Text, moduleName);
+            if (baseHash is not null)
+            {
+                status += string.Equals(baseHash, Sha256Hex(code), StringComparison.OrdinalIgnoreCase)
+                    ? " Matches the export folder's copy."
+                    : " NOTE: changed in Access since the export folder was written - that copy is stale.";
+            }
+            SetStatus(status);
         }
         catch (Exception ex)
         {
@@ -286,6 +295,151 @@ public partial class AccessVbaToolWindow : UserControl
         }
     }
 
+    private async void CheckDrift_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        var folderPath = ExportFolderTextBox.Text;
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            SetStatus("Enter the export folder to check against.");
+            return;
+        }
+
+        SetBusy(true);
+        SetStatus("Checking for drift between Access and the export folder...");
+        try
+        {
+            var json = await _tools.CheckExportDriftAsync(folderPath);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            static string Names(JsonElement root, string property)
+            {
+                var names = root.GetProperty(property).EnumerateArray().Select(e => e.GetString()).ToList();
+                return names.Count == 0 ? "" : $" [{string.Join(", ", names.Take(8))}{(names.Count > 8 ? ", ..." : "")}]";
+            }
+
+            var drifted = root.GetProperty("driftedInAccess").GetArrayLength();
+            var edited = root.GetProperty("editedLocally").GetArrayLength();
+            var conflicts = root.GetProperty("conflicts").GetArrayLength();
+            var matches = root.GetProperty("localMatchesLive").GetArrayLength();
+            var added = root.GetProperty("newInAccess").GetArrayLength();
+            var removed = root.GetProperty("removedFromAccess").GetArrayLength();
+            var unchanged = root.GetProperty("unchangedCount").GetInt32();
+
+            var status = drifted + conflicts + added + removed == 0 && edited == 0 && matches == 0
+                ? $"No drift: all {unchanged} modules match the export folder."
+                : $"{drifted} changed in Access since export{Names(root, "driftedInAccess")}; " +
+                  $"{edited} edited locally{Names(root, "editedLocally")}; " +
+                  $"{conflicts} CONFLICT (both){Names(root, "conflicts")}; " +
+                  $"{matches} local already matches Access{Names(root, "localMatchesLive")}; " +
+                  $"{added} new in Access{Names(root, "newInAccess")}; {removed} removed from Access{Names(root, "removedFromAccess")}; {unchanged} unchanged.";
+            SetStatus(status);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Drift check failed: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void PullDrifted_Click(object sender, System.Windows.RoutedEventArgs e) => await PullDriftedAsync(markResolved: null);
+
+    private async void MarkResolved_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (ModuleComboBox.SelectedItem is not string name)
+        {
+            SetStatus("Select the module you've merged by hand first.");
+            return;
+        }
+
+        await PullDriftedAsync(markResolved: [name]);
+    }
+
+    private async Task PullDriftedAsync(string[]? markResolved)
+    {
+        var folderPath = ExportFolderTextBox.Text;
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            SetStatus("Enter the export folder to pull into.");
+            return;
+        }
+
+        SetBusy(true);
+        SetStatus(markResolved is null
+            ? "Pulling modules that changed in Access into the export folder..."
+            : $"Marking '{markResolved[0]}' as merged (adopting the Access version as its base)...");
+        try
+        {
+            var json = await _tools.PullDriftedModulesAsync(folderPath, markResolved);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            static List<string?> Names(JsonElement root, string property)
+                => root.GetProperty(property).EnumerateArray().Select(e => e.GetString()).ToList();
+
+            var updated = Names(root, "updated");
+            var added = Names(root, "newExported");
+            var resolved = Names(root, "resolvedAutomatically").Concat(Names(root, "markedResolved")).ToList();
+            var edited = Names(root, "editedLocally");
+            var removed = Names(root, "removedFromAccess");
+            var conflicts = root.GetProperty("conflicts").EnumerateArray().Select(c => c.GetProperty("module").GetString()).ToList();
+
+            var parts = new List<string>();
+            if (updated.Count > 0) parts.Add($"updated {updated.Count} from Access [{string.Join(", ", updated.Take(8))}]");
+            if (added.Count > 0) parts.Add($"{added.Count} new module(s) exported");
+            if (resolved.Count > 0) parts.Add($"{resolved.Count} resolved [{string.Join(", ", resolved)}]");
+            if (conflicts.Count > 0) parts.Add($"{conflicts.Count} CONFLICT(S) - live version written as <file>.live for merging, then Mark Selected Resolved [{string.Join(", ", conflicts)}]");
+            if (edited.Count > 0) parts.Add($"{edited.Count} with local edits left alone");
+            if (removed.Count > 0) parts.Add($"{removed.Count} no longer in Access (dropped from manifest, files kept)");
+            SetStatus(parts.Count == 0 ? "Nothing to pull - export folder already matches Access." : "Pull: " + string.Join("; ", parts) + ".");
+
+            if (_currentModuleName is not null && updated.Contains(_currentModuleName))
+            {
+                await PullModuleAsync(_currentModuleName);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Pull failed: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private static string? TryGetExportBaseHash(string folderPath, string moduleName)
+    {
+        try
+        {
+            var manifestPath = Path.Combine(folderPath, "_accessmcp_manifest.json");
+            if (!File.Exists(manifestPath))
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            foreach (var module in doc.RootElement.GetProperty("modules").EnumerateArray())
+            {
+                if (string.Equals(module.GetProperty("name").GetString(), moduleName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return module.GetProperty("bodySha256").GetString();
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or KeyNotFoundException)
+        {
+        }
+
+        return null;
+    }
+
+    private static string Sha256Hex(string text)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
+
     private async void CompileCheck_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         SetBusy(true);
@@ -312,6 +466,9 @@ public partial class AccessVbaToolWindow : UserControl
         ModuleComboBox.IsEnabled = !busy;
         ExportAllButton.IsEnabled = !busy;
         ImportChangedButton.IsEnabled = !busy;
+        CheckDriftButton.IsEnabled = !busy;
+        PullDriftedButton.IsEnabled = !busy;
+        MarkResolvedButton.IsEnabled = !busy;
         CompileCheckButton.IsEnabled = !busy;
     }
 
