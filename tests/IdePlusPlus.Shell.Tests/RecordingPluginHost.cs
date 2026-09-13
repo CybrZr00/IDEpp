@@ -57,6 +57,14 @@ internal sealed class RecordingPluginHost : IPluginHost
     public void RegisterToolWindow(string title, Func<UserControl> factory) =>
         RegisteredToolWindows.Add((title, factory));
 
+    public List<(string Prefix, string Suffix)> InlineCompletionRequests { get; } = [];
+
+    public Task<string?> GetInlineCompletionAsync(string prefix, string suffix, CancellationToken cancellationToken)
+    {
+        InlineCompletionRequests.Add((prefix, suffix));
+        return Task.FromResult<string?>(null);
+    }
+
     public void RegisterHoverProvider(string fileExtension, IPluginHoverProvider provider) =>
         RegisteredHoverProviders.Add((fileExtension, provider));
 

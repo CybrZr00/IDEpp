@@ -100,6 +100,17 @@ outcome below), not the MCP tool surface's generic error wrapper.
   and the real 1116-module corpus when present). Not exercised by hand in
   the running IDE yet — the popup and tooltip mechanics are AvalonEdit's
   standard `CompletionWindow`/`ToolTip`, but worth a real try.
+  **Follow-up (2026-09-13):** inline FIM ghost text (DeepSeek, when configured)
+  in the tool window's editor too — via the first and only core IDEpp change
+  of the whole effort, an *additive* `IPluginHost.GetInlineCompletionAsync`
+  that forwards to `EditorServices.CompletionProvider` (null when no model is
+  configured). The plugin mirrors `TextEditorHost`'s driver: 350ms debounce,
+  4000/1000-char prefix/suffix, stale-result guards, Tab accepts, Esc or a
+  caret move clears, and it's suppressed while the completion popup is open
+  or a module is being loaded. Ghost text is rendered by a plugin-local copy
+  of `GhostTextGenerator` (IdePlusPlus.Editor isn't reachable from a plugin;
+  AvalonEdit is). Existing plugin binaries are unaffected — plugins consume
+  the interface, only the host implements it.
   Also learned: the "intermittent crash" of `AccessVbaPluginCompatibilityTests`
   was almost certainly the external `timeout` wrapper I was running it under
   killing a slow from-scratch Release build inside the test (vstest reports a

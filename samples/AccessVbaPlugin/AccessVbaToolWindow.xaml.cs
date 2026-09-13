@@ -28,9 +28,16 @@ public partial class AccessVbaToolWindow : UserControl
     private readonly AccessTools _tools;
     private readonly VbaLanguage _language;
     private readonly Dictionary<string, VbaModuleKind> _moduleKinds = new(StringComparer.OrdinalIgnoreCase);
+    private const int FimMaxPrefixChars = 4000;
+    private const int FimMaxSuffixChars = 1000;
+
     private VbaSymbolIndex _index = new();
     private CompletionWindow? _completionWindow;
     private ToolTip? _hoverToolTip;
+    private readonly VbaGhostTextGenerator _ghostText = new();
+    private readonly System.Windows.Threading.DispatcherTimer _fimDebounce = new() { Interval = TimeSpan.FromMilliseconds(350) };
+    private CancellationTokenSource? _fimCancellation;
+    private bool _loadingModuleText;
     private string? _currentModuleName;
     private string? _lastPulledCode;
 
@@ -53,6 +60,17 @@ public partial class AccessVbaToolWindow : UserControl
         Editor.TextArea.TextView.MouseHover += Editor_MouseHover;
         Editor.TextArea.TextView.MouseHoverStopped += (_, _) => CloseHoverToolTip();
         ExportFolderTextBox.LostFocus += async (_, _) => await RebuildIndexAsync();
+
+        // Inline (FIM) ghost text, via the IDE's configured model through IPluginHost - same
+        // debounce and staleness rules as IDE++'s own editor, rendered by our own generator.
+        Editor.TextArea.TextView.ElementGenerators.Add(_ghostText);
+        Editor.TextChanged += Editor_TextChanged;
+        Editor.TextArea.Caret.PositionChanged += Caret_PositionChanged;
+        _fimDebounce.Tick += async (_, _) =>
+        {
+            _fimDebounce.Stop();
+            await RequestInlineCompletionAsync();
+        };
 
         Loaded += async (_, _) =>
         {
@@ -101,6 +119,11 @@ public partial class AccessVbaToolWindow : UserControl
             return;
         }
 
+        // The popup and ghost text shouldn't compete for the same Tab/Esc.
+        _fimDebounce.Stop();
+        _fimCancellation?.Cancel();
+        ClearGhostText();
+
         _completionWindow?.Close();
         _completionWindow = new CompletionWindow(Editor.TextArea)
         {
@@ -114,6 +137,107 @@ public partial class AccessVbaToolWindow : UserControl
 
         _completionWindow.Closed += (_, _) => _completionWindow = null;
         _completionWindow.Show();
+    }
+
+    private void Editor_TextChanged(object? sender, EventArgs e)
+    {
+        ClearGhostText();
+        if (_loadingModuleText || _currentModuleName is null)
+        {
+            return;
+        }
+
+        _fimDebounce.Stop();
+        _fimDebounce.Start();
+    }
+
+    private void Caret_PositionChanged(object? sender, EventArgs e)
+    {
+        // The caret can leave a pending suggestion without any text changing (arrow keys, a click);
+        // the generator only ever renders at SuggestionOffset, so a stale one would be inserted at
+        // the wrong place by Tab.
+        if (_ghostText.HasSuggestion && Editor.CaretOffset != _ghostText.SuggestionOffset)
+        {
+            ClearGhostText();
+        }
+    }
+
+    private async Task RequestInlineCompletionAsync()
+    {
+        if (_completionWindow is not null || _currentModuleName is null)
+        {
+            return;
+        }
+
+        _fimCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _fimCancellation = cancellation;
+
+        var moduleName = _currentModuleName;
+        var caretOffset = Editor.CaretOffset;
+        var text = Editor.Text;
+        var prefix = text[..caretOffset];
+        var suffix = text[caretOffset..];
+        if (prefix.Length > FimMaxPrefixChars)
+        {
+            prefix = prefix[^FimMaxPrefixChars..];
+        }
+
+        if (suffix.Length > FimMaxSuffixChars)
+        {
+            suffix = suffix[..FimMaxSuffixChars];
+        }
+
+        string? completion;
+        try
+        {
+            completion = await _host.GetInlineCompletionAsync(prefix, suffix, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _host.LogInfo($"[Access VBA] Inline completion failed: {ex.Message}");
+            return;
+        }
+
+        // Superseded by a newer keystroke, the caret moved, the popup opened, or a different module
+        // was pulled while this was in flight - stale, discard.
+        if (cancellation.IsCancellationRequested
+            || string.IsNullOrEmpty(completion)
+            || _completionWindow is not null
+            || Editor.CaretOffset != caretOffset
+            || !string.Equals(_currentModuleName, moduleName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _ghostText.SuggestionText = completion;
+        _ghostText.SuggestionOffset = caretOffset;
+        Editor.TextArea.TextView.Redraw();
+    }
+
+    private void AcceptGhostText()
+    {
+        var text = _ghostText.SuggestionText!;
+        var offset = _ghostText.SuggestionOffset;
+        _ghostText.Clear();
+
+        Editor.Document.Insert(offset, text);
+        Editor.CaretOffset = offset + text.Length;
+    }
+
+    private void ClearGhostText()
+    {
+        if (!_ghostText.HasSuggestion)
+        {
+            return;
+        }
+
+        _ghostText.Clear();
+        Editor.TextArea.TextView.Redraw();
     }
 
     private void Editor_TextEntered(object sender, TextCompositionEventArgs e)
@@ -140,6 +264,23 @@ public partial class AccessVbaToolWindow : UserControl
         {
             e.Handled = true;
             ShowCompletion();
+            return;
+        }
+
+        if (!_ghostText.HasSuggestion)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Tab)
+        {
+            AcceptGhostText();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            ClearGhostText();
+            e.Handled = true;
         }
     }
 
@@ -311,7 +452,15 @@ public partial class AccessVbaToolWindow : UserControl
 
             _currentModuleName = moduleName;
             _lastPulledCode = code;
-            Editor.Text = code;
+            _loadingModuleText = true;
+            try
+            {
+                Editor.Text = code;
+            }
+            finally
+            {
+                _loadingModuleText = false;
+            }
 
             var status = $"Pulled '{moduleName}' ({code.Length} chars).";
             var baseHash = TryGetExportBaseHash(ExportFolderTextBox.Text, moduleName);

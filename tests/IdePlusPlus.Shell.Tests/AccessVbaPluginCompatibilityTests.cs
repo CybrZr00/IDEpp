@@ -88,6 +88,9 @@ public sealed class AccessVbaPluginCompatibilityTests
                 }
             });
             sta.SetApartmentState(ApartmentState.STA);
+            // Background, so a thread that gets stuck constructing the window fails this test via the
+            // bounded Join below instead of keeping the test host alive forever after the run.
+            sta.IsBackground = true;
             sta.Start();
             var joined = sta.Join(TimeSpan.FromSeconds(30));
             joined.ShouldBeTrue("the STA thread constructing the tool window did not finish within 30s - looks hung, not crashed.");
@@ -147,11 +150,27 @@ public sealed class AccessVbaPluginCompatibilityTests
         startInfo.ArgumentList.Add(csprojPath);
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add("Release");
+        // No reusable worker nodes and no shared compiler server: those are child processes that
+        // inherit this build's redirected stdout/stderr handles and then idle for ~15 minutes after
+        // the build has finished, so the streams never reach EOF and the read below blocks until
+        // they exit. That was the "15-minute run" and, under an external timeout, the "test host
+        // crashed" - and it only bites when no node from a previous build happens to be alive.
+        startInfo.ArgumentList.Add("-nodeReuse:false");
+        startInfo.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = Process.Start(startInfo)!;
-        var stdOut = process.StandardOutput.ReadToEnd();
-        var stdErr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        // Read both streams concurrently: reading stdout to the end before touching stderr deadlocks
+        // the moment the child fills the stderr pipe buffer - and this build's output is large.
+        var stdOutTask = process.StandardOutput.ReadToEndAsync();
+        var stdErrTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(10)))
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            throw new TimeoutException("'dotnet build' on AccessVbaPlugin did not finish within 10 minutes.");
+        }
+
+        var stdOut = stdOutTask.GetAwaiter().GetResult();
+        var stdErr = stdErrTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"'dotnet build' on AccessVbaPlugin failed with exit code {process.ExitCode}.\n{stdOut}\n{stdErr}");

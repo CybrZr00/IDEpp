@@ -95,4 +95,14 @@ public interface IPluginHost
     /// well-behaved handler should honour it.
     /// </summary>
     void RegisterBuildEventHandler(BuildEventKind kind, Func<BuildEventContext, CancellationToken, Task> handler);
+
+    /// <summary>
+    /// Asks the IDE's configured inline (fill-in-the-middle) completion model - the same one that
+    /// produces ghost-text suggestions in IDE++'s own editor - for what should come next between
+    /// <paramref name="prefix"/> and <paramref name="suffix"/>. Returns null when no such model is
+    /// configured, or it has nothing to suggest. Rendering the suggestion is the plugin's own job:
+    /// this exists so a plugin that hosts its own editor (a tool window with an embedded AvalonEdit,
+    /// say) can offer the same completions without reaching into IDE++'s editor internals.
+    /// </summary>
+    Task<string?> GetInlineCompletionAsync(string prefix, string suffix, CancellationToken cancellationToken);
 }

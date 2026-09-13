@@ -72,6 +72,10 @@ public sealed class PluginHost : IPluginHost
 
     public void LogInfo(string message) => _output.AppendLine($"[Plugin] {message}");
 
+    public Task<string?> GetInlineCompletionAsync(string prefix, string suffix, CancellationToken cancellationToken)
+        => EditorServices.CompletionProvider?.GetCompletionAsync(prefix, suffix, cancellationToken)
+           ?? Task.FromResult<string?>(null);
+
     public void RegisterEditorContextMenuCommand(string header, Func<EditorContextMenuContext, bool> canExecute, Action<EditorContextMenuContext> execute)
     {
         var pluginName = _currentPluginName;
