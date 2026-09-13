@@ -64,6 +64,21 @@ outcome below), not the MCP tool surface's generic error wrapper.
   ~11s with no hang, and turned out lower-risk than expected: every
   successful write test had already exercised this same compile+save command
   as a side effect of `access_import_module_code`'s default `compile=true`.
+- **Phase 3+**: done (2026-09-13). Proactive drift detection for the export
+  folder: `access_check_export_drift` (read-only) classifies every module as
+  unchanged / drifted in Access / edited locally / conflict (both) / local
+  already matches Access / new in Access / removed from Access / file
+  missing. `access_pull_drifted_modules` re-exports clean drifts (and new
+  modules) and updates their manifest base; for conflicts it writes the live
+  version alongside as `<file>.live` and leaves the local file *and* its base
+  untouched, so import keeps refusing until the module is passed in
+  `markResolved` after merging by hand — which adopts the live version as the
+  base without touching the file. Tool-window buttons: Check Drift, Pull
+  Drifted, Mark Selected Resolved; and a single-module Pull now notes whether
+  the module differs from the export folder's copy. Verified against the real
+  database end to end, including the full conflict path through to importing
+  the merged result. A check or pull takes ~10s (it reads every module's code
+  but only re-exports what changed).
 - **Phase 4**: not started.
 
 ## Recommendation
