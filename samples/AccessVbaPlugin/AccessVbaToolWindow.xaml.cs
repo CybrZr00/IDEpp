@@ -2,8 +2,15 @@ using System.IO;
 using System.Reflection;
 using System.Text.Json;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Xml;
 using AccessMCP;
+using AccessVbaPlugin.Symbols;
+using ICSharpCode.AvalonEdit.CodeCompletion;
+using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Highlighting.Xshd;
 using IdePlusPlus.PluginContracts;
@@ -13,9 +20,17 @@ namespace AccessVbaPlugin;
 
 public partial class AccessVbaToolWindow : UserControl
 {
+    private static readonly string XshdPath = Path.Combine(
+        Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "Vba.xshd");
+
     private readonly IPluginHost _host;
     private readonly AccessMcpOptions _options;
     private readonly AccessTools _tools;
+    private readonly VbaLanguage _language;
+    private readonly Dictionary<string, VbaModuleKind> _moduleKinds = new(StringComparer.OrdinalIgnoreCase);
+    private VbaSymbolIndex _index = new();
+    private CompletionWindow? _completionWindow;
+    private ToolTip? _hoverToolTip;
     private string? _currentModuleName;
     private string? _lastPulledCode;
 
@@ -25,11 +40,154 @@ public partial class AccessVbaToolWindow : UserControl
         _host = host;
         _options = LoadOptions();
         _tools = new AccessTools(_options, NullLoggerFactory.Instance);
+        _language = VbaLanguage.FromXshd(XshdPath);
 
         ExportFolderTextBox.Text = DefaultExportFolder(_options);
         Editor.SyntaxHighlighting = LoadVbaHighlighting();
 
-        Loaded += async (_, _) => await RefreshModulesAsync();
+        // Completion and hover are the plugin's own, on its own editor - IDE++'s completion pipeline
+        // (IMemberCompletionProvider) only serves the main editor, so no core change is needed.
+        Editor.TextArea.TextEntered += Editor_TextEntered;
+        Editor.TextArea.TextEntering += Editor_TextEntering;
+        Editor.TextArea.PreviewKeyDown += Editor_PreviewKeyDown;
+        Editor.TextArea.TextView.MouseHover += Editor_MouseHover;
+        Editor.TextArea.TextView.MouseHoverStopped += (_, _) => CloseHoverToolTip();
+        ExportFolderTextBox.LostFocus += async (_, _) => await RebuildIndexAsync();
+
+        Loaded += async (_, _) =>
+        {
+            await RebuildIndexAsync();
+            await RefreshModulesAsync();
+        };
+    }
+
+    /// <summary>
+    /// Project-wide symbols come from the export folder's files - every module as text, no COM -
+    /// so completion knows about all 1100+ modules, not just the one in the editor.
+    /// </summary>
+    private async Task RebuildIndexAsync()
+    {
+        var folder = ExportFolderTextBox.Text;
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+        {
+            _index = new VbaSymbolIndex();
+            return;
+        }
+
+        try
+        {
+            _index = await Task.Run(() => VbaSymbolIndex.FromExportFolder(folder));
+            _host.LogInfo($"[Access VBA] Indexed {_index.Modules.Count} modules from '{folder}' for completion and hover.");
+        }
+        catch (Exception ex)
+        {
+            _host.LogInfo($"[Access VBA] Symbol index failed: {ex.Message}");
+        }
+    }
+
+    private VbaModule CurrentModuleSymbols()
+    {
+        var name = _currentModuleName ?? "(none)";
+        var kind = _moduleKinds.TryGetValue(name, out var known) ? known : _index.KindOf(name);
+        return VbaModuleParser.Parse(name, kind, Editor.Text);
+    }
+
+    private void ShowCompletion()
+    {
+        var engine = new VbaCompletionEngine(_index, _language);
+        var items = engine.GetCompletions(CurrentModuleSymbols(), Editor.Text, Editor.CaretOffset, out var replaceStart);
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        _completionWindow?.Close();
+        _completionWindow = new CompletionWindow(Editor.TextArea)
+        {
+            StartOffset = replaceStart,
+            CloseWhenCaretAtBeginning = true,
+        };
+        foreach (var item in items)
+        {
+            _completionWindow.CompletionList.CompletionData.Add(new VbaCompletionData(item));
+        }
+
+        _completionWindow.Closed += (_, _) => _completionWindow = null;
+        _completionWindow.Show();
+    }
+
+    private void Editor_TextEntered(object sender, TextCompositionEventArgs e)
+    {
+        if (e.Text == ".")
+        {
+            ShowCompletion();
+        }
+    }
+
+    private void Editor_TextEntering(object sender, TextCompositionEventArgs e)
+    {
+        // Standard AvalonEdit pattern: a non-identifier character typed while the list is open
+        // commits the selected item first, then goes into the document.
+        if (e.Text.Length > 0 && _completionWindow is not null && !char.IsLetterOrDigit(e.Text[0]) && e.Text[0] != '_')
+        {
+            _completionWindow.CompletionList.RequestInsertion(e);
+        }
+    }
+
+    private void Editor_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            e.Handled = true;
+            ShowCompletion();
+        }
+    }
+
+    private void Editor_MouseHover(object sender, MouseEventArgs e)
+    {
+        var position = Editor.GetPositionFromPoint(e.GetPosition(Editor));
+        if (position is null)
+        {
+            CloseHoverToolTip();
+            return;
+        }
+
+        var offset = Editor.Document.GetOffset(position.Value.Location);
+        var hover = new VbaCompletionEngine(_index, _language).GetHover(CurrentModuleSymbols(), Editor.Text, offset);
+        if (hover is null)
+        {
+            CloseHoverToolTip();
+            return;
+        }
+
+        _hoverToolTip ??= new ToolTip { PlacementTarget = Editor, Placement = PlacementMode.Mouse };
+        _hoverToolTip.Content = new TextBlock { Text = hover.Text, FontFamily = new FontFamily("Consolas") };
+        _hoverToolTip.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void CloseHoverToolTip()
+    {
+        if (_hoverToolTip is not null)
+        {
+            _hoverToolTip.IsOpen = false;
+        }
+    }
+
+    private sealed class VbaCompletionData(VbaCompletionItem item) : ICompletionData
+    {
+        public ImageSource Image => null!;
+
+        public string Text => item.Text;
+
+        public object Content => item.Text;
+
+        public object Description => item.Description;
+
+        public double Priority => item.Priority;
+
+        public void Complete(TextArea textArea, ISegment completionSegment, EventArgs insertionRequestEventArgs)
+            => textArea.Document.Replace(completionSegment, item.Text);
     }
 
     /// <summary>
@@ -42,9 +200,7 @@ public partial class AccessVbaToolWindow : UserControl
     {
         try
         {
-            var pluginDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
-            var xshdPath = Path.Combine(pluginDirectory, "Vba.xshd");
-            using var reader = XmlReader.Create(xshdPath);
+            using var reader = XmlReader.Create(XshdPath);
             return HighlightingLoader.Load(reader, HighlightingManager.Instance);
         }
         catch (Exception ex)
@@ -106,6 +262,14 @@ public partial class AccessVbaToolWindow : UserControl
                 if (name is not null)
                 {
                     names.Add(name);
+                    _moduleKinds[name] = module.GetProperty("type").GetInt32() switch
+                    {
+                        1 => VbaModuleKind.Standard,
+                        2 => VbaModuleKind.Class,
+                        3 => VbaModuleKind.Form,
+                        100 => VbaModuleKind.Document,
+                        _ => VbaModuleKind.Standard,
+                    };
                 }
             }
             names.Sort(StringComparer.OrdinalIgnoreCase);
@@ -236,6 +400,7 @@ public partial class AccessVbaToolWindow : UserControl
                 status += $" {notSafe} module(s) can't be round-tripped from their files and will be skipped on import.";
             }
             SetStatus(status);
+            await RebuildIndexAsync();
         }
         catch (Exception ex)
         {
@@ -279,6 +444,7 @@ public partial class AccessVbaToolWindow : UserControl
                 status += $" FAILED: {string.Join(" | ", failed)}";
             }
             SetStatus(status);
+            await RebuildIndexAsync();
 
             if (_currentModuleName is not null && updated.Contains(_currentModuleName))
             {
@@ -395,6 +561,7 @@ public partial class AccessVbaToolWindow : UserControl
             if (edited.Count > 0) parts.Add($"{edited.Count} with local edits left alone");
             if (removed.Count > 0) parts.Add($"{removed.Count} no longer in Access (dropped from manifest, files kept)");
             SetStatus(parts.Count == 0 ? "Nothing to pull - export folder already matches Access." : "Pull: " + string.Join("; ", parts) + ".");
+            await RebuildIndexAsync();
 
             if (_currentModuleName is not null && updated.Contains(_currentModuleName))
             {

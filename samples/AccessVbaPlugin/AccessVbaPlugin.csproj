@@ -29,4 +29,8 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="AccessVbaPlugin.Tests" />
+  </ItemGroup>
+
 </Project>
