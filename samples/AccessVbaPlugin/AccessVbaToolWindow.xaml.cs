@@ -13,6 +13,7 @@ using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Highlighting.Xshd;
+using ICSharpCode.AvalonEdit.Rendering;
 using IdePlusPlus.PluginContracts;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -34,6 +35,7 @@ public partial class AccessVbaToolWindow : UserControl
     private VbaSymbolIndex _index = new();
     private CompletionWindow? _completionWindow;
     private ToolTip? _hoverToolTip;
+    private readonly CtrlHoverUnderlineColorizer _ctrlHoverColorizer = new();
     private readonly VbaGhostTextGenerator _ghostText = new();
     private readonly System.Windows.Threading.DispatcherTimer _fimDebounce = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private CancellationTokenSource? _fimCancellation;
@@ -59,8 +61,14 @@ public partial class AccessVbaToolWindow : UserControl
         Editor.TextArea.TextEntered += Editor_TextEntered;
         Editor.TextArea.TextEntering += Editor_TextEntering;
         Editor.TextArea.PreviewKeyDown += Editor_PreviewKeyDown;
+        Editor.TextArea.PreviewKeyUp += Editor_PreviewKeyUp;
         Editor.TextArea.TextView.MouseHover += Editor_MouseHover;
-        Editor.TextArea.TextView.MouseHoverStopped += (_, _) => CloseHoverToolTip();
+        Editor.TextArea.TextView.MouseHoverStopped += (_, _) =>
+        {
+            CloseHoverToolTip();
+            ClearCtrlHoverAffordance();
+        };
+        Editor.TextArea.TextView.LineTransformers.Add(_ctrlHoverColorizer);
         Editor.TextArea.PreviewMouseLeftButtonDown += Editor_PreviewMouseLeftButtonDown;
         ExportFolderTextBox.LostFocus += async (_, _) => await RebuildIndexAsync();
 
@@ -270,6 +278,18 @@ public partial class AccessVbaToolWindow : UserControl
             return;
         }
 
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            // The mouse can already be sitting still over something when Ctrl goes down -
+            // MouseHover only re-fires on movement, so re-evaluate at the current position too.
+            if (Editor.GetPositionFromPoint(Mouse.GetPosition(Editor)) is { } position)
+            {
+                ShowCtrlHoverAffordance(Editor.Document.GetOffset(position.Location));
+            }
+
+            return;
+        }
+
         if (!_ghostText.HasSuggestion)
         {
             return;
@@ -287,16 +307,36 @@ public partial class AccessVbaToolWindow : UserControl
         }
     }
 
+    private void Editor_PreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            ClearCtrlHoverAffordance();
+        }
+    }
+
     private void Editor_MouseHover(object sender, MouseEventArgs e)
     {
         var position = Editor.GetPositionFromPoint(e.GetPosition(Editor));
         if (position is null)
         {
             CloseHoverToolTip();
+            ClearCtrlHoverAffordance();
             return;
         }
 
         var offset = Editor.Document.GetOffset(position.Value.Location);
+
+        if (Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            // Ctrl-held hover is go-to-definition's affordance, not the plain tooltip - the two
+            // shouldn't compete for the same screen space.
+            ShowCtrlHoverAffordance(offset);
+            e.Handled = true;
+            return;
+        }
+
+        ClearCtrlHoverAffordance();
         var hover = new VbaCompletionEngine(_index, _language).GetHover(CurrentModuleSymbols(), Editor.Text, offset);
         if (hover is null)
         {
@@ -308,6 +348,61 @@ public partial class AccessVbaToolWindow : UserControl
         _hoverToolTip.Content = new TextBlock { Text = hover.Text, FontFamily = new FontFamily("Consolas") };
         _hoverToolTip.IsOpen = true;
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// Underlines the identifier at <paramref name="offset"/> and switches to a hand cursor, but
+    /// only when Ctrl+Click there would actually jump somewhere (<see cref="VbaDefinitionOutcome.Found"/>)
+    /// - reusing the exact resolver the click itself uses, so the affordance can never promise a
+    /// jump the click can't deliver (a well-known COM member or an unresolved word gets no underline).
+    /// </summary>
+    private void ShowCtrlHoverAffordance(int offset)
+    {
+        CloseHoverToolTip();
+
+        if (_currentModuleName is not null
+            && VbaCompletionEngine.IdentifierSpanAt(Editor.Text, offset) is { } span
+            && new VbaCompletionEngine(_index, _language).GetDefinition(CurrentModuleSymbols(), Editor.Text, offset) is VbaDefinitionOutcome.Found)
+        {
+            _ctrlHoverColorizer.Span = span;
+            Editor.TextArea.Cursor = Cursors.Hand;
+            Editor.TextArea.TextView.Redraw();
+            return;
+        }
+
+        ClearCtrlHoverAffordance();
+    }
+
+    private void ClearCtrlHoverAffordance()
+    {
+        if (_ctrlHoverColorizer.Span is null && Editor.TextArea.Cursor is null)
+        {
+            return;
+        }
+
+        _ctrlHoverColorizer.Span = null;
+        Editor.TextArea.Cursor = null;
+        Editor.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>Restyles the span Ctrl-hover currently points at - a <see cref="DocumentColorizingTransformer"/>
+    /// is AvalonEdit's mechanism for restyling existing text, distinct from <see cref="VbaGhostTextGenerator"/>'s
+    /// <see cref="ICSharpCode.AvalonEdit.Rendering.VisualLineElementGenerator"/>, which only inserts new text.</summary>
+    private sealed class CtrlHoverUnderlineColorizer : DocumentColorizingTransformer
+    {
+        public (int Start, int End)? Span { get; set; }
+
+        protected override void ColorizeLine(DocumentLine line)
+        {
+            if (Span is not { } span || span.End <= line.Offset || span.Start >= line.EndOffset)
+            {
+                return;
+            }
+
+            var start = Math.Max(span.Start, line.Offset);
+            var end = Math.Min(span.End, line.EndOffset);
+            ChangeLinePart(start, end, element => element.TextRunProperties.SetTextDecorations(System.Windows.TextDecorations.Underline));
+        }
     }
 
     private void CloseHoverToolTip()
@@ -634,6 +729,9 @@ public partial class AccessVbaToolWindow : UserControl
             _loadingModuleText = true;
             try
             {
+                // A stale Ctrl-hover span from the module being left could otherwise land on the
+                // wrong substring of the new text until the next hover event corrects it.
+                ClearCtrlHoverAffordance();
                 Editor.Text = code;
             }
             finally
