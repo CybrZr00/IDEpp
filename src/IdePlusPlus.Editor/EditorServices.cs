@@ -46,4 +46,25 @@ public static class EditorServices
     /// reasoning as <see cref="EditorContextMenuCommands"/>.
     /// </summary>
     public static Func<string, Func<EditorHoverRequest, CancellationToken, Task<string?>>?>? HoverProviderLookup { get; set; }
+
+    /// <summary>Null under the same conditions as <see cref="DiagnosticsProvider"/>. Backs Ctrl+Click
+    /// go-to-definition in the main editor.</summary>
+    public static IDefinitionProvider? DefinitionProvider { get; set; }
+
+    /// <summary>
+    /// Opens (or activates, if already open) the file at the given path, then requests a caret jump
+    /// to line/column in it via <see cref="GoToLine"/> - the delegate equivalent of
+    /// MainWindowViewModel.OpenPath composed with GoToLine.Request, for the same "Editor can't
+    /// reference Shell" reason as <see cref="EditorContextMenuCommands"/>. Null until App.xaml.cs
+    /// wires it after building the service provider; a definition resolved before then is simply
+    /// not actionable, the same as every other EditorServices delegate this early.
+    /// </summary>
+    public static Action<string, int, int>? OpenAndGoTo { get; set; }
+
+    /// <summary>
+    /// A free-text status sink (App.xaml.cs wires this to the Output pane) for go-to-definition
+    /// outcomes that aren't a caret jump - "no definition found", "defined outside the solution".
+    /// Not a tooltip/dialog: OpenPath already uses the Output pane for this same kind of message.
+    /// </summary>
+    public static Action<string>? StatusLog { get; set; }
 }

@@ -31,6 +31,7 @@ public partial class TextEditorHost : UserControl
     private CancellationTokenSource? _completionCancellation;
     private CancellationTokenSource? _memberCompletionCancellation;
     private CancellationTokenSource? _hoverCancellation;
+    private CancellationTokenSource? _definitionCancellation;
     private ToolTip? _hoverToolTip;
     private CompletionWindow? _activeCompletionWindow;
 
@@ -203,6 +204,10 @@ public partial class TextEditorHost : UserControl
         _hoverCancellation?.Cancel();
         CloseHoverToolTip();
 
+        // Same reasoning as _hoverCancellation just above - a go-to-definition lookup in flight
+        // belongs to whatever document was focused when Ctrl+Click fired.
+        _definitionCancellation?.Cancel();
+
         // The squiggle renderer is shared by every document this editor ever binds to - clear
         // whatever the previous document's diagnostics were so they don't briefly show over the
         // newly-bound document until its own (possibly empty) diagnostics arrive.
@@ -231,6 +236,13 @@ public partial class TextEditorHost : UserControl
         if (EditorServices.DiffPreview.CurrentFor(_boundDocument) is { } pendingPreview)
         {
             ShowDiffPreview(pendingPreview);
+        }
+
+        // Covers a jump requested (e.g. by Ctrl+Click go-to-definition in another file) before this
+        // host existed to hear the live event - see GoToLineRequest's remarks for why.
+        if (EditorServices.GoToLine.Consume(_boundDocument) is { } pendingGoTo)
+        {
+            ApplyGoTo(pendingGoTo.Line, pendingGoTo.Column);
         }
 
         if (_boundDocument.SyntaxHighlighting is not null)
@@ -310,16 +322,33 @@ public partial class TextEditorHost : UserControl
 
     private void OnDebugLocationChanged() => UpdateCurrentLineHighlight();
 
-    private void OnGoToLineRequested(DocumentViewModel document, int line)
+    private void OnGoToLineRequested(DocumentViewModel document, int line, int? column)
     {
-        if (!ReferenceEquals(_boundDocument, document) || Editor.Document is null)
+        if (!ReferenceEquals(_boundDocument, document))
+        {
+            return;
+        }
+
+        // Consume before acting: an already-bound document takes this path (not Rebind's catch-up
+        // pull above), so the pending entry GoToLineRequest kept for it must still be cleared.
+        EditorServices.GoToLine.Consume(document);
+        ApplyGoTo(line, column);
+    }
+
+    /// <summary>Moves the caret to line/column (1-based, matching AvalonEdit's own TextEditor.Line/
+    /// Column) and scrolls it into view. Shared by the live GoToLineRequested event and Rebind's
+    /// catch-up consumption of a jump requested before this host existed.</summary>
+    private void ApplyGoTo(int line, int? column)
+    {
+        if (Editor.Document is null)
         {
             return;
         }
 
         var clampedLine = Math.Clamp(line, 1, Editor.Document.LineCount);
         var documentLine = Editor.Document.GetLineByNumber(clampedLine);
-        Editor.CaretOffset = documentLine.Offset;
+        var columnOffset = column is { } col ? Math.Clamp(col - 1, 0, documentLine.Length) : 0;
+        Editor.CaretOffset = documentLine.Offset + columnOffset;
         Editor.ScrollToLine(clampedLine);
         Editor.Focus();
     }
