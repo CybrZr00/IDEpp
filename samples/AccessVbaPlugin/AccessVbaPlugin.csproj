@@ -2,11 +2,16 @@
 
   <!--
     An IIdePlugin for editing VBA code that lives inside a Microsoft Access application, built
-    independently of IdePlusPlus.slnx (like SamplePlugin), then its output DLL is copied into
-    %LOCALAPPDATA%\IdePlusPlus\plugins for IDE++ to discover at startup.
+    independently of IdePlusPlus.slnx (like SamplePlugin). To install it, publish it
+    (dotnet publish -p:PublishProfile=FolderProfile) and copy the publish folder's contents - the
+    DLL, its .deps.json, Vba.xshd, the dependency DLLs and the runtimes\ subfolder - into
+    %LOCALAPPDATA%\IdePlusPlus\plugins (top level, not a subfolder) for IDE++ to discover at startup.
 
     References AccessMCP.Core in-process (no MCP/stdio layer) - that project is built specifically
-    to be referenced this way; see the comment at the top of its own .csproj.
+    to be referenced this way; see the comment at the top of its own .csproj. The AccessMCP repo is
+    checked out at a different path on each machine, so the reference goes through
+    AccessMcpCoreProject below: the first candidate that exists wins, and
+    -p:AccessMcpCoreProject=<path> overrides both.
   -->
 
   <PropertyGroup>
@@ -17,9 +22,14 @@
     <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <AccessMcpCoreProject Condition="'$(AccessMcpCoreProject)' == '' and Exists('A:\AndroidStudioProjects\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj')">A:\AndroidStudioProjects\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj</AccessMcpCoreProject>
+    <AccessMcpCoreProject Condition="'$(AccessMcpCoreProject)' == ''">C:\Users\markp\source\repos\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj</AccessMcpCoreProject>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\IdePlusPlus.PluginContracts\IdePlusPlus.PluginContracts.csproj" />
-    <ProjectReference Include="C:\Users\markp\source\repos\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj" />
+    <ProjectReference Include="$(AccessMcpCoreProject)" />
     <PackageReference Include="AvalonEdit" />
   </ItemGroup>
 

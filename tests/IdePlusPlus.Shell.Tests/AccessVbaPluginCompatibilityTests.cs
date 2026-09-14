@@ -15,18 +15,23 @@ namespace IdePlusPlus.Shell.Tests;
 /// PluginLoadContext-based loader, with its dependencies (AccessMCP.Core, its own package references,
 /// and AvalonEdit falling through to the host's copy) resolving correctly.
 ///
-/// Skipped outright if the AccessMCP repo isn't present at its expected machine-local path - this test
-/// is inherently tied to this developer's machine layout, the same way the plugin project's
-/// ProjectReference to AccessMCP.Core is.
+/// Skipped outright if the AccessMCP repo isn't present at any of its expected machine-local paths -
+/// this test is inherently tied to this developer's machine layouts, the same way the plugin
+/// project's ProjectReference to AccessMCP.Core is.
 /// </summary>
 public sealed class AccessVbaPluginCompatibilityTests
 {
-    private const string AccessMcpCoreProjectPath = @"C:\Users\markp\source\repos\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj";
+    // Mirrors the AccessMcpCoreProject candidates in samples/AccessVbaPlugin/AccessVbaPlugin.csproj.
+    private static readonly string[] AccessMcpCoreProjectCandidates =
+    [
+        @"C:\Users\markp\source\repos\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj",
+        @"A:\AndroidStudioProjects\AccessMCP\AccessMCP.Core\AccessMCP.Core.csproj",
+    ];
 
     [Fact]
     public void AccessVbaPlugin_LoadsAndInitializes_ThroughPluginLoadContext()
     {
-        if (!File.Exists(AccessMcpCoreProjectPath))
+        if (!AccessMcpCoreProjectCandidates.Any(File.Exists))
         {
             return; // AccessMCP repo not present on this machine - nothing to verify here.
         }
@@ -177,8 +182,12 @@ public sealed class AccessVbaPluginCompatibilityTests
         }
 
         var projectDirectory = Path.GetDirectoryName(csprojPath)!;
+        // Exactly one candidate is expected: bin\Release\<tfm>\AccessVbaPlugin.dll. The ref\ subfolder
+        // holds the reference assembly, and publish\ (the FolderProfile's PublishDir) a second full copy.
         var dllPath = Directory.GetFiles(projectDirectory, "AccessVbaPlugin.dll", SearchOption.AllDirectories)
-            .Single(p => p.Contains(Path.Combine("bin", "Release")) && !p.Contains($"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}"));
+            .Single(p => p.Contains(Path.Combine("bin", "Release"))
+                && !p.Contains($"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}")
+                && !p.Contains($"{Path.DirectorySeparatorChar}publish{Path.DirectorySeparatorChar}"));
         return Path.GetDirectoryName(dllPath)!;
     }
 }
