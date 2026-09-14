@@ -151,4 +151,97 @@ public sealed class VbaCompletionEngineTests
         items.ShouldContain("Form_Load");
         items.ShouldContain("Requery");
     }
+
+    [Fact]
+    public void DefinitionOnASameModuleCallResolvesToItsOwnLine()
+    {
+        const string text = "Public Sub Caller()\r\n    Callee\r\nEnd Sub\r\nPublic Sub Callee()\r\nEnd Sub";
+        var module = VbaModuleParser.Parse("Utils", VbaModuleKind.Standard, text);
+        var offset = text.IndexOf("    Callee", StringComparison.Ordinal) + 4;
+
+        var outcome = Engine().GetDefinition(module, text, offset);
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.Found("Utils", module.Procedures.Single(p => p.Name == "Callee").StartLine));
+    }
+
+    [Fact]
+    public void DefinitionOnACrossModuleCallResolvesToTheOwningModuleAndLine()
+    {
+        const string text = "Public Sub Go()\r\n    Helpers.GetDb\r\nEnd Sub";
+        var module = VbaModuleParser.Parse("Caller", VbaModuleKind.Standard, text);
+        var offset = text.IndexOf("GetDb", StringComparison.Ordinal);
+
+        var outcome = Engine().GetDefinition(module, text, offset);
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.Found("Helpers", Helpers.Procedures.Single(p => p.Name == "GetDb").StartLine));
+    }
+
+    [Fact]
+    public void DefinitionOnABareModuleNameReferenceResolvesToLineOne()
+    {
+        var outcome = Engine().GetDefinition(Current, CurrentText, CurrentText.IndexOf("Helpers.", StringComparison.Ordinal));
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.Found("Helpers", 1));
+    }
+
+    [Fact]
+    public void DefinitionOnMeResolvesToLineOneOfTheCurrentModule()
+    {
+        const string text = "Private mX As Long\r\nPrivate Sub Form_Load()\r\n    Me.mX = 1\r\nEnd Sub";
+        var module = VbaModuleParser.Parse("Form_Orders", VbaModuleKind.Document, text);
+        var offset = text.IndexOf("Me.", StringComparison.Ordinal);
+
+        var outcome = Engine().GetDefinition(module, text, offset);
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.Found("Form_Orders", 1));
+    }
+
+    // Known v1 limitation: no per-parameter line exists in the parsed model, so a parameter's
+    // "definition" is the line its owning procedure starts on. Pinned here so a future regression
+    // (landing somewhere else entirely) doesn't slip in unnoticed.
+    [Fact]
+    public void DefinitionOnAParameterFallsBackToTheProceduresLine()
+    {
+        const string text = "Public Sub Greet(ByVal personName As String)\r\n    Debug.Print personName\r\nEnd Sub";
+        var module = VbaModuleParser.Parse("Utils", VbaModuleKind.Standard, text);
+        var offset = text.IndexOf("Print personName", StringComparison.Ordinal) + "Print ".Length;
+
+        var outcome = Engine().GetDefinition(module, text, offset);
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.Found("Utils", module.Procedures.Single(p => p.Name == "Greet").StartLine));
+    }
+
+    // Same known limitation as the parameter case above, for enum members - falls back to the
+    // enclosing Enum statement's own line.
+    [Fact]
+    public void DefinitionOnAnEnumMemberFallsBackToTheEnumsLine()
+    {
+        const string text = "Public Sub UseColour()\r\n    Dim c As Long\r\n    c = Colour.clRed\r\nEnd Sub";
+        var module = VbaModuleParser.Parse("Caller", VbaModuleKind.Standard, text);
+        var offset = text.IndexOf("clRed", StringComparison.Ordinal);
+
+        var outcome = Engine().GetDefinition(module, text, offset);
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.Found("Helpers", Helpers.Enums.Single(e => e.Name == "Colour").Line));
+    }
+
+    [Fact]
+    public void DefinitionOnAWellKnownComMemberHasNoSourceAvailable()
+    {
+        var outcome = Engine().GetDefinition(Current, CurrentText, CurrentText.IndexOf("MoveFirst", StringComparison.Ordinal));
+
+        outcome.ShouldBe(new VbaDefinitionOutcome.NoSourceAvailable("MoveFirst"));
+    }
+
+    [Fact]
+    public void DefinitionIsNullForKeywordsBuiltinsAndWhitespace()
+    {
+        const string text = "Sub S()\r\n    MsgBox 42\r\nEnd Sub";
+        var module = VbaModuleParser.Parse("M", VbaModuleKind.Standard, text);
+        var engine = Engine();
+
+        engine.GetDefinition(module, text, text.IndexOf("Sub", StringComparison.Ordinal)).ShouldBeNull();
+        engine.GetDefinition(module, text, text.IndexOf("MsgBox", StringComparison.Ordinal)).ShouldBeNull();
+        engine.GetDefinition(module, text, text.IndexOf("    MsgBox", StringComparison.Ordinal)).ShouldBeNull();
+    }
 }

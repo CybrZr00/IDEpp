@@ -23,7 +23,16 @@ public enum VbaCompletionKind
     Event,
 }
 
-public sealed record VbaCompletionItem(string Text, VbaCompletionKind Kind, string Description, int Priority);
+/// <summary>
+/// <paramref name="Module"/>/<paramref name="Line"/> are the item's declaration site - the owning
+/// module's name and the line its declaration starts on - populated wherever the candidate is real
+/// VBA source (a procedure, field, enum, type, local, parameter, or a bare module-name reference).
+/// Null for anything with no VBA source to jump to: keywords, builtins, data types, "Me", and the
+/// curated <see cref="VbaWellKnown"/> COM members. <see cref="VbaCompletionEngine.GetDefinition"/>
+/// is the only reader of these two fields; every other consumer (completion, hover) ignores them.
+/// </summary>
+public sealed record VbaCompletionItem(string Text, VbaCompletionKind Kind, string Description, int Priority,
+    string? Module = null, int? Line = null);
 
 /// <summary>The language's own vocabulary, read from the same Vba.xshd the editor highlights with so the two never drift apart.</summary>
 public sealed record VbaLanguage(IReadOnlyList<string> Keywords, IReadOnlyList<string> Builtins, IReadOnlyList<string> Constants, IReadOnlyList<string> DataTypes)
@@ -157,6 +166,24 @@ public static class VbaWellKnown
 
 public sealed record VbaHoverInfo(string Text);
 
+/// <summary>Result of <see cref="VbaCompletionEngine.GetDefinition"/> - closed to just these two
+/// cases via the private constructor, the same "sealed hierarchy" shape as a real Roslyn-style
+/// discriminated union.</summary>
+public abstract record VbaDefinitionOutcome
+{
+    /// <summary>A real declaration site: jump the caret to <paramref name="Line"/> in
+    /// <paramref name="ModuleName"/> (which may be the module already open).</summary>
+    public sealed record Found(string ModuleName, int Line) : VbaDefinitionOutcome;
+
+    /// <summary>Resolved to something real (a curated COM member, a keyword, "Me") but with no VBA
+    /// source anywhere to jump to.</summary>
+    public sealed record NoSourceAvailable(string Name) : VbaDefinitionOutcome;
+
+    private VbaDefinitionOutcome()
+    {
+    }
+}
+
 /// <summary>
 /// Turns the caret's context - the identifier being typed, what it's a member of, the enclosing
 /// procedure, any With block - plus the symbol index into completion candidates or hover text.
@@ -212,20 +239,42 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
 
     public VbaHoverInfo? GetHover(VbaModule current, string text, int offset)
     {
-        if (offset < 0 || offset > text.Length)
+        var item = ResolveAt(current, text, offset);
+        return item is null ? null : new VbaHoverInfo(item.Description);
+    }
+
+    /// <summary>
+    /// Same resolution <see cref="GetHover"/> uses, but returning the candidate's declaration site
+    /// (module + line) instead of its formatted description - so hover and go-to-definition can
+    /// never disagree about what an identifier refers to. <see cref="VbaDefinitionOutcome.Found"/>
+    /// when the resolved candidate carries real VBA source; <see cref="VbaDefinitionOutcome.NoSourceAvailable"/>
+    /// when it resolved to something real but sourceless (a keyword, "Me", a curated COM member);
+    /// null when nothing resolved at all (whitespace, an unknown identifier, inside a string/comment).
+    /// </summary>
+    public VbaDefinitionOutcome? GetDefinition(VbaModule current, string text, int offset)
+    {
+        var item = ResolveAt(current, text, offset);
+        return item switch
+        {
+            null => null,
+            { Module: { } module, Line: { } line } => new VbaDefinitionOutcome.Found(module, line),
+            _ => new VbaDefinitionOutcome.NoSourceAvailable(item.Text),
+        };
+    }
+
+    /// <summary>
+    /// The word/chain/candidate resolution <see cref="GetHover"/> and <see cref="GetDefinition"/>
+    /// both need - extracted so they can never diverge. Returns the single best-matching candidate
+    /// for the identifier at <paramref name="offset"/>, or null if nothing resolves there at all.
+    /// </summary>
+    private VbaCompletionItem? ResolveAt(VbaModule current, string text, int offset)
+    {
+        if (IdentifierSpanAt(text, offset) is not { } span)
         {
             return null;
         }
 
-        var start = offset;
-        while (start > 0 && IsIdentifierChar(text[start - 1])) start--;
-        var end = offset;
-        while (end < text.Length && IsIdentifierChar(text[end])) end++;
-        if (start == end)
-        {
-            return null;
-        }
-
+        var (start, end) = span;
         var word = text[start..end];
         var lineStart = text.LastIndexOf('\n', Math.Max(0, start - 1)) + 1;
         if (IsInStringOrComment(text[lineStart..start]))
@@ -241,13 +290,35 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
             IEnumerable<string>? chain = chainMatch.Success ? chainMatch.Groups["chain"].Value.Split('.') : FindWithExpression(text, lineStart)?.Split('.');
             if (chain is not null)
             {
-                var item = MembersOfChain(chain, current, procedure).FirstOrDefault(i => i.Text.Equals(word, StringComparison.OrdinalIgnoreCase));
-                return item is null ? null : new VbaHoverInfo(item.Description);
+                // Matches GetHover's original control flow exactly: once a dot-qualified chain
+                // resolves at all (even to "no such member"), that's the answer - never fall
+                // through to GlobalCandidates below.
+                return MembersOfChain(chain, current, procedure).FirstOrDefault(i => i.Text.Equals(word, StringComparison.OrdinalIgnoreCase));
             }
         }
 
-        var candidate = GlobalCandidates(current, procedure).FirstOrDefault(i => i.Text.Equals(word, StringComparison.OrdinalIgnoreCase) && i.Kind is not (VbaCompletionKind.Keyword or VbaCompletionKind.Builtin or VbaCompletionKind.DataType));
-        return candidate is null ? null : new VbaHoverInfo(candidate.Description);
+        return GlobalCandidates(current, procedure)
+            .FirstOrDefault(i => i.Text.Equals(word, StringComparison.OrdinalIgnoreCase) && i.Kind is not (VbaCompletionKind.Keyword or VbaCompletionKind.Builtin or VbaCompletionKind.DataType));
+    }
+
+    /// <summary>
+    /// Scans outward from <paramref name="offset"/> for identifier characters, returning the span of
+    /// the identifier it falls inside (or touches at its end), or null if there isn't one. Shared by
+    /// <see cref="ResolveAt"/> and the tool window's own pre-click check, so "is there anything here
+    /// worth resolving" is answered identically everywhere.
+    /// </summary>
+    internal static (int Start, int End)? IdentifierSpanAt(string text, int offset)
+    {
+        if (offset < 0 || offset > text.Length)
+        {
+            return null;
+        }
+
+        var start = offset;
+        while (start > 0 && IsIdentifierChar(text[start - 1])) start--;
+        var end = offset;
+        while (end < text.Length && IsIdentifierChar(text[end])) end++;
+        return start == end ? null : (start, end);
     }
 
     private IEnumerable<VbaCompletionItem> GlobalCandidates(VbaModule current, VbaProcedure? procedure)
@@ -267,9 +338,11 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
 
         if (procedure is not null)
         {
-            foreach (var item in Emit(procedure.Parameters.Select(p => new VbaCompletionItem(p.Name, VbaCompletionKind.Parameter, $"{p.Display} - parameter of {procedure.Name}", 3))))
+            // No per-parameter line exists in the parsed model - falls back to the enclosing
+            // procedure's own start line, an accepted go-to-definition limitation for v1.
+            foreach (var item in Emit(procedure.Parameters.Select(p => new VbaCompletionItem(p.Name, VbaCompletionKind.Parameter, $"{p.Display} - parameter of {procedure.Name}", 3, Module: current.Name, Line: procedure.StartLine))))
                 yield return item;
-            foreach (var item in Emit(procedure.Locals.Select(v => new VbaCompletionItem(v.Name, v.IsConst ? VbaCompletionKind.Constant : VbaCompletionKind.Variable, $"{v.Display} - local in {procedure.Name}", 3))))
+            foreach (var item in Emit(procedure.Locals.Select(v => new VbaCompletionItem(v.Name, v.IsConst ? VbaCompletionKind.Constant : VbaCompletionKind.Variable, $"{v.Display} - local in {procedure.Name}", 3, Module: current.Name, Line: v.Line))))
                 yield return item;
         }
 
@@ -278,7 +351,9 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
 
         if (current.IsClassLike)
         {
-            foreach (var item in Emit([new VbaCompletionItem("Me", VbaCompletionKind.Variable, $"Me - this {current.Kind} module ({current.Name})", 2)]))
+            // "Me" has no declaration line of its own - jumping to it lands on line 1 of the
+            // current module, the same target a bare reference to this module's own name gets below.
+            foreach (var item in Emit([new VbaCompletionItem("Me", VbaCompletionKind.Variable, $"Me - this {current.Kind} module ({current.Name})", 2, Module: current.Name, Line: 1)]))
                 yield return item;
         }
 
@@ -290,7 +365,7 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
             }
 
             var kind = module.Kind == VbaModuleKind.Standard ? VbaCompletionKind.Module : VbaCompletionKind.Class;
-            foreach (var item in Emit([new VbaCompletionItem(module.Name, kind, $"{module.Kind} module {module.Name} - {module.Procedures.Count} procedures", 1)]))
+            foreach (var item in Emit([new VbaCompletionItem(module.Name, kind, $"{module.Kind} module {module.Name} - {module.Procedures.Count} procedures", 1, Module: module.Name, Line: 1)]))
                 yield return item;
 
             if (module.Kind == VbaModuleKind.Standard)
@@ -336,14 +411,14 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
             }
 
             var kind = proc.Kind == VbaProcedureKind.Event ? VbaCompletionKind.Event : proc.IsProperty ? VbaCompletionKind.Property : VbaCompletionKind.Procedure;
-            yield return new VbaCompletionItem(proc.Name, kind, proc.Signature + location, priority);
+            yield return new VbaCompletionItem(proc.Name, kind, proc.Signature + location, priority, Module: module.Name, Line: proc.StartLine);
         }
 
         foreach (var field in module.Fields)
         {
             if (includePrivate || field.Visibility == VbaVisibility.Public)
             {
-                yield return new VbaCompletionItem(field.Name, field.IsConst ? VbaCompletionKind.Constant : VbaCompletionKind.Variable, field.Display + location, priority);
+                yield return new VbaCompletionItem(field.Name, field.IsConst ? VbaCompletionKind.Constant : VbaCompletionKind.Variable, field.Display + location, priority, Module: module.Name, Line: field.Line);
             }
         }
 
@@ -363,10 +438,12 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
                 continue;
             }
 
-            yield return new VbaCompletionItem(e.Name, VbaCompletionKind.Enum, $"Enum {e.Name} ({e.Members.Count} members){location}", priority);
+            yield return new VbaCompletionItem(e.Name, VbaCompletionKind.Enum, $"Enum {e.Name} ({e.Members.Count} members){location}", priority, Module: module.Name, Line: e.Line);
             foreach (var member in e.Members)
             {
-                yield return new VbaCompletionItem(member.Name, VbaCompletionKind.EnumMember, $"{e.Name}.{member.Name}{(member.Value is null ? "" : " = " + member.Value)}{location}", priority);
+                // No per-member line exists in the parsed model - falls back to the enclosing
+                // Enum statement's own line, an accepted go-to-definition limitation for v1.
+                yield return new VbaCompletionItem(member.Name, VbaCompletionKind.EnumMember, $"{e.Name}.{member.Name}{(member.Value is null ? "" : " = " + member.Value)}{location}", priority, Module: module.Name, Line: e.Line);
             }
         }
 
@@ -374,7 +451,7 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
         {
             if (includePrivate || t.Visibility == VbaVisibility.Public)
             {
-                yield return new VbaCompletionItem(t.Name, VbaCompletionKind.UserType, $"Type {t.Name} ({t.Fields.Count} fields){location}", priority);
+                yield return new VbaCompletionItem(t.Name, VbaCompletionKind.UserType, $"Type {t.Name} ({t.Fields.Count} fields){location}", priority, Module: module.Name, Line: t.Line);
             }
         }
     }
@@ -536,10 +613,21 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
 
             case "enum":
             {
-                var e = current.Enums.Concat(Index.Modules.SelectMany(m => m.Enums)).FirstOrDefault(x => x.Name.Equals(resolved.Name, StringComparison.OrdinalIgnoreCase));
-                foreach (var member in e?.Members ?? [])
+                // current.Enums is paired with `current` itself; Index.Modules may also include
+                // `current` (a harmless, if redundant, second look at its own enums) - paired with
+                // whichever module actually owns each enum, needed now to report a declaration site.
+                var match = current.Enums.Select(e => (Owner: current, Enum: e))
+                    .Concat(Index.Modules.SelectMany(m => m.Enums.Select(e => (Owner: m, Enum: e))))
+                    .FirstOrDefault(x => x.Enum.Name.Equals(resolved.Name, StringComparison.OrdinalIgnoreCase));
+                if (match.Enum is not { } e)
                 {
-                    yield return new VbaCompletionItem(member.Name, VbaCompletionKind.EnumMember, $"{e!.Name}.{member.Name}{(member.Value is null ? "" : " = " + member.Value)}", 2);
+                    break;
+                }
+
+                foreach (var member in e.Members)
+                {
+                    // Falls back to the enum's own line - see the identical note in EnumAndTypeMembers.
+                    yield return new VbaCompletionItem(member.Name, VbaCompletionKind.EnumMember, $"{e.Name}.{member.Name}{(member.Value is null ? "" : " = " + member.Value)}", 2, Module: match.Owner.Name, Line: e.Line);
                 }
 
                 break;
@@ -547,10 +635,17 @@ public sealed class VbaCompletionEngine(VbaSymbolIndex index, VbaLanguage langua
 
             case "type":
             {
-                var t = Index.Modules.SelectMany(m => m.Types).FirstOrDefault(x => x.Name.Equals(resolved.Name, StringComparison.OrdinalIgnoreCase));
-                foreach (var field in t?.Fields ?? [])
+                var match = Index.Modules.SelectMany(m => m.Types.Select(t => (Owner: m, Type: t)))
+                    .FirstOrDefault(x => x.Type.Name.Equals(resolved.Name, StringComparison.OrdinalIgnoreCase));
+                if (match.Type is not { } t)
                 {
-                    yield return new VbaCompletionItem(field.Name, VbaCompletionKind.Member, $"{field.Name} As {field.Type ?? "Variant"} - field of Type {t!.Name}", 2);
+                    break;
+                }
+
+                foreach (var field in t.Fields)
+                {
+                    // field.Line is real (VbaVariable always carries one) - no fallback needed here.
+                    yield return new VbaCompletionItem(field.Name, VbaCompletionKind.Member, $"{field.Name} As {field.Type ?? "Variant"} - field of Type {t.Name}", 2, Module: match.Owner.Name, Line: field.Line);
                 }
 
                 break;
