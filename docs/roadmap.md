@@ -419,7 +419,7 @@ Confirmed asymmetry: MCP tool calls **already** auto-execute in a loop; `propose
 - Add a test project for the editor's pure-logic classes (`DocumentViewModel`, `EditorWorkspace`, `BreakpointManager`, `BraceFoldingStrategy`) — all directly unit-testable today, zero WPF dependency, zero coverage (M).
 - Persist breakpoints across restarts — reuse the exact JSON-persistence pattern `EditorWorkspace` already has for `recent-files.json` (S).
 - Surface DeepSeek FIM failures (auth errors, network errors) instead of failing silently — currently indistinguishable from "no suggestion available" (S).
-- Live bracket-matching highlight distinct from folding; go-to-definition/symbol navigation; minimap; multi-cursor; split-view; line-ending/encoding indicator — larger, lower-priority polish items (L, mostly build-from-scratch since AvalonEdit doesn't provide them).
+- Live bracket-matching highlight distinct from folding; minimap; multi-cursor; split-view; line-ending/encoding indicator — larger, lower-priority polish items (L, mostly build-from-scratch since AvalonEdit doesn't provide them). Go-to-definition shipped as Ctrl+Click (main editor: `RoslynDefinitionService`/`SymbolFinder.FindSymbolAtPositionAsync`; the `samples/AccessVbaPlugin` tool window got the same gesture over its own symbol index) — find-all-references and rename remain the deferred half of this group.
 - **Bigger bet**: no IntelliSense/LSP/Roslyn at all — completion is single-line AI ghost text only, no diagnostics/squiggles, no member lists, no signature help. This is the single largest capability gap in the editor and would be its own multi-milestone initiative (Roslyn workspace hosting + a completion/diagnostics provider wired into AvalonEdit).
 
 ### Build / Run / Debug / Project System

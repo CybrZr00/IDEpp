@@ -13,6 +13,7 @@ using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Highlighting.Xshd;
+using ICSharpCode.AvalonEdit.Rendering;
 using IdePlusPlus.PluginContracts;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -34,12 +35,15 @@ public partial class AccessVbaToolWindow : UserControl
     private VbaSymbolIndex _index = new();
     private CompletionWindow? _completionWindow;
     private ToolTip? _hoverToolTip;
+    private readonly CtrlHoverUnderlineColorizer _ctrlHoverColorizer = new();
     private readonly VbaGhostTextGenerator _ghostText = new();
     private readonly System.Windows.Threading.DispatcherTimer _fimDebounce = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private CancellationTokenSource? _fimCancellation;
     private bool _loadingModuleText;
     private string? _currentModuleName;
     private string? _lastPulledCode;
+    private bool _syncingModuleSelection;
+    private bool _confirmingModuleSwitch;
 
     public AccessVbaToolWindow(IPluginHost host)
     {
@@ -57,8 +61,15 @@ public partial class AccessVbaToolWindow : UserControl
         Editor.TextArea.TextEntered += Editor_TextEntered;
         Editor.TextArea.TextEntering += Editor_TextEntering;
         Editor.TextArea.PreviewKeyDown += Editor_PreviewKeyDown;
+        Editor.TextArea.PreviewKeyUp += Editor_PreviewKeyUp;
         Editor.TextArea.TextView.MouseHover += Editor_MouseHover;
-        Editor.TextArea.TextView.MouseHoverStopped += (_, _) => CloseHoverToolTip();
+        Editor.TextArea.TextView.MouseHoverStopped += (_, _) =>
+        {
+            CloseHoverToolTip();
+            ClearCtrlHoverAffordance();
+        };
+        Editor.TextArea.TextView.LineTransformers.Add(_ctrlHoverColorizer);
+        Editor.TextArea.PreviewMouseLeftButtonDown += Editor_PreviewMouseLeftButtonDown;
         ExportFolderTextBox.LostFocus += async (_, _) => await RebuildIndexAsync();
 
         // Inline (FIM) ghost text, via the IDE's configured model through IPluginHost - same
@@ -267,6 +278,18 @@ public partial class AccessVbaToolWindow : UserControl
             return;
         }
 
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            // The mouse can already be sitting still over something when Ctrl goes down -
+            // MouseHover only re-fires on movement, so re-evaluate at the current position too.
+            if (Editor.GetPositionFromPoint(Mouse.GetPosition(Editor)) is { } position)
+            {
+                ShowCtrlHoverAffordance(Editor.Document.GetOffset(position.Location));
+            }
+
+            return;
+        }
+
         if (!_ghostText.HasSuggestion)
         {
             return;
@@ -284,16 +307,36 @@ public partial class AccessVbaToolWindow : UserControl
         }
     }
 
+    private void Editor_PreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            ClearCtrlHoverAffordance();
+        }
+    }
+
     private void Editor_MouseHover(object sender, MouseEventArgs e)
     {
         var position = Editor.GetPositionFromPoint(e.GetPosition(Editor));
         if (position is null)
         {
             CloseHoverToolTip();
+            ClearCtrlHoverAffordance();
             return;
         }
 
         var offset = Editor.Document.GetOffset(position.Value.Location);
+
+        if (Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            // Ctrl-held hover is go-to-definition's affordance, not the plain tooltip - the two
+            // shouldn't compete for the same screen space.
+            ShowCtrlHoverAffordance(offset);
+            e.Handled = true;
+            return;
+        }
+
+        ClearCtrlHoverAffordance();
         var hover = new VbaCompletionEngine(_index, _language).GetHover(CurrentModuleSymbols(), Editor.Text, offset);
         if (hover is null)
         {
@@ -307,12 +350,210 @@ public partial class AccessVbaToolWindow : UserControl
         e.Handled = true;
     }
 
+    /// <summary>
+    /// Underlines the identifier at <paramref name="offset"/> and switches to a hand cursor, but
+    /// only when Ctrl+Click there would actually jump somewhere (<see cref="VbaDefinitionOutcome.Found"/>)
+    /// - reusing the exact resolver the click itself uses, so the affordance can never promise a
+    /// jump the click can't deliver (a well-known COM member or an unresolved word gets no underline).
+    /// </summary>
+    private void ShowCtrlHoverAffordance(int offset)
+    {
+        CloseHoverToolTip();
+
+        if (_currentModuleName is not null
+            && VbaCompletionEngine.IdentifierSpanAt(Editor.Text, offset) is { } span
+            && new VbaCompletionEngine(_index, _language).GetDefinition(CurrentModuleSymbols(), Editor.Text, offset) is VbaDefinitionOutcome.Found)
+        {
+            _ctrlHoverColorizer.Span = span;
+            Editor.TextArea.Cursor = Cursors.Hand;
+            Editor.TextArea.TextView.Redraw();
+            return;
+        }
+
+        ClearCtrlHoverAffordance();
+    }
+
+    private void ClearCtrlHoverAffordance()
+    {
+        if (_ctrlHoverColorizer.Span is null && Editor.TextArea.Cursor is null)
+        {
+            return;
+        }
+
+        _ctrlHoverColorizer.Span = null;
+        Editor.TextArea.Cursor = null;
+        Editor.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>Restyles the span Ctrl-hover currently points at - a <see cref="DocumentColorizingTransformer"/>
+    /// is AvalonEdit's mechanism for restyling existing text, distinct from <see cref="VbaGhostTextGenerator"/>'s
+    /// <see cref="ICSharpCode.AvalonEdit.Rendering.VisualLineElementGenerator"/>, which only inserts new text.</summary>
+    private sealed class CtrlHoverUnderlineColorizer : DocumentColorizingTransformer
+    {
+        public (int Start, int End)? Span { get; set; }
+
+        protected override void ColorizeLine(DocumentLine line)
+        {
+            if (Span is not { } span || span.End <= line.Offset || span.Start >= line.EndOffset)
+            {
+                return;
+            }
+
+            var start = Math.Max(span.Start, line.Offset);
+            var end = Math.Min(span.End, line.EndOffset);
+            ChangeLinePart(start, end, element => element.TextRunProperties.SetTextDecorations(System.Windows.TextDecorations.Underline));
+        }
+    }
+
     private void CloseHoverToolTip()
     {
         if (_hoverToolTip is not null)
         {
             _hoverToolTip.IsOpen = false;
         }
+    }
+
+    /// <summary>
+    /// Ctrl+Click go-to-definition. Reuses the exact pixel->offset resolution
+    /// <see cref="Editor_MouseHover"/> already uses; only claims the click (<c>e.Handled = true</c>)
+    /// once an identifier is actually found under the pointer, so a plain Ctrl+click on whitespace
+    /// still places the caret normally.
+    /// </summary>
+    private async void Editor_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control || _currentModuleName is null)
+        {
+            return;
+        }
+
+        var position = Editor.GetPositionFromPoint(e.GetPosition(Editor));
+        if (position is null)
+        {
+            return;
+        }
+
+        var offset = Editor.Document.GetOffset(position.Value.Location);
+        if (VbaCompletionEngine.IdentifierSpanAt(Editor.Text, offset) is not { } span)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await NavigateToDefinitionAsync(offset, Editor.Text[span.Start..span.End]);
+    }
+
+    private async Task NavigateToDefinitionAsync(int offset, string word)
+    {
+        // Same tidy-up ShowCompletion already does before taking over the editor's attention.
+        CloseHoverToolTip();
+        _completionWindow?.Close();
+        ClearGhostText();
+        _fimDebounce.Stop();
+        _fimCancellation?.Cancel();
+
+        var outcome = new VbaCompletionEngine(_index, _language).GetDefinition(CurrentModuleSymbols(), Editor.Text, offset);
+        switch (outcome)
+        {
+            case null:
+                SetStatus($"No definition found for '{word}'.");
+                return;
+
+            case VbaDefinitionOutcome.NoSourceAvailable noSource:
+                SetStatus($"'{noSource.Name}' has no source available (built-in/COM, not VBA source).");
+                return;
+
+            case VbaDefinitionOutcome.Found found when string.Equals(found.ModuleName, _currentModuleName, StringComparison.OrdinalIgnoreCase):
+                JumpToLine(found.Line);
+                return;
+
+            case VbaDefinitionOutcome.Found found:
+                // PullModuleAsync has no CancellationToken - an in-flight Access COM call can't
+                // actually be cancelled, only ignored, and an ignored-but-still-running call could
+                // still land later and clobber a newer jump's result. Refuse to start a second one
+                // rather than build cancellation that couldn't cancel the real work anyway.
+                if (!PullButton.IsEnabled)
+                {
+                    SetStatus($"Still busy - try jumping to '{found.ModuleName}' again in a moment.");
+                    return;
+                }
+
+                await NavigateToOtherModuleAsync(found);
+                return;
+        }
+    }
+
+    private async Task NavigateToOtherModuleAsync(VbaDefinitionOutcome.Found definition)
+    {
+        if (_currentModuleName is not null && !string.Equals(Editor.Text, _lastPulledCode, StringComparison.Ordinal))
+        {
+            if (_confirmingModuleSwitch)
+            {
+                // A previous jump's confirmation dialog is already up - don't stack a second.
+                return;
+            }
+
+            bool discard;
+            _confirmingModuleSwitch = true;
+            try
+            {
+                discard = ConfirmDiscardUnpushedChanges(_currentModuleName, definition.ModuleName);
+            }
+            finally
+            {
+                _confirmingModuleSwitch = false;
+            }
+
+            if (!discard)
+            {
+                return;
+            }
+        }
+
+        await PullModuleAsync(definition.ModuleName);
+
+        if (!string.Equals(_currentModuleName, definition.ModuleName, StringComparison.OrdinalIgnoreCase))
+        {
+            return; // PullModuleAsync already reported its own failure status.
+        }
+
+        _syncingModuleSelection = true;
+        try
+        {
+            ModuleComboBox.SelectedItem = definition.ModuleName;
+        }
+        finally
+        {
+            _syncingModuleSelection = false;
+        }
+
+        JumpToLine(definition.Line);
+    }
+
+    private void JumpToLine(int line)
+    {
+        if (Editor.Document is not { LineCount: > 0 })
+        {
+            return;
+        }
+
+        var clampedLine = Math.Clamp(line, 1, Editor.Document.LineCount);
+        var documentLine = Editor.Document.GetLineByNumber(clampedLine);
+        Editor.CaretOffset = documentLine.Offset;
+        Editor.ScrollToLine(clampedLine);
+        Editor.Focus();
+    }
+
+    /// <summary>Defaults to No, matching every other consequential confirmation in this app.</summary>
+    private bool ConfirmDiscardUnpushedChanges(string currentModuleName, string targetModuleName)
+    {
+        var result = System.Windows.MessageBox.Show(
+            System.Windows.Window.GetWindow(this),
+            $"'{currentModuleName}' has unpushed changes that haven't been pushed to Access.\n\nSwitch to '{targetModuleName}' and lose them?",
+            "Unpushed changes",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No);
+        return result == System.Windows.MessageBoxResult.Yes;
     }
 
     private sealed class VbaCompletionData(VbaCompletionItem item) : ICompletionData
@@ -452,6 +693,13 @@ public partial class AccessVbaToolWindow : UserControl
 
     private async void ModuleComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        // Set by NavigateToOtherModuleAsync after it has already pulled the target module itself -
+        // syncing the combo box to match would otherwise trigger a second, redundant pull.
+        if (_syncingModuleSelection)
+        {
+            return;
+        }
+
         if (ModuleComboBox.SelectedItem is string name)
         {
             await PullModuleAsync(name);
@@ -481,6 +729,9 @@ public partial class AccessVbaToolWindow : UserControl
             _loadingModuleText = true;
             try
             {
+                // A stale Ctrl-hover span from the module being left could otherwise land on the
+                // wrong substring of the new text until the next hover event corrects it.
+                ClearCtrlHoverAffordance();
                 Editor.Text = code;
             }
             finally

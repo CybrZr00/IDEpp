@@ -131,6 +131,29 @@ outcome below), not the MCP tool surface's generic error wrapper.
   copy failed the FAM front end's startup version check. Unit-tested with
   fakes in `samples/AccessVbaPlugin.Tests`; registration is asserted by the
   Shell compatibility test.
+- **Ctrl+Click go-to-definition** (2026-09-14): `VbaCompletionEngine.GetHover`
+  and the new `GetDefinition` now share one resolver, so they can never
+  disagree about what an identifier refers to - `VbaCompletionItem` grows
+  optional `Module`/`Line` fields, populated wherever a candidate is real
+  VBA source (a procedure, field, enum, type, local, parameter, or a bare
+  module-name reference), left null for keywords/builtins/"Me"/the curated
+  `VbaWellKnown` COM table. Cross-module resolution needed no new work -
+  `VbaSymbolIndex` was already project-wide - only the final step of
+  keeping `(module, line)` instead of discarding it into a description
+  string. A same-module hit moves the caret directly; a cross-module one
+  reuses `PullModuleAsync` (the same call the module dropdown already
+  makes), then syncs the dropdown and jumps - guarded against a second
+  jump starting while Access is already busy (`PullModuleAsync` has no
+  `CancellationToken`, so a stale in-flight COM call couldn't actually be
+  cancelled, only ignored), and against silently discarding unpushed edits
+  in the module being left (a confirmation prompt, defaulting to No, new
+  protection beyond what the dropdown itself still doesn't have). Also:
+  Ctrl-hover underlines the identifier and switches to a hand cursor, but
+  only when the same resolver the click uses actually returns a real jump
+  target - never a promise the click can't keep. 8 new `GetDefinition`
+  unit tests pin the two known v1 limits (a parameter or enum member has
+  no line of its own in the parsed model, so each falls back to its
+  enclosing procedure/enum's line).
 
 ## Recommendation
 
