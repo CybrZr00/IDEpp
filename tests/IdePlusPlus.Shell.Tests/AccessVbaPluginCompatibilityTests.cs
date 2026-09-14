@@ -62,6 +62,8 @@ public sealed class AccessVbaPluginCompatibilityTests
             loader.LoadedPlugins.Count.ShouldBe(1);
             loader.LoadedPlugins[0].Plugin!.Name.ShouldBe("Access VBA");
             host.RegisteredToolWindows.ShouldContain(w => w.Title == "Access VBA");
+            host.RegisteredChatTools.Select(t => t.Definition.Name)
+                .ShouldBe(["vba_get_current_module", "vba_list_modules", "vba_get_module"]);
             host.LoggedMessages.ShouldContain(m => m.Contains("registered the Access VBA tool window"));
 
             // The factory itself constructs a real WPF UserControl (with an embedded AvalonEdit editor,

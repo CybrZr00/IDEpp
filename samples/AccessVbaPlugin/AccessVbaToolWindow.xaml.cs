@@ -361,11 +361,13 @@ public partial class AccessVbaToolWindow : UserControl
     }
 
     /// <summary>
-    /// Reuses the same config file AccessMCP.exe reads, so there's one source of truth (database
-    /// path, workgroup file, ReadOnly, EnableComAutomation) for both the standalone MCP server and
-    /// this in-process plugin.
+    /// Reads the same shape of config file AccessMCP.exe uses, so there's one source of truth
+    /// (database path, workgroup file, ReadOnly, EnableComAutomation) for the standalone MCP server
+    /// and this in-process plugin - from %LOCALAPPDATA%\IdePlusPlus\accessmcp-config.json. Shared
+    /// with <see cref="AccessVbaPlugin"/>, whose chat tools must open the same database this window
+    /// edits.
     /// </summary>
-    private static AccessMcpOptions LoadOptions()
+    internal static AccessMcpOptions LoadOptions()
     {
         var path = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -384,6 +386,30 @@ public partial class AccessVbaToolWindow : UserControl
         {
             return new AccessMcpOptions();
         }
+    }
+
+    /// <summary>
+    /// What this window is showing right now, for the plugin's vba_get_current_module chat tool.
+    /// Marshalled onto this control's Dispatcher: a chat tool runs on whatever thread the Copilot's
+    /// tool loop happens to be on, and the editor is only safe to read from the UI thread. "Unpushed
+    /// changes" means the editor text differs from what the last Pull loaded or the last Push wrote.
+    /// </summary>
+    internal async Task<CurrentModuleSnapshot> GetCurrentModuleSnapshotAsync()
+    {
+        return await Dispatcher.InvokeAsync(() =>
+        {
+            var code = Editor.Text;
+            var kind = _currentModuleName is not null && _moduleKinds.TryGetValue(_currentModuleName, out var moduleKind)
+                ? moduleKind.ToString()
+                : null;
+
+            return new CurrentModuleSnapshot(
+                _currentModuleName,
+                kind,
+                code,
+                HasUnpushedChanges: _currentModuleName is not null && !string.Equals(code, _lastPulledCode, StringComparison.Ordinal),
+                _options.DefaultDatabasePath);
+        });
     }
 
     private async void RefreshModules_Click(object sender, System.Windows.RoutedEventArgs e) => await RefreshModulesAsync();

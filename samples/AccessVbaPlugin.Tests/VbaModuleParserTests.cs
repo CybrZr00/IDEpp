@@ -159,8 +159,10 @@ public sealed class VbaModuleParserTests
     [Fact]
     public void ParsesTheRealExportCorpusWhenPresent()
     {
+        // The plugin creates the folder before its first export, so an existing-but-empty folder
+        // (an export that never completed) must count as "corpus not present", not as a failure.
         const string folder = @"C:\FAM\_vba_export";
-        if (!Directory.Exists(folder))
+        if (!Directory.Exists(folder) || !Directory.EnumerateFiles(folder, "*.bas").Any())
         {
             return;
         }

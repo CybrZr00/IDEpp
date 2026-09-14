@@ -116,6 +116,21 @@ outcome below), not the MCP tool surface's generic error wrapper.
   killing a slow from-scratch Release build inside the test (vstest reports a
   killed host as "crashed"); no crash was ever recorded in the event log, and
   it has never failed unwrapped. Don't run that test under a tight timeout.
+- **Chat tools** (2026-09-14): the `RegisterChatTool` half of the Phase 1
+  plan, built once it became clear the Copilot could not see VBA at all -
+  "Include current file" only covers the main editor, and its
+  `read_file`/`search_codebase` tools refuse paths outside the open solution,
+  which the export folder normally is. Three tools in `VbaChatTools.cs`:
+  `vba_get_current_module` (the tool window's editor text, flagged when it
+  has unpushed edits), `vba_list_modules` (live from Access, optional
+  `nameContains` filter, capped at 400 entries) and `vba_get_module` (live
+  from Access, capped at 60k chars, notes when the tool window holds unpushed
+  edits of the same module). The Access-backed calls race a 2-minute deadline
+  so a hidden modal dialog becomes an error the model can read instead of a
+  hung chat turn - the failure mode found the same day when a stale working
+  copy failed the FAM front end's startup version check. Unit-tested with
+  fakes in `samples/AccessVbaPlugin.Tests`; registration is asserted by the
+  Shell compatibility test.
 
 ## Recommendation
 
