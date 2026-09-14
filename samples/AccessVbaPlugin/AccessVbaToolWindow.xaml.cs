@@ -40,6 +40,8 @@ public partial class AccessVbaToolWindow : UserControl
     private bool _loadingModuleText;
     private string? _currentModuleName;
     private string? _lastPulledCode;
+    private bool _syncingModuleSelection;
+    private bool _confirmingModuleSwitch;
 
     public AccessVbaToolWindow(IPluginHost host)
     {
@@ -59,6 +61,7 @@ public partial class AccessVbaToolWindow : UserControl
         Editor.TextArea.PreviewKeyDown += Editor_PreviewKeyDown;
         Editor.TextArea.TextView.MouseHover += Editor_MouseHover;
         Editor.TextArea.TextView.MouseHoverStopped += (_, _) => CloseHoverToolTip();
+        Editor.TextArea.PreviewMouseLeftButtonDown += Editor_PreviewMouseLeftButtonDown;
         ExportFolderTextBox.LostFocus += async (_, _) => await RebuildIndexAsync();
 
         // Inline (FIM) ghost text, via the IDE's configured model through IPluginHost - same
@@ -315,6 +318,149 @@ public partial class AccessVbaToolWindow : UserControl
         }
     }
 
+    /// <summary>
+    /// Ctrl+Click go-to-definition. Reuses the exact pixel->offset resolution
+    /// <see cref="Editor_MouseHover"/> already uses; only claims the click (<c>e.Handled = true</c>)
+    /// once an identifier is actually found under the pointer, so a plain Ctrl+click on whitespace
+    /// still places the caret normally.
+    /// </summary>
+    private async void Editor_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control || _currentModuleName is null)
+        {
+            return;
+        }
+
+        var position = Editor.GetPositionFromPoint(e.GetPosition(Editor));
+        if (position is null)
+        {
+            return;
+        }
+
+        var offset = Editor.Document.GetOffset(position.Value.Location);
+        if (VbaCompletionEngine.IdentifierSpanAt(Editor.Text, offset) is not { } span)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await NavigateToDefinitionAsync(offset, Editor.Text[span.Start..span.End]);
+    }
+
+    private async Task NavigateToDefinitionAsync(int offset, string word)
+    {
+        // Same tidy-up ShowCompletion already does before taking over the editor's attention.
+        CloseHoverToolTip();
+        _completionWindow?.Close();
+        ClearGhostText();
+        _fimDebounce.Stop();
+        _fimCancellation?.Cancel();
+
+        var outcome = new VbaCompletionEngine(_index, _language).GetDefinition(CurrentModuleSymbols(), Editor.Text, offset);
+        switch (outcome)
+        {
+            case null:
+                SetStatus($"No definition found for '{word}'.");
+                return;
+
+            case VbaDefinitionOutcome.NoSourceAvailable noSource:
+                SetStatus($"'{noSource.Name}' has no source available (built-in/COM, not VBA source).");
+                return;
+
+            case VbaDefinitionOutcome.Found found when string.Equals(found.ModuleName, _currentModuleName, StringComparison.OrdinalIgnoreCase):
+                JumpToLine(found.Line);
+                return;
+
+            case VbaDefinitionOutcome.Found found:
+                // PullModuleAsync has no CancellationToken - an in-flight Access COM call can't
+                // actually be cancelled, only ignored, and an ignored-but-still-running call could
+                // still land later and clobber a newer jump's result. Refuse to start a second one
+                // rather than build cancellation that couldn't cancel the real work anyway.
+                if (!PullButton.IsEnabled)
+                {
+                    SetStatus($"Still busy - try jumping to '{found.ModuleName}' again in a moment.");
+                    return;
+                }
+
+                await NavigateToOtherModuleAsync(found);
+                return;
+        }
+    }
+
+    private async Task NavigateToOtherModuleAsync(VbaDefinitionOutcome.Found definition)
+    {
+        if (_currentModuleName is not null && !string.Equals(Editor.Text, _lastPulledCode, StringComparison.Ordinal))
+        {
+            if (_confirmingModuleSwitch)
+            {
+                // A previous jump's confirmation dialog is already up - don't stack a second.
+                return;
+            }
+
+            bool discard;
+            _confirmingModuleSwitch = true;
+            try
+            {
+                discard = ConfirmDiscardUnpushedChanges(_currentModuleName, definition.ModuleName);
+            }
+            finally
+            {
+                _confirmingModuleSwitch = false;
+            }
+
+            if (!discard)
+            {
+                return;
+            }
+        }
+
+        await PullModuleAsync(definition.ModuleName);
+
+        if (!string.Equals(_currentModuleName, definition.ModuleName, StringComparison.OrdinalIgnoreCase))
+        {
+            return; // PullModuleAsync already reported its own failure status.
+        }
+
+        _syncingModuleSelection = true;
+        try
+        {
+            ModuleComboBox.SelectedItem = definition.ModuleName;
+        }
+        finally
+        {
+            _syncingModuleSelection = false;
+        }
+
+        JumpToLine(definition.Line);
+    }
+
+    private void JumpToLine(int line)
+    {
+        if (Editor.Document is not { LineCount: > 0 })
+        {
+            return;
+        }
+
+        var clampedLine = Math.Clamp(line, 1, Editor.Document.LineCount);
+        var documentLine = Editor.Document.GetLineByNumber(clampedLine);
+        Editor.CaretOffset = documentLine.Offset;
+        Editor.ScrollToLine(clampedLine);
+        Editor.Focus();
+    }
+
+    /// <summary>Defaults to No, matching every other consequential confirmation in this app.</summary>
+    private bool ConfirmDiscardUnpushedChanges(string currentModuleName, string targetModuleName)
+    {
+        var result = System.Windows.MessageBox.Show(
+            System.Windows.Window.GetWindow(this),
+            $"'{currentModuleName}' has unpushed changes that haven't been pushed to Access.\n\nSwitch to '{targetModuleName}' and lose them?",
+            "Unpushed changes",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No);
+        return result == System.Windows.MessageBoxResult.Yes;
+    }
+
     private sealed class VbaCompletionData(VbaCompletionItem item) : ICompletionData
     {
         public ImageSource Image => null!;
@@ -452,6 +598,13 @@ public partial class AccessVbaToolWindow : UserControl
 
     private async void ModuleComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        // Set by NavigateToOtherModuleAsync after it has already pulled the target module itself -
+        // syncing the combo box to match would otherwise trigger a second, redundant pull.
+        if (_syncingModuleSelection)
+        {
+            return;
+        }
+
         if (ModuleComboBox.SelectedItem is string name)
         {
             await PullModuleAsync(name);
