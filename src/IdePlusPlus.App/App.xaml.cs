@@ -74,6 +74,7 @@ public partial class App : Application
         EditorServices.CompletionProvider = _serviceProvider.GetRequiredService<DeepSeekFimClient>();
         EditorServices.DiagnosticsProvider = _serviceProvider.GetRequiredService<RoslynWorkspaceService>();
         EditorServices.MemberCompletionProvider = _serviceProvider.GetRequiredService<RoslynCompletionService>();
+        EditorServices.DefinitionProvider = _serviceProvider.GetRequiredService<RoslynDefinitionService>();
         EditorServices.GoToLine = new GoToLineRequest();
         EditorServices.DiffPreview = new DiffPreviewRequest();
 
@@ -105,6 +106,22 @@ public partial class App : Application
         // background rather than blocking startup; GetToolDefinitions() just returns fewer tools
         // until they're ready.
         var output = _serviceProvider.GetRequiredService<OutputPaneViewModel>();
+        var mainWindowViewModel = _serviceProvider.GetRequiredService<MainWindowViewModel>();
+
+        // Ctrl+Click go-to-definition's cross-file half: EditorDefinitionOutcome.Found only carries
+        // a file/line/column, since IdePlusPlus.Editor can't reference Shell to open a document
+        // itself - this composes MainWindowViewModel.OpenPath (which also brings the tab to front)
+        // with EditorServices.GoToLine.Request, the same two steps DiffPreviewRequest's own remarks
+        // describe as already proven to work together for a file that wasn't already open.
+        EditorServices.OpenAndGoTo = (filePath, line, column) =>
+        {
+            if (mainWindowViewModel.OpenPath(filePath) is { } document)
+            {
+                EditorServices.GoToLine.Request(document, line, column);
+            }
+        };
+        EditorServices.StatusLog = line => output.AppendLine(line);
+
         var dispatcher = Dispatcher;
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
         mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
@@ -132,7 +149,7 @@ public partial class App : Application
 
         // Fire-and-forget, same as MCP reconnect above - a large solution shouldn't delay the
         // window appearing.
-        _ = _serviceProvider.GetRequiredService<MainWindowViewModel>().TryReopenLastSolutionOnStartupAsync();
+        _ = mainWindowViewModel.TryReopenLastSolutionOnStartupAsync();
     }
 
     /// <summary>
@@ -366,6 +383,7 @@ public partial class App : Application
         services.AddSingleton<TaskExplorerPaneViewModel>();
         services.AddSingleton<RoslynWorkspaceService>();
         services.AddSingleton<RoslynCompletionService>();
+        services.AddSingleton<RoslynDefinitionService>();
         services.AddSingleton<SqlSchemaService>();
         services.AddSingleton<ConnectionsExplorerPaneViewModel>();
         services.AddSingleton<MainWindowViewModel>();

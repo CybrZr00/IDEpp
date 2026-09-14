@@ -24,6 +24,7 @@ public partial class TextEditorHost : UserControl
     private readonly CaretLineBackgroundRenderer _caretLineRenderer = new();
     private readonly DiagnosticSquiggleRenderer _diagnosticSquiggleRenderer = new();
     private readonly GhostTextGenerator _ghostTextGenerator = new();
+    private readonly CtrlHoverUnderlineColorizer _ctrlHoverColorizer = new();
     private readonly DispatcherTimer _completionDebounceTimer;
     private FoldingManager? _foldingManager;
     private DocumentViewModel? _boundDocument;
@@ -45,6 +46,7 @@ public partial class TextEditorHost : UserControl
         Editor.TextArea.TextView.BackgroundRenderers.Add(_currentLineRenderer);
         Editor.TextArea.TextView.BackgroundRenderers.Add(_diagnosticSquiggleRenderer);
         Editor.TextArea.TextView.ElementGenerators.Add(_ghostTextGenerator);
+        Editor.TextArea.TextView.LineTransformers.Add(_ctrlHoverColorizer);
         EditorServices.DebugLocation.Changed += OnDebugLocationChanged;
         EditorServices.GoToLine.Requested += OnGoToLineRequested;
         EditorServices.DiffPreview.Requested += OnDiffPreviewRequested;
@@ -74,6 +76,7 @@ public partial class TextEditorHost : UserControl
         };
 
         Editor.TextArea.PreviewKeyDown += OnEditorPreviewKeyDown;
+        Editor.TextArea.PreviewKeyUp += OnEditorPreviewKeyUp;
         Editor.TextArea.TextEntered += OnEditorTextEntered;
         Editor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
         Editor.GotKeyboardFocus += (_, _) => PublishCaretPosition();
@@ -84,6 +87,7 @@ public partial class TextEditorHost : UserControl
         Editor.ContextMenuOpening += OnEditorContextMenuOpening;
         Editor.TextArea.TextView.MouseHover += OnTextViewMouseHover;
         Editor.TextArea.TextView.MouseHoverStopped += OnTextViewMouseHoverStopped;
+        Editor.TextArea.PreviewMouseLeftButtonDown += OnEditorPreviewMouseLeftButtonDown;
 
         ApplyEditorTheme();
         EditorTheme.Changed += ApplyEditorTheme;
@@ -207,6 +211,7 @@ public partial class TextEditorHost : UserControl
         // Same reasoning as _hoverCancellation just above - a go-to-definition lookup in flight
         // belongs to whatever document was focused when Ctrl+Click fired.
         _definitionCancellation?.Cancel();
+        ClearCtrlHoverAffordance();
 
         // The squiggle renderer is shared by every document this editor ever binds to - clear
         // whatever the previous document's diagnostics were so they don't briefly show over the
@@ -551,6 +556,18 @@ public partial class TextEditorHost : UserControl
             return;
         }
 
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            // The mouse can already be sitting still over something when Ctrl goes down - MouseHover
+            // only re-fires on movement, so re-evaluate the affordance at the current position too.
+            if (GetOffsetAt(Mouse.GetPosition(Editor.TextArea.TextView)) is { } offset)
+            {
+                _ = ShowDefinitionAffordanceAsync(offset);
+            }
+
+            return;
+        }
+
         if (!_ghostTextGenerator.HasSuggestion)
         {
             return;
@@ -636,6 +653,24 @@ public partial class TextEditorHost : UserControl
     /// since WPF's built-in tooltip has no notion of "which word" within one large text control.</summary>
     private void OnTextViewMouseHover(object sender, MouseEventArgs e)
     {
+        if (Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            // Ctrl-held hover is go-to-definition's affordance, not the plain tooltip - the two
+            // shouldn't compete for the same screen space.
+            CloseHoverToolTip();
+            if (GetOffsetAt(e.GetPosition(Editor.TextArea.TextView)) is { } offset)
+            {
+                _ = ShowDefinitionAffordanceAsync(offset);
+            }
+            else
+            {
+                ClearCtrlHoverAffordance();
+            }
+
+            return;
+        }
+
+        ClearCtrlHoverAffordance();
         _ = ShowHoverAsync(e);
     }
 
@@ -643,6 +678,7 @@ public partial class TextEditorHost : UserControl
     {
         _hoverCancellation?.Cancel();
         CloseHoverToolTip();
+        ClearCtrlHoverAffordance();
         e.Handled = true;
     }
 
@@ -678,11 +714,12 @@ public partial class TextEditorHost : UserControl
         }
 
         var offset = Editor.Document.GetOffset(textViewPosition.Location);
-        var word = GetWordAtOffset(Editor.Document, offset);
-        if (string.IsNullOrEmpty(word))
+        if (GetIdentifierSpanAt(Editor.Document, offset) is not { } wordSpan)
         {
             return;
         }
+
+        var word = Editor.Document.GetText(wordSpan.Start, wordSpan.End - wordSpan.Start);
 
         _hoverCancellation?.Cancel();
         var cancellation = new CancellationTokenSource();
@@ -713,7 +750,10 @@ public partial class TextEditorHost : UserControl
         };
     }
 
-    private static string? GetWordAtOffset(TextDocument document, int offset)
+    /// <summary>The span of the identifier at offset (touching it from either side counts), or null
+    /// if there isn't one. Shared by the plain-hover pipeline above, the Ctrl-hover go-to-definition
+    /// affordance, and the Ctrl+Click handler below - one word-boundary rule everywhere.</summary>
+    private static (int Start, int End)? GetIdentifierSpanAt(TextDocument document, int offset)
     {
         if (offset < 0 || offset > document.TextLength)
         {
@@ -733,8 +773,166 @@ public partial class TextEditorHost : UserControl
             end++;
         }
 
-        return end > start ? document.GetText(start, end - start) : null;
+        return end > start ? (start, end) : null;
     }
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    /// <summary>Document offset under a TextView-relative point, or null if the point isn't over any
+    /// character at all. Shared by the Ctrl-hover affordance (which has a real mouse position) and
+    /// Ctrl-key-down (which doesn't, and reads the OS's current pointer position instead).</summary>
+    private int? GetOffsetAt(Point textViewPoint)
+    {
+        var textView = Editor.TextArea.TextView;
+        if (Editor.Document is null || textView.GetPositionFloor(textViewPoint + textView.ScrollOffset) is not { } position)
+        {
+            return null;
+        }
+
+        return Editor.Document.GetOffset(position.Location);
+    }
+
+    private void OnEditorPreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            ClearCtrlHoverAffordance();
+        }
+    }
+
+    /// <summary>
+    /// Underlines the identifier at offset and switches to a hand cursor, but only when Ctrl+Click
+    /// there would actually jump somewhere (<see cref="EditorDefinitionOutcome.Found"/>) - reusing
+    /// the exact resolver the click itself uses, so the affordance can never promise a jump the
+    /// click can't deliver (a BCL/NuGet member or an unresolved word gets no underline).
+    /// </summary>
+    private async Task ShowDefinitionAffordanceAsync(int offset)
+    {
+        if (Editor.Document is null || _boundDocument?.FilePath is not { } filePath
+            || EditorServices.DefinitionProvider is not { } provider
+            || GetIdentifierSpanAt(Editor.Document, offset) is not { } span)
+        {
+            ClearCtrlHoverAffordance();
+            return;
+        }
+
+        _definitionCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _definitionCancellation = cancellation;
+        var text = Editor.Document.Text;
+
+        EditorDefinitionOutcome? outcome;
+        try
+        {
+            outcome = await provider.GetDefinitionAsync(filePath, text, offset, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (cancellation.IsCancellationRequested || Editor.Document is null)
+        {
+            return;
+        }
+
+        if (outcome is not EditorDefinitionOutcome.Found)
+        {
+            ClearCtrlHoverAffordance();
+            return;
+        }
+
+        _ctrlHoverColorizer.Span = span;
+        Editor.TextArea.Cursor = Cursors.Hand;
+        Editor.TextArea.TextView.Redraw();
+    }
+
+    private void ClearCtrlHoverAffordance()
+    {
+        if (_ctrlHoverColorizer.Span is null && Editor.TextArea.Cursor is null)
+        {
+            return;
+        }
+
+        _ctrlHoverColorizer.Span = null;
+        Editor.TextArea.Cursor = null;
+        Editor.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>
+    /// Ctrl+Click go-to-definition. Reuses the same pixel->offset resolution the hover pipeline
+    /// uses; only claims the click (<c>e.Handled = true</c>) once an identifier is actually found
+    /// under the pointer, so a plain Ctrl+click on whitespace still places the caret normally - the
+    /// first place this codebase suppresses a mouse (not keyboard/wheel) default via Preview.
+    /// </summary>
+    private void OnEditorPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control || Editor.Document is null || _boundDocument?.FilePath is not { } filePath)
+        {
+            return;
+        }
+
+        if (GetOffsetAt(e.GetPosition(Editor.TextArea.TextView)) is not { } offset
+            || GetIdentifierSpanAt(Editor.Document, offset) is not { } span)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var word = Editor.Document.GetText(span.Start, span.End - span.Start);
+        _ = NavigateToDefinitionAsync(filePath, offset, word);
+    }
+
+    private async Task NavigateToDefinitionAsync(string filePath, int offset, string word)
+    {
+        if (EditorServices.DefinitionProvider is not { } provider || Editor.Document is null)
+        {
+            return;
+        }
+
+        ClearCtrlHoverAffordance();
+        var targetDocument = _boundDocument;
+        var text = Editor.Document.Text;
+
+        _definitionCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _definitionCancellation = cancellation;
+
+        EditorDefinitionOutcome? outcome;
+        try
+        {
+            outcome = await provider.GetDefinitionAsync(filePath, text, offset, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        // Stale: a newer Ctrl+Click superseded this one, or the bound document changed underneath
+        // it (a tab switch) while the lookup was in flight - same staleness guard RequestCompletionAsync
+        // already uses.
+        if (cancellation.IsCancellationRequested || !ReferenceEquals(_boundDocument, targetDocument))
+        {
+            return;
+        }
+
+        switch (outcome)
+        {
+            case EditorDefinitionOutcome.Found found when string.Equals(found.FilePath, filePath, StringComparison.OrdinalIgnoreCase):
+                ApplyGoTo(found.Line, found.Column);
+                return;
+
+            case EditorDefinitionOutcome.Found found:
+                EditorServices.OpenAndGoTo?.Invoke(found.FilePath, found.Line, found.Column);
+                return;
+
+            case EditorDefinitionOutcome.NoSourceAvailable noSource:
+                EditorServices.StatusLog?.Invoke($"'{noSource.SymbolDisplayName}' has no source available (defined outside this solution).");
+                return;
+
+            default:
+                EditorServices.StatusLog?.Invoke($"No definition found for '{word}'.");
+                return;
+        }
+    }
 }
