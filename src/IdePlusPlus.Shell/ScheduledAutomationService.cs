@@ -14,9 +14,9 @@ namespace IdePlusPlus.Shell;
 /// Scheduler entry point could reuse them directly from a different Main() without any change here.
 ///
 /// Deliberately does not reuse CopilotChatPaneViewModel for a scheduled run: that view model is a
-/// single-conversation singleton with no concurrency protection (IsStreaming is a plain bool,
-/// _streamCancellation a single field) - a scheduled run firing mid-conversation would corrupt both
-/// runs' state and interleave scheduled output into the visible transcript. Each run gets its own
+/// single-conversation singleton that runs one turn at a time (IsStreaming is a plain bool, and
+/// starting a turn stops the one before it) - a scheduled run firing mid-conversation would cancel the
+/// user's turn and interleave scheduled output into the visible transcript. Each run gets its own
 /// HeadlessAgentLoop instead, restricted to the same read-only tool set investigate_parallel's
 /// sub-agents get (see SubAgentTools) - build_solution/run_tests stay out deliberately, since both
 /// save dirty documents as a side effect, and doing that from an unattended 2am timer means silently
@@ -47,6 +47,12 @@ public sealed class ScheduledAutomationService : IDisposable
 
     private string? _solutionDirectory;
     private volatile bool _isTicking;
+
+    /// <summary>Cancelled when a different solution is opened. A run belongs to the solution it
+    /// started in, but the code index and C# workspace it searches are shared and move on to the new
+    /// solution - left running, it would answer from the new solution's code and save that into the
+    /// old solution's run log.</summary>
+    private volatile CancellationTokenSource _runCancellation = new();
 
     /// <summary>Raised from whatever thread a run happened to finish on (the timer's thread pool, or
     /// whichever thread called RunNowAsync) - never the UI thread. A subscriber that touches UI-bound
@@ -79,6 +85,13 @@ public sealed class ScheduledAutomationService : IDisposable
 
     public void SetSolutionDirectory(string? solutionDirectory)
     {
+        if (!string.Equals(_solutionDirectory, solutionDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            var previous = _runCancellation;
+            _runCancellation = new CancellationTokenSource();
+            previous.Cancel();
+        }
+
         _solutionDirectory = solutionDirectory;
         SchedulesChanged?.Invoke();
     }
@@ -124,7 +137,15 @@ public sealed class ScheduledAutomationService : IDisposable
 
         if (_scheduleStore.Load(solutionDirectory).FirstOrDefault(s => s.Name == name) is { } schedule)
         {
-            await RunScheduleAsync(solutionDirectory, schedule, cancellationToken);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runCancellation.Token);
+            try
+            {
+                await RunScheduleAsync(solutionDirectory, schedule, linked.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Another solution was opened mid-run - see _runCancellation. Nothing is saved.
+            }
         }
     }
 
@@ -142,6 +163,7 @@ public sealed class ScheduledAutomationService : IDisposable
         }
 
         _isTicking = true;
+        var cancellationToken = _runCancellation.Token;
         try
         {
             var now = DateTimeOffset.Now;
@@ -151,8 +173,13 @@ public sealed class ScheduledAutomationService : IDisposable
 
             foreach (var schedule in due)
             {
-                await RunScheduleAsync(solutionDirectory, schedule, CancellationToken.None);
+                await RunScheduleAsync(solutionDirectory, schedule, cancellationToken);
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Another solution was opened mid-run - the rest of this tick's schedules belong to the
+            // previous one, so they are not run either. Nothing is saved for the cancelled run.
         }
         finally
         {

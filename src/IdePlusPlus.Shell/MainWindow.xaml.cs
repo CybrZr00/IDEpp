@@ -175,6 +175,7 @@ public partial class MainWindow : Window
         // Closing mid-stream abandons RunAssistantTurnsAsync before its finally runs, so capture
         // whatever the conversation has reached rather than losing it.
         Closing += (_, _) => viewModel.CopilotChat.PersistChatHistory();
+        viewModel.ConfirmCloseDirtyDocument = ConfirmCloseDirtyDocument;
         Closing += (_, _) => viewModel.StopDebuggingCommand.Execute(null); // best effort; avoids orphaning netcoredbg
     }
 

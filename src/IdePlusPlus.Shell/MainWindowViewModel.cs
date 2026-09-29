@@ -70,6 +70,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Reset on every solution load - see RegisterNewFilesForAnalysisAsync.</summary>
     private bool _warnedAboutNewFileAnalysis;
 
+    /// <summary>Bumped by every LoadSolutionAsync, so one overtaken by a later one (Open Solution,
+    /// Open Recent and drag-drop are independent, and loading takes a while) gives up instead of
+    /// finishing last and winning.</summary>
+    private int _solutionLoadGeneration;
+
     /// <summary>Every named startup configuration saved for the current solution (see
     /// <see cref="StartupConfigurationStore"/>) - what the Startup Configuration Manager dialog edits.
     /// Run/Start Debugging always act on <see cref="ActiveConfiguration"/>, never on this list directly.</summary>
@@ -852,6 +857,43 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void CloseDocument(DocumentViewModel document) => _editorWorkspace.Close(document);
 
+    /// <summary>Set by MainWindow: asks Save / Don't Save / Cancel about one unsaved document and
+    /// returns whether it may be closed. Unset, an unsaved document is never closed.</summary>
+    public Func<DocumentViewModel, bool>? ConfirmCloseDirtyDocument { get; set; }
+
+    /// <summary>
+    /// Closes every open document, for a switch to another solution - the way Visual Studio does.
+    /// Left open, the previous solution's files stayed in front of the copilot: the active one was
+    /// sent with every message as "the file the user has open", and a build or test run in the new
+    /// solution saved their unsaved edits.
+    ///
+    /// Asks about every unsaved document before closing any, so a Cancel part-way leaves everything
+    /// open (apart from what the user chose to save) and returns false.
+    /// </summary>
+    public bool TryCloseAllDocuments()
+    {
+        foreach (var document in OpenDocuments.Where(d => d.IsDirty).ToList())
+        {
+            if (ConfirmCloseDirtyDocument?.Invoke(document) != true)
+            {
+                return false;
+            }
+        }
+
+        foreach (var document in OpenDocuments.ToList())
+        {
+            EditorServices.DiffPreview?.Request(document, null);
+            CloseDocument(document);
+        }
+
+        ActiveDocument = null;
+        return true;
+    }
+
+    private bool IsCurrentSolution(string solutionPath) =>
+        CurrentSolutionPath is { } current
+        && string.Equals(Path.GetFullPath(current), Path.GetFullPath(solutionPath), StringComparison.OrdinalIgnoreCase);
+
     partial void OnActiveDocumentChanged(DocumentViewModel? value)
     {
         SaveCommand.NotifyCanExecuteChanged();
@@ -889,6 +931,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// happened before anyone could read it.</param>
     public async Task LoadSolutionAsync(string solutionPath, bool clearOutput = true)
     {
+        var generation = ++_solutionLoadGeneration;
+
         if (clearOutput)
         {
             Output.Clear();
@@ -898,6 +942,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             var root = await Task.Run(() => SolutionLoader.Load(solutionPath));
+            if (generation != _solutionLoadGeneration)
+            {
+                return;
+            }
+
+            // Reopening the solution already open (New Project adding to it) is a refresh, not a
+            // switch. A switch lets the copilot stop what it is doing while the previous solution is
+            // still current, closes that solution's documents - the last point the switch can still
+            // be called off - and only then changes anything.
+            if (!IsCurrentSolution(solutionPath))
+            {
+                await CopilotChat.PrepareForSolutionChangeAsync();
+                if (generation != _solutionLoadGeneration)
+                {
+                    return;
+                }
+
+                if (CurrentSolutionPath is not null && !TryCloseAllDocuments())
+                {
+                    Output.AppendLine($"Cancelled - {Path.GetFileName(CurrentSolutionPath)} is still open.");
+                    return;
+                }
+
+                // Straight away rather than when the (restore-delayed) Roslyn load starts: until that
+                // finishes, the copilot's symbol tools must say the code model is loading, not answer
+                // from the previous solution.
+                _roslynWorkspaceService.SetExpectedSolution(solutionPath);
+            }
+
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = solutionPath;
             _solutionRoot = root;
@@ -1040,10 +1113,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// to log every occurrence to Output without drowning out everything else.</summary>
     private async Task LoadRoslynWorkspaceAsync(string solutionPath)
     {
+        // A restore can take minutes, and the user may have opened another solution by the time it
+        // finishes - loading this one's workspace then would replace the one they are working in.
+        if (!IsCurrentSolution(solutionPath))
+        {
+            return;
+        }
+
         try
         {
             await _roslynWorkspaceService.LoadSolutionAsync(solutionPath);
-            Output.AppendLine("Roslyn workspace loaded (IntelliSense/diagnostics ready).");
+            if (IsCurrentSolution(solutionPath))
+            {
+                Output.AppendLine("Roslyn workspace loaded (IntelliSense/diagnostics ready).");
+            }
         }
         catch (Exception ex)
         {
