@@ -355,7 +355,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private void Apply()
     {
         var result = _applicationService.Apply(
-            _operation!, _fullPath!, _originalContentSnapshot!, _workspaceDirectory);
+            _operation!, _fullPath!, _originalContentSnapshot!, _workspaceDirectory, out var failureDetail);
 
         // Apply just wrote straight to disk if the file was closed, or mutated the now-open buffer
         // if not - and thanks to ShowInEditor, it is now always open. For a file that was already
@@ -387,11 +387,11 @@ public sealed partial class EditProposalViewModel : ObservableObject
             ApplyResult.OutsideWorkspace =>
                 $"Not applied: {FilePath} is outside the open solution directory.",
             ApplyResult.InvalidRange =>
-                $"Not applied to {FilePath}: the line range no longer fits the file. Re-read it for "
-                + "current line numbers.",
+                $"Not applied to {FilePath}: {failureDetail} Re-read the file with read_file for "
+                + "current line numbers, or use replace_text, which needs no line numbers.",
             _ =>
-                $"Not applied to {FilePath}: the file changed after this edit was proposed. Re-read "
-                + "it and send the edit again against its current contents.",
+                $"Not applied to {FilePath}: the file changed after this edit was proposed. {failureDetail} "
+                + "Re-read it and send the edit again against its current contents.",
         };
         RefreshEditorAndStatus();
     }

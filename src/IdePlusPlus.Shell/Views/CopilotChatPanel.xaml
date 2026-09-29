@@ -201,30 +201,6 @@
                         </TextBlock.Style>
                     </TextBlock>
 
-                    <!-- ItemsControl has no ScrollViewer in its default template, so a bare
-                         MaxHeight clipped the diff instead of scrolling it - for any file longer
-                         than a few lines the changed region sat below the clip, which made this
-                         review gate unable to show the very thing it exists to catch. -->
-                    <ScrollViewer MaxHeight="240"
-                                  VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
-                        <ItemsControl ItemsSource="{Binding DiffLines}" />
-                    </ScrollViewer>
-
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,0"
-                                Visibility="{Binding IsDecided, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}">
-                        <Button Content="Accept" Command="{Binding AcceptCommand}" Padding="8,2" />
-                        <Button Content="Reject" Command="{Binding RejectCommand}" Margin="6,0,0,0" Padding="8,2" />
-                    </StackPanel>
-
-                    <TextBlock Text="{Binding DecisionText}"
-                               Margin="0,6,0,0"
-                               FontStyle="Italic"
-                               Foreground="{DynamicResource MutedForegroundBrush}"
-                               Visibility="{Binding IsDecided, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
-
                     <!-- A PostToolUse hook's report on the file just written (e.g. a linter). -->
                     <TextBlock Text="{Binding HookFeedback, StringFormat='Hook: {0}'}"
                                Margin="0,4,0,0"
@@ -243,6 +219,7 @@
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
+
                     <!-- The diff itself and Accept/Reject now live in the editor tab this proposal's
                          file was opened/focused in (see TextEditorHost's diff review panel) - this
                          card stays a compact status line so the chat scrollback doesn't repeat it. -->

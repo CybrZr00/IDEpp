@@ -276,6 +276,9 @@ public sealed class EditApplicationService
         return null;
     }
 
+    private static int CountLines(string text) =>
+        text.Length == 0 ? 0 : text.ReplaceLineEndings("\n").Split('\n').Length;
+
     /// <summary>Counts overlapping occurrences too - an anchor that matches "aa" twice inside "aaa"
     /// is ambiguous in exactly the way this needs to catch.</summary>
     private static int CountOccurrences(string haystack, string needle)
@@ -300,8 +303,19 @@ public sealed class EditApplicationService
     /// actually writes, and it is reachable from more than one place.
     /// </summary>
     public ApplyResult Apply(
-        EditOperation operation, string fullPath, string expectedOriginalContent, string? workspaceDirectory)
+        EditOperation operation, string fullPath, string expectedOriginalContent, string? workspaceDirectory) =>
+        Apply(operation, fullPath, expectedOriginalContent, workspaceDirectory, out _);
+
+    /// <summary>
+    /// As above, and on a refusal says why in words the model can act on: what the file looks like
+    /// now (its current length) next to what the edit assumed, so the agent can re-read and re-plan
+    /// rather than guess. Null when the edit applied or the reason is fully covered by the result.
+    /// </summary>
+    public ApplyResult Apply(
+        EditOperation operation, string fullPath, string expectedOriginalContent, string? workspaceDirectory,
+        out string? failureDetail)
     {
+        failureDetail = null;
         if (ResolveWithinWorkspace(fullPath, workspaceDirectory) is null)
         {
             return ApplyResult.OutsideWorkspace;
@@ -310,11 +324,16 @@ public sealed class EditApplicationService
         var currentContent = GetCurrentContent(fullPath);
         if (currentContent != expectedOriginalContent)
         {
+            failureDetail = $"The file now has {CountLines(currentContent)} line(s); it had "
+                            + $"{CountLines(expectedOriginalContent)} when this edit was proposed - something "
+                            + "changed it in between (often an earlier edit in the same turn, which shifts "
+                            + "every line number below it).";
             return ApplyResult.Conflict;
         }
 
-        if (!TryComputeResultingContent(operation, currentContent, out var newContent, out _))
+        if (!TryComputeResultingContent(operation, currentContent, out var newContent, out var error))
         {
+            failureDetail = $"{error} The file currently has {CountLines(currentContent)} line(s).";
             return ApplyResult.InvalidRange;
         }
 
