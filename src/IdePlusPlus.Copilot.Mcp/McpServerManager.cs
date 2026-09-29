@@ -71,6 +71,8 @@ public sealed class McpServerManager
         await _reconnectLock.WaitAsync();
         try
         {
+            var solutionDirectory = _solutionDirectory;
+
             List<McpServerConnection> old;
             lock (_connectionsLock)
             {
@@ -85,6 +87,19 @@ public sealed class McpServerManager
 
             var configs = await LoadMergedConfigsAsync();
             var connected = await Task.WhenAll(configs.Select(ConnectOneAsync));
+
+            // Another solution was opened while these were connecting (a server can take a minute to
+            // start). Publishing them would offer the previous solution's project-local tools in the
+            // new solution until the reconnect queued behind this one replaced them.
+            if (!string.Equals(solutionDirectory, _solutionDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var connection in connected)
+                {
+                    await connection.DisposeAsync();
+                }
+
+                return;
+            }
 
             lock (_connectionsLock)
             {
