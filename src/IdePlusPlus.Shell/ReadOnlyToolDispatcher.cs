@@ -25,6 +25,15 @@ public sealed class ReadOnlyToolDispatcher
 {
     private const int CodebaseSearchTopK = 5;
 
+    /// <summary>What find_symbol, find_references and get_diagnostics say while the open solution's
+    /// C# workspace is not loaded - still restoring or loading after the solution was opened, or
+    /// failed to load. Said outright: "no symbol named X" or "not part of the solution" would be
+    /// false, and the model would act on it.</summary>
+    internal const string WorkspaceNotLoadedMessage =
+        "The C# code model for this solution isn't loaded yet - it is still restoring packages or "
+        + "loading after the solution was opened, or it failed to load (the Output pane says which). "
+        + "Use search_codebase, read_file or list_files for now, or build_solution for compiler errors.";
+
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly CodebaseIndexService _codebaseIndexService;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
@@ -115,6 +124,11 @@ public sealed class ReadOnlyToolDispatcher
     private async Task<(bool IsError, string Text)> FindSymbolAsync(
         string name, string solutionDirectory, CancellationToken cancellationToken)
     {
+        if (!_roslynWorkspaceService.IsSolutionLoaded)
+        {
+            return (true, WorkspaceNotLoadedMessage);
+        }
+
         IReadOnlyList<SymbolLocation> symbols;
         try
         {
@@ -138,6 +152,11 @@ public sealed class ReadOnlyToolDispatcher
     private async Task<(bool IsError, string Text)> FindReferencesAsync(
         string name, string solutionDirectory, CancellationToken cancellationToken)
     {
+        if (!_roslynWorkspaceService.IsSolutionLoaded)
+        {
+            return (true, WorkspaceNotLoadedMessage);
+        }
+
         IReadOnlyList<SymbolLocation> declarations;
         IReadOnlyList<SymbolLocation> references;
         int totalReferences;
@@ -215,6 +234,11 @@ public sealed class ReadOnlyToolDispatcher
         if (!File.Exists(fullPath))
         {
             return (true, $"File not found: {file}");
+        }
+
+        if (!_roslynWorkspaceService.IsSolutionLoaded)
+        {
+            return (true, WorkspaceNotLoadedMessage);
         }
 
         if (!_roslynWorkspaceService.IsAnalysed(fullPath))

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using IdePlusPlus.Editor;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
@@ -55,6 +56,15 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     private Solution _currentSolution;
     private bool _disposed;
 
+    // Which solution the IDE has open, and which one _currentSolution actually holds. Kept apart
+    // because they differ for a while after every switch - the IDE restores packages before this
+    // loads anything - and in that window, or after a load that failed, or when an earlier switch's
+    // slower load finishes last, every answer would otherwise come from the previous solution.
+    // Readers compare the two at the moment they read, so no ordering between a load finishing and
+    // a switch being announced can make a stale solution look current.
+    private volatile string? _expectedSolutionPath;
+    private volatile string? _loadedSolutionPath;
+
     public RoslynWorkspaceService()
     {
         _workspace = CreateWorkspace();
@@ -82,24 +92,69 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
         WorkspaceFailed?.Invoke(e.Diagnostic.Message);
 
     /// <summary>
+    /// Announces the solution the IDE now has open, before (possibly well before) the matching
+    /// <see cref="LoadSolutionAsync"/> - the IDE restores packages first, which can take minutes.
+    /// From this call until that load completes, <see cref="IsSolutionLoaded"/> is false and nothing
+    /// here answers from the solution loaded previously: find_symbol and find_references used to
+    /// return the previous solution's code, with paths made relative to the new one.
+    /// </summary>
+    public void SetExpectedSolution(string? solutionPath) => _expectedSolutionPath = NormalizePath(solutionPath);
+
+    /// <summary>Whether the solution the IDE has open is the one loaded here - false while it is
+    /// still loading, and after a load that failed.</summary>
+    public bool IsSolutionLoaded =>
+        _loadedSolutionPath is { } loaded
+        && string.Equals(loaded, _expectedSolutionPath, StringComparison.OrdinalIgnoreCase);
+
+    private static string? NormalizePath(string? path) => path is null ? null : Path.GetFullPath(path);
+
+    private bool IsExpected(string normalizedPath) =>
+        string.Equals(normalizedPath, _expectedSolutionPath, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Loads (or reloads) a solution. Safe to call again for a solution reload: MSBuildWorkspace is
     /// explicitly documented as not supporting being pointed at a second, unrelated solution on the
     /// same instance, so a reload disposes the old workspace and creates a fresh one before opening.
     /// Genuinely cancellable via <paramref name="cancellationToken"/> - OpenSolutionAsync itself
     /// respects it, and this method never swallows the resulting OperationCanceledException.
+    ///
+    /// <para>Also makes <paramref name="solutionPath"/> the expected solution (see
+    /// <see cref="SetExpectedSolution"/>). The previous solution is dropped before the new one is
+    /// opened, so a load that fails or is cancelled leaves nothing loaded rather than leaving the
+    /// previous solution answering indefinitely; and a load overtaken by a later one while it waited
+    /// or ran is discarded rather than installed over it.</para>
     /// </summary>
     public async Task LoadSolutionAsync(string solutionPath, CancellationToken cancellationToken = default)
     {
+        var normalizedPath = NormalizePath(solutionPath)!;
+        _expectedSolutionPath = normalizedPath;
+
         await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (!IsExpected(normalizedPath))
+            {
+                return;
+            }
+
             _workspaceFailedRegistration.Dispose();
             _workspace.Dispose();
             _workspace = CreateWorkspace();
 
+            _loadedSolutionPath = null;
+            _currentSolution = _workspace.CurrentSolution;
+            _documentIdsByPath.Clear();
+            CancelPendingDiagnostics();
+
             var solution = await _workspace
                 .OpenSolutionAsync(solutionPath, progress: null, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (!IsExpected(normalizedPath))
+            {
+                return;
+            }
+
             _currentSolution = solution;
 
             var documentIdsByPath = new Dictionary<string, DocumentId>(StringComparer.OrdinalIgnoreCase);
@@ -118,16 +173,39 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
                 }
             }
 
-            _documentIdsByPath.Clear();
             foreach (var (path, id) in documentIdsByPath)
             {
                 _documentIdsByPath[path] = id;
             }
+
+            _loadedSolutionPath = normalizedPath;
         }
         finally
         {
             _workspaceLock.Release();
         }
+    }
+
+    /// <summary>Debounced recomputes still queued for the solution being replaced would otherwise
+    /// resolve their document ids against the new one. Cancelled but not disposed: a recompute
+    /// already past its delay still reads the token, which a disposed source throws on.</summary>
+    private void CancelPendingDiagnostics()
+    {
+        foreach (var filePath in _pendingDiagnostics.Keys)
+        {
+            if (_pendingDiagnostics.TryRemove(filePath, out var pending))
+            {
+                pending.Cancel();
+            }
+        }
+    }
+
+    /// <summary>The document id for a file of the solution the IDE has open - never one left over
+    /// from a solution that has since been replaced, or is still being replaced.</summary>
+    private bool TryGetCurrentDocumentId(string filePath, [NotNullWhen(true)] out DocumentId? documentId)
+    {
+        documentId = null;
+        return IsSolutionLoaded && _documentIdsByPath.TryGetValue(filePath, out documentId);
     }
 
     /// <inheritdoc />
@@ -171,6 +249,13 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
         await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // The open solution isn't loaded (yet): adding the file to whatever is here would put it
+            // in the previous solution.
+            if (!IsSolutionLoaded)
+            {
+                return false;
+            }
+
             // Already known - a reload raced this, or the same file was added twice. Not a failure:
             // the caller's goal (this file is analysed) already holds.
             if (_documentIdsByPath.ContainsKey(filePath))
@@ -261,14 +346,16 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     /// </summary>
     internal async Task<Document?> GetDocumentWithTextAsync(string filePath, string text, CancellationToken cancellationToken)
     {
-        if (!_documentIdsByPath.TryGetValue(filePath, out var documentId))
-        {
-            return null;
-        }
-
         await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Looked up under the lock: a reload replaces both the id map and the solution, and an id
+            // read before it would be applied to the solution after it.
+            if (!TryGetCurrentDocumentId(filePath, out var documentId) || !_currentSolution.ContainsDocument(documentId))
+            {
+                return null;
+            }
+
             _currentSolution = _currentSolution.WithDocumentText(documentId, SourceText.From(text), PreservationMode.PreserveIdentity);
             return _currentSolution.GetDocument(documentId);
         }
@@ -295,11 +382,6 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     public async Task<IReadOnlyList<LiveDiagnostic>> GetDiagnosticsAsync(
         string filePath, string? unsavedText = null, CancellationToken cancellationToken = default)
     {
-        if (!_documentIdsByPath.TryGetValue(filePath, out var documentId))
-        {
-            return [];
-        }
-
         Document? document;
         if (unsavedText is not null)
         {
@@ -310,7 +392,9 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
             await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                document = _currentSolution.GetDocument(documentId);
+                document = TryGetCurrentDocumentId(filePath, out var documentId)
+                    ? _currentSolution.GetDocument(documentId)
+                    : null;
             }
             finally
             {
@@ -344,7 +428,10 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     public async Task<IReadOnlyList<SymbolLocation>> FindSymbolsAsync(
         string name, int maxResults, CancellationToken cancellationToken = default)
     {
-        var solution = await GetSolutionSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (await GetSolutionSnapshotAsync(cancellationToken).ConfigureAwait(false) is not { } solution)
+        {
+            return [];
+        }
 
         var symbols = await SymbolFinder
             .FindSourceDeclarationsAsync(solution, name, ignoreCase: false, cancellationToken)
@@ -372,7 +459,10 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     public async Task<(IReadOnlyList<SymbolLocation> Declarations, IReadOnlyList<SymbolLocation> References, int TotalReferences)>
         FindReferencesAsync(string name, int maxResults, CancellationToken cancellationToken = default)
     {
-        var solution = await GetSolutionSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (await GetSolutionSnapshotAsync(cancellationToken).ConfigureAwait(false) is not { } solution)
+        {
+            return ([], [], 0);
+        }
 
         var symbols = (await SymbolFinder
             .FindSourceDeclarationsAsync(solution, name, ignoreCase: false, cancellationToken)
@@ -406,14 +496,16 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
         return (declarations, references.Take(maxResults).ToList(), references.Count);
     }
 
-    private async Task<Solution> GetSolutionSnapshotAsync(CancellationToken cancellationToken)
+    /// <summary>Null while the solution the IDE has open is not the one loaded here - see
+    /// <see cref="IsSolutionLoaded"/>.</summary>
+    private async Task<Solution?> GetSolutionSnapshotAsync(CancellationToken cancellationToken)
     {
         // Solution is an immutable snapshot, so the lock only has to cover reading the field - the
         // search itself runs outside it and cannot be disturbed by a concurrent edit push.
         await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return _currentSolution;
+            return IsSolutionLoaded ? _currentSolution : null;
         }
         finally
         {
@@ -449,11 +541,11 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
 
     /// <summary>Whether a solution has been loaded and this file is part of it - lets a caller say
     /// "not analysed" rather than reporting a clean bill of health for a file nobody looked at.</summary>
-    public bool IsAnalysed(string filePath) => _documentIdsByPath.ContainsKey(filePath);
+    public bool IsAnalysed(string filePath) => TryGetCurrentDocumentId(filePath, out _);
 
     private void ScheduleDiagnostics(string filePath, string text)
     {
-        if (!_documentIdsByPath.ContainsKey(filePath))
+        if (!TryGetCurrentDocumentId(filePath, out _))
         {
             return;
         }
