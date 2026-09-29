@@ -15,6 +15,7 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.Infrastructure.Hooks;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
@@ -174,6 +175,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly ShellCommandRunner _shellCommandRunner = new();
     private readonly WebContentFetcher _webContentFetcher = new();
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
+    private readonly HookService _hookService;
+
+    /// <summary>Auto Mode accepts for the turn being streamed. With a PreToolUse hook configured an
+    /// accept is genuinely asynchronous, and the turn must not be judged (did every edit apply?)
+    /// until they have all finished.</summary>
+    private readonly List<Task> _pendingAutoAccepts = [];
 
     /// <summary>Commands the user has already approved this session, so an agentic loop that runs
     /// the same command twice asks once. Keyed on the exact command text - a different command is a
@@ -217,7 +224,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         TestRunService testRunService,
         RoslynWorkspaceService roslynWorkspaceService,
         WorkspaceFileReader workspaceFileReader,
-        ReadOnlyToolDispatcher readOnlyToolDispatcher)
+        ReadOnlyToolDispatcher readOnlyToolDispatcher,
+        HookService hookService)
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -236,6 +244,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _testRunService = testRunService;
         _roslynWorkspaceService = roslynWorkspaceService;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
+        _hookService = hookService;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -372,6 +381,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _solutionPath = solutionPath;
         _currentConfiguration = currentConfiguration;
         _solutionDirectory = directory;
+        _hookService.SetSolution(directory);
         if (directory is not null)
         {
             _codebaseIndexService.LoadFromDisk(ProjectMemoryStore.IndexFilePath(directory));
@@ -643,9 +653,64 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
+    /// <summary>
+    /// Runs a tool call inside the user's PreToolUse/PostToolUse hooks. A PreToolUse veto means the
+    /// tool never runs and the model is told why; PostToolUse feedback is appended to the tool's own
+    /// result, so the model reads it in the same breath as the outcome it is commenting on.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> ExecuteToolAsync(PendingMcpCall call, CancellationToken cancellationToken)
+    {
+        var hooksBefore = _hookService.MayHaveHooks(HookEvents.PreToolUse);
+        var hooksAfter = _hookService.MayHaveHooks(HookEvents.PostToolUse);
+        if (!hooksBefore && !hooksAfter)
+        {
+            return await ExecuteToolCoreAsync(call, cancellationToken);
+        }
+
+        var toolInput = TryParseToolArguments(call.Arguments.ToString(), out var parsed) && parsed is JsonObject obj
+            ? obj
+            : [];
+
+        if (hooksBefore)
+        {
+            var before = await _hookService.RunAsync(
+                HookEvents.PreToolUse, call.Name!, toolInput, null, false, cancellationToken);
+            ReportHookNotice(before);
+            if (before.Block)
+            {
+                return (true,
+                    $"Blocked by a PreToolUse hook, so '{call.Name}' was not run. Its reason: {before.Feedback}");
+            }
+        }
+
+        var result = await ExecuteToolCoreAsync(call, cancellationToken);
+
+        if (hooksAfter)
+        {
+            var after = await _hookService.RunAsync(
+                HookEvents.PostToolUse, call.Name!, toolInput, result.Text, result.IsError, cancellationToken);
+            ReportHookNotice(after);
+            if (after.Feedback is not null)
+            {
+                result = (result.IsError,
+                    $"{result.Text}\n\nA PostToolUse hook reported - act on it if it describes a problem:\n{after.Feedback}");
+            }
+        }
+
+        return result;
+    }
+
+    private void ReportHookNotice(HookDecision decision)
+    {
+        if (decision.Notice is { } notice)
+        {
+            _dispatcher.Invoke(() => StatusMessage = notice);
+        }
+    }
+
     /// <summary>Routes a tool call to a plugin's chat tool, the local read-only workspace tools, or
     /// out to an MCP server.</summary>
-    private async Task<(bool IsError, string Text)> ExecuteToolAsync(PendingMcpCall call, CancellationToken cancellationToken)
+    private async Task<(bool IsError, string Text)> ExecuteToolCoreAsync(PendingMcpCall call, CancellationToken cancellationToken)
     {
         // Checked first, before the MCP fallback below - a plugin tool's qualified name
         // ("plugin__{PluginName}__{Name}") is never a workspace tool name and _mcpServerManager has
@@ -1326,6 +1391,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             });
         }
 
+        // A no-op unless a PreToolUse hook made an accept asynchronous: the loop's next decision
+        // depends on WasApplied, which is only final once every accept has finished.
+        var autoAccepts = _pendingAutoAccepts.ToArray();
+        _pendingAutoAccepts.Clear();
+        await Task.WhenAll(autoAccepts);
+
         return new TurnResult(
             mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList(),
             proposalsByToolCallId.Values.Where(p => p.IsComplete).ToList(),
@@ -1382,6 +1453,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         if (!proposalsByToolCallId.TryGetValue(proposalEvent.ToolCallId, out var proposal))
         {
             proposal = new EditProposalViewModel(proposalEvent.ToolCallId, _editApplicationService);
+            AttachEditHooks(proposal);
             proposalsByToolCallId[proposalEvent.ToolCallId] = proposal;
             Messages.Add(proposal);
         }
@@ -1412,7 +1484,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 }
                 else
                 {
-                    proposal.AcceptCommand.Execute(null);
+                    _pendingAutoAccepts.Add(proposal.AcceptCommand.ExecuteAsync(null));
                 }
             }
         }
@@ -1420,6 +1492,81 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             proposal.UpdateStreaming(proposalEvent);
         }
+    }
+
+    /// <summary>
+    /// Points a proposal at the hooks, but only for events something is configured for - an unset
+    /// hook keeps Accept synchronous. A PostToolUse hook reads the file from disk, and applying an
+    /// edit to an open document only changes its buffer, so unsaved documents are written out first
+    /// (the same reason a build saves them).
+    /// </summary>
+    private void AttachEditHooks(EditProposalViewModel proposal)
+    {
+        if (_hookService.MayHaveHooks(HookEvents.PreToolUse))
+        {
+            proposal.PreApplyHook = async (operation, fullPath) =>
+            {
+                var decision = await _hookService.RunAsync(
+                    HookEvents.PreToolUse, ProposeEditTool.ToolName, EditInput(operation),
+                    null, false, _streamCancellation?.Token ?? CancellationToken.None);
+                ReportHookNotice(decision);
+                return decision.Block ? decision.Feedback : null;
+            };
+        }
+
+        if (_hookService.MayHaveHooks(HookEvents.PostToolUse))
+        {
+            proposal.PostApplyHook = async (operation, fullPath) =>
+            {
+                _editApplicationService.SaveDirtyDocuments();
+
+                var decision = await _hookService.RunAsync(
+                    HookEvents.PostToolUse, ProposeEditTool.ToolName, EditInput(operation),
+                    $"Applied to {operation.FilePath}.", false, _streamCancellation?.Token ?? CancellationToken.None);
+                ReportHookNotice(decision);
+
+                // In manual mode the accept comes after the turn has ended, so nothing would carry the
+                // feedback to the model. Recording it as a message means it is in the history the next
+                // request replays - the same trick the review markers use.
+                if (decision.Feedback is { } feedback && !IsStreaming)
+                {
+                    Messages.Add(new ChatMessageViewModel(ChatRole.User)
+                    {
+                        Text = $"[A PostToolUse hook reported on {operation.FilePath} after the edit was applied]\n{feedback}",
+                    });
+                    PersistChatHistory();
+                }
+
+                return decision.Feedback;
+            };
+        }
+    }
+
+    private static JsonObject EditInput(EditOperation operation)
+    {
+        var input = new JsonObject
+        {
+            ["file"] = operation.FilePath,
+            ["mode"] = operation.Mode,
+            ["new_text"] = operation.NewText,
+        };
+
+        if (operation.OldText is not null)
+        {
+            input["old_text"] = operation.OldText;
+        }
+
+        if (operation.StartLine is { } start)
+        {
+            input["start_line"] = start;
+        }
+
+        if (operation.EndLine is { } end)
+        {
+            input["end_line"] = end;
+        }
+
+        return input;
     }
 
     private void HandlePlanToolCallDelta(

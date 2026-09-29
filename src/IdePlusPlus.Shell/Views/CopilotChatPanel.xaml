@@ -208,6 +208,25 @@
                                FontStyle="Italic"
                                Foreground="{DynamicResource MutedForegroundBrush}"
                                Visibility="{Binding IsDecided, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+
+                    <!-- A PostToolUse hook's report on the file just written (e.g. a linter). -->
+                    <TextBlock Text="{Binding HookFeedback, StringFormat='Hook: {0}'}"
+                               Margin="0,4,0,0"
+                               FontFamily="Consolas"
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedForegroundBrush}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HookFeedback}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </StackPanel>
             </Border>
         </DataTemplate>

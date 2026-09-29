@@ -27,6 +27,19 @@ public sealed partial class EditProposalViewModel : ObservableObject
 
     public string ToolCallId { get; }
 
+    /// <summary>
+    /// Runs before an accepted edit is written and returns a reason to veto it, or null to let it
+    /// through. Unset (the usual case) keeps Accept fully synchronous - the async path only exists
+    /// when a PreToolUse hook is configured, because Auto Mode accepts several proposals in a row
+    /// while streaming and must not start interleaving them for nothing.
+    /// </summary>
+    public Func<EditOperation, string, Task<string?>>? PreApplyHook { get; set; }
+
+    /// <summary>Runs after an edit was written and returns feedback for the model, or null.</summary>
+    public Func<EditOperation, string, Task<string?>>? PostApplyHook { get; set; }
+
+    private bool _isApplying;
+
     [ObservableProperty]
     private string filePath = "generating...";
 
@@ -190,10 +203,48 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private static int CountLines(string text) =>
         text.Length == 0 ? 0 : text.Replace("\r\n", "\n").Split('\n').Length;
 
-    private bool CanDecide() => IsComplete && !IsDecided;
+    private bool CanDecide() => IsComplete && !IsDecided && !_isApplying;
 
     [RelayCommand(CanExecute = nameof(CanDecide))]
-    private void Accept()
+    private async Task AcceptAsync()
+    {
+        _isApplying = true;
+        RejectCommand.NotifyCanExecuteChanged();
+        try
+        {
+            if (PreApplyHook is { } preApply
+                && await preApply(_operation!, _fullPath!) is { } vetoReason)
+            {
+                IsDecided = true;
+                DecisionText = "Blocked by a hook";
+                ToolResultText =
+                    $"Not applied to {FilePath}: a PreToolUse hook blocked this edit. Its reason: {vetoReason}";
+                return;
+            }
+
+            Apply();
+        }
+        finally
+        {
+            _isApplying = false;
+            RejectCommand.NotifyCanExecuteChanged();
+        }
+
+        if (WasApplied && PostApplyHook is { } postApply
+            && await postApply(_operation!, _fullPath!) is { Length: > 0 } feedback)
+        {
+            HookFeedback = feedback;
+            ToolResultText +=
+                $"\n\nA PostToolUse hook reported on this file - act on it if it describes a problem:\n{feedback}";
+        }
+    }
+
+    /// <summary>What a PostToolUse hook said about the file after this edit landed, shown under the
+    /// diff so it is visible to the user as well as the model.</summary>
+    [ObservableProperty]
+    private string? hookFeedback;
+
+    private void Apply()
     {
         var result = _applicationService.Apply(
             _operation!, _fullPath!, _originalContentSnapshot!, _workspaceDirectory);

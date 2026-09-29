@@ -100,6 +100,55 @@ The Copilot Chat pane needs a model provider before it can do anything, configur
 The Web/Shell tool toggles, custom system prompt, and scheduled automations are all configured from
 the Copilot Chat pane and its Scheduled Automations tab directly.
 
+### Hooks (run your own scripts around the Copilot's tool calls)
+
+Hooks use the same `hooks` JSON as Claude Code, so an existing config carries over. Put it in
+`%LOCALAPPDATA%\IdePlusPlus\settings.json` (yours, always trusted) and/or
+`<solution>\.ideplusplus\copilot\settings.json` (checked in with a repo — IDE++ shows you its
+commands and asks before running them, and asks again if the file changes). Hooks are loaded when a
+solution is opened.
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["C:\\path\\to\\hook_written_file.py", "--mode", "check"],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- **Events:** `PreToolUse` (can veto the call) and `PostToolUse` (its feedback is handed to the
+  model). Other Claude Code events are ignored with a warning in the Output pane.
+- **Matchers** are anchored regexes tested against IDE++'s tool name *and* the Claude Code
+  equivalent: `propose_edit` is `Write` (whole-file) or `Edit` (anything else), `run_command` is
+  `Bash`, `read_file` is `Read`. MCP and plugin tools match by their own name.
+- **`args`** starts the program directly, with no shell, so Windows paths with spaces need no
+  quoting (`python`, or `py` if that's what you have on PATH). Omit `args` and `command` runs as a
+  PowerShell command line instead. `${CLAUDE_PROJECT_DIR}` expands to the solution directory, which
+  is also the working directory and is exported as `CLAUDE_PROJECT_DIR`/`IDEPLUSPLUS_PROJECT_DIR`.
+- **Input:** the event as JSON on stdin — `hook_event_name`, `tool_name`, `tool_input` (with
+  `file_path`, `content`/`old_string`/`new_string` for edits, `command` for shell), `cwd`, and for
+  `PostToolUse` a `tool_response`. Python runs with UTF-8 stdio.
+- **Output:** exit `0` is fine (stdout is ignored unless it is a JSON object with `decision: "block"`,
+  `hookSpecificOutput.permissionDecision: "deny"`, or `hookSpecificOutput.additionalContext`); exit
+  `2` blocks with stderr as the reason; any other exit or a timeout is reported and never blocks.
+- Unsaved editor buffers are saved before a `PostToolUse` hook runs on an edit, since the script
+  reads from disk. Hooks do not run for sub-agents or scheduled automations.
+
+Separately, the opt-in `run_command` tool (enable it in the Copilot Chat pane; each command is
+confirmed) already lets the Copilot run `python` or anything else on PATH.
+
 ### Extending IDE++
 - **Plugins** implement `IIdePlugin`/`IPluginHost` from `IdePlusPlus.PluginContracts` —
   `samples/SamplePlugin` is a small, complete example (a syntax highlighting definition plus a

@@ -106,6 +106,13 @@ public partial class App : Application
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
 
+        // Resolved before the chat pane: SetSolutionContext (which loads a solution's hooks and may
+        // prompt) can run as soon as the pane exists, and the prompt has to be wired by then.
+        var hookService = _serviceProvider.GetRequiredService<HookService>();
+        hookService.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        hookService.ProjectTrustPrompt = request =>
+            dispatcher.Invoke(() => Task.FromResult(ConfirmProjectHooks(mainWindow, request)));
+
         var copilotChatPane = _serviceProvider.GetRequiredService<CopilotChatPaneViewModel>();
         copilotChatPane.ShellCommandApprovalPrompt =
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
@@ -147,6 +154,37 @@ public partial class App : Application
              the file changes.
              """,
             "IDE++ - run this solution's MCP servers?",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        return result == MessageBoxResult.Yes;
+    }
+
+    /// <summary>
+    /// Asks before running the hooks a solution ships in its own settings file. A hook runs on your
+    /// machine whenever the assistant edits a file or calls a tool, so the actual command lines are
+    /// listed rather than summarized. Defaults to No, and a dismissed dialog is a No.
+    /// </summary>
+    private static bool ConfirmProjectHooks(Window owner, HookTrustRequest request)
+    {
+        var commands = string.Join(Environment.NewLine, request.CommandLines.Select(c => $"    {c}"));
+
+        var result = MessageBox.Show(
+            owner,
+            $"""
+             This solution ships its own hooks:
+
+             {request.ConfigPath}
+
+             These commands would run on your machine as the AI assistant edits files and calls tools:
+
+             {commands}
+
+             Only allow this if you trust the source of this solution. You will be asked again if
+             the file changes.
+             """,
+            "IDE++ - run this solution's hooks?",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);
@@ -286,6 +324,7 @@ public partial class App : Application
         services.AddSingleton<LmStudioChatClient>();
         services.AddSingleton<McpServerConfigStore>();
         services.AddSingleton<McpProjectTrustStore>();
+        services.AddSingleton<HookService>();
         services.AddSingleton<McpServerManager>();
         services.AddSingleton<DeepSeekFimClient>();
         services.AddSingleton<EditApplicationService>();
