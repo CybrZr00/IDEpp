@@ -467,18 +467,24 @@
                  an indeterminate spinner plus what it's doing right now, visible for the whole
                  duration of a turn (including a multi-iteration tool loop), not just the first
                  response chunk. -->
-            <StackPanel Orientation="Horizontal"
-                        Margin="0,4,0,0"
-                        Visibility="{Binding IsStreaming, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
-                <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,6,0" />
-                <TextBlock Text="{Binding CurrentActivity}" FontSize="11" VerticalAlignment="Center" />
-                <Button Content="■ Stop"
+            <!-- Stop is docked so it always stays on screen; it is the activity text that gets trimmed
+                 when an MCP or plugin tool's long name doesn't fit a narrow pane. -->
+            <DockPanel Margin="0,4,0,0"
+                       LastChildFill="True"
+                       Visibility="{Binding IsStreaming, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                <ProgressBar DockPanel.Dock="Left" IsIndeterminate="True" Width="16" Height="16" Margin="0,0,6,0" />
+                <Button DockPanel.Dock="Right"
+                        Content="■ Stop"
                         Command="{Binding CancelStreamingCommand}"
                         Margin="8,0,0,0"
                         Padding="6,0"
                         FontSize="11"
                         ToolTip="Stop the current response (Esc)" />
-            </StackPanel>
+                <TextBlock Text="{Binding CurrentActivity}"
+                           FontSize="11"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+            </DockPanel>
         </StackPanel>
 
         <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">

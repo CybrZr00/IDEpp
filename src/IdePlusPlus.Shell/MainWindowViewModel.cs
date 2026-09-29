@@ -75,6 +75,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// finishing last and winning.</summary>
     private int _solutionLoadGeneration;
 
+    /// <summary>The solution whose C# workspace load (which waits for the package restore) hasn't
+    /// finished yet - see RegisterNewFilesForAnalysisAsync.</summary>
+    private string? _roslynLoadPendingFor;
+
     /// <summary>Every named startup configuration saved for the current solution (see
     /// <see cref="StartupConfigurationStore"/>) - what the Startup Configuration Manager dialog edits.
     /// Run/Start Debugging always act on <see cref="ActiveConfiguration"/>, never on this list directly.</summary>
@@ -723,6 +727,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        // The code model hasn't finished loading yet. When it does it reads the project from disk,
+        // where the new file already is, so no reopen is needed - and the one note allowed per
+        // solution is kept for a refusal that means it.
+        if (_roslynLoadPendingFor is { } pending && IsCurrentSolution(pending))
+        {
+            return;
+        }
+
         _warnedAboutNewFileAnalysis = true;
         Output.AppendLine(
             "Note: IntelliSense and diagnostics for files added to this project start working once " +
@@ -964,12 +976,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     Output.AppendLine($"Cancelled - {Path.GetFileName(CurrentSolutionPath)} is still open.");
                     return;
                 }
-
-                // Straight away rather than when the (restore-delayed) Roslyn load starts: until that
-                // finishes, the copilot's symbol tools must say the code model is loading, not answer
-                // from the previous solution.
-                _roslynWorkspaceService.SetExpectedSolution(solutionPath);
             }
+
+            // From here the switch goes ahead. What could still answer for the previous solution is
+            // pointed at this one before anything is loaded for it: a scheduled run still going for
+            // the previous solution is cancelled rather than left searching this one's index, and the
+            // C# workspace says it is loading - rather than answering from the previous solution -
+            // until its restore-delayed load finishes.
+            _scheduledAutomationService.SetSolutionDirectory(Path.GetDirectoryName(solutionPath));
+            _roslynWorkspaceService.SetExpectedSolution(solutionPath);
 
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = solutionPath;
@@ -993,7 +1008,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // Picks up a project-local .ideplusplus/copilot/mcp-servers.json, if the solution has one.
             _mcpServerManager.SetSolutionDirectory(solutionDirectory);
             _ = _mcpServerManager.ReconnectAllAsync();
-            _scheduledAutomationService.SetSolutionDirectory(solutionDirectory);
             CopilotChat.SetTestProjects(root.Flatten()
                 .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, FullPath: not null })
                 .Select(n => n.FullPath!)
@@ -1066,6 +1080,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // project into MSBuildWorkspace tends to produce a wall of false CS0246-style errors for
             // every missing package reference, which would make the Error List momentarily useless.
             // Still entirely fire-and-forget from here: neither path blocks solution load itself.
+            _roslynLoadPendingFor = solutionPath;
             if (restoreOnLoad)
             {
                 _ = NuGetRestoreThenLoadRoslynWorkspaceAsync(solutionPath);
@@ -1113,15 +1128,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// to log every occurrence to Output without drowning out everything else.</summary>
     private async Task LoadRoslynWorkspaceAsync(string solutionPath)
     {
-        // A restore can take minutes, and the user may have opened another solution by the time it
-        // finishes - loading this one's workspace then would replace the one they are working in.
-        if (!IsCurrentSolution(solutionPath))
-        {
-            return;
-        }
-
         try
         {
+            // A restore can take minutes, and the user may have opened another solution by the time
+            // it finishes - loading this one's workspace then would replace the one they are working in.
+            if (!IsCurrentSolution(solutionPath))
+            {
+                return;
+            }
+
             await _roslynWorkspaceService.LoadSolutionAsync(solutionPath);
             if (IsCurrentSolution(solutionPath))
             {
@@ -1131,6 +1146,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (Exception ex)
         {
             Output.AppendLine($"Roslyn workspace load failed (IntelliSense/diagnostics may be unavailable): {ex.Message}");
+        }
+        finally
+        {
+            if (_roslynLoadPendingFor == solutionPath)
+            {
+                _roslynLoadPendingFor = null;
+            }
         }
     }
 

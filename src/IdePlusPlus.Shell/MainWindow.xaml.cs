@@ -423,7 +423,11 @@ public partial class MainWindow : Window
 
     private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();
 
-    private void MainWindow_OnDrop(object sender, DragEventArgs e)
+    /// <summary>A dropped solution is opened first, and anything dropped with it only once it has:
+    /// opening a different solution closes every open document, which would otherwise include the
+    /// files that came in the same drop. Only the last solution in a drop is opened - each would
+    /// replace the one before.</summary>
+    private async void MainWindow_OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths)
         {
@@ -431,17 +435,17 @@ public partial class MainWindow : Window
         }
 
         var viewModel = (MainWindowViewModel)DataContext;
-        foreach (var path in paths.Where(File.Exists))
+        var existing = paths.Where(File.Exists).ToList();
+        static bool IsSolution(string path) => Path.GetExtension(path) is ".sln" or ".slnx";
+
+        if (existing.LastOrDefault(IsSolution) is { } solutionPath)
         {
-            var extension = Path.GetExtension(path);
-            if (extension is ".sln" or ".slnx")
-            {
-                _ = viewModel.LoadSolutionAsync(path);
-            }
-            else
-            {
-                viewModel.OpenPath(path);
-            }
+            await viewModel.LoadSolutionAsync(solutionPath);
+        }
+
+        foreach (var path in existing.Where(path => !IsSolution(path)))
+        {
+            viewModel.OpenPath(path);
         }
     }
 

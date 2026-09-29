@@ -45,14 +45,16 @@ public sealed class ScheduledAutomationService : IDisposable
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly Timer _timer;
 
-    private string? _solutionDirectory;
+    /// <summary>The open solution's directory and the cancellation for runs made in it, replaced
+    /// together so a run can never pair one solution's directory with another's token. A different
+    /// solution cancels the previous scope's runs: a run belongs to the solution it started in, but the
+    /// code index and C# workspace it searches are shared and move on to the new one - left running,
+    /// it would answer from the new solution's code and save that into the old solution's run log.</summary>
+    private volatile RunScope _scope = new(null, new CancellationTokenSource());
+
     private volatile bool _isTicking;
 
-    /// <summary>Cancelled when a different solution is opened. A run belongs to the solution it
-    /// started in, but the code index and C# workspace it searches are shared and move on to the new
-    /// solution - left running, it would answer from the new solution's code and save that into the
-    /// old solution's run log.</summary>
-    private volatile CancellationTokenSource _runCancellation = new();
+    private sealed record RunScope(string? SolutionDirectory, CancellationTokenSource Cancellation);
 
     /// <summary>Raised from whatever thread a run happened to finish on (the timer's thread pool, or
     /// whichever thread called RunNowAsync) - never the UI thread. A subscriber that touches UI-bound
@@ -85,25 +87,24 @@ public sealed class ScheduledAutomationService : IDisposable
 
     public void SetSolutionDirectory(string? solutionDirectory)
     {
-        if (!string.Equals(_solutionDirectory, solutionDirectory, StringComparison.OrdinalIgnoreCase))
+        var previous = _scope;
+        if (!string.Equals(previous.SolutionDirectory, solutionDirectory, StringComparison.OrdinalIgnoreCase))
         {
-            var previous = _runCancellation;
-            _runCancellation = new CancellationTokenSource();
-            previous.Cancel();
+            _scope = new RunScope(solutionDirectory, new CancellationTokenSource());
+            previous.Cancellation.Cancel();
         }
 
-        _solutionDirectory = solutionDirectory;
         SchedulesChanged?.Invoke();
     }
 
     public IReadOnlyList<ScheduleDefinition> ListSchedules() =>
-        _solutionDirectory is { } solutionDirectory ? _scheduleStore.Load(solutionDirectory) : [];
+        _scope.SolutionDirectory is { } solutionDirectory ? _scheduleStore.Load(solutionDirectory) : [];
 
     /// <summary>Adds a new schedule, or replaces an existing one of the same name - a schedule name
     /// is its identity, the same way a skill's filename is.</summary>
     public void SaveSchedule(ScheduleDefinition schedule)
     {
-        if (_solutionDirectory is not { } solutionDirectory)
+        if (_scope.SolutionDirectory is not { } solutionDirectory)
         {
             return;
         }
@@ -118,7 +119,7 @@ public sealed class ScheduledAutomationService : IDisposable
 
     public void DeleteSchedule(string name)
     {
-        if (_solutionDirectory is not { } solutionDirectory)
+        if (_scope.SolutionDirectory is not { } solutionDirectory)
         {
             return;
         }
@@ -130,21 +131,24 @@ public sealed class ScheduledAutomationService : IDisposable
 
     public async Task RunNowAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (_solutionDirectory is not { } solutionDirectory)
+        var scope = _scope;
+        if (scope.SolutionDirectory is not { } solutionDirectory)
         {
             return;
         }
 
         if (_scheduleStore.Load(solutionDirectory).FirstOrDefault(s => s.Name == name) is { } schedule)
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runCancellation.Token);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, scope.Cancellation.Token);
             try
             {
                 await RunScheduleAsync(solutionDirectory, schedule, linked.Token);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (scope.Cancellation.IsCancellationRequested
+                                                     && !cancellationToken.IsCancellationRequested)
             {
-                // Another solution was opened mid-run - see _runCancellation. Nothing is saved.
+                // Another solution was opened mid-run - see _scope. Nothing is saved. Any other
+                // cancellation (a request timing out, say) still surfaces as it always did.
             }
         }
     }
@@ -157,13 +161,14 @@ public sealed class ScheduledAutomationService : IDisposable
     /// </summary>
     private async Task TickAsync()
     {
-        if (_isTicking || !IsEnabled || _solutionDirectory is not { } solutionDirectory)
+        var scope = _scope;
+        if (_isTicking || !IsEnabled || scope.SolutionDirectory is not { } solutionDirectory)
         {
             return;
         }
 
         _isTicking = true;
-        var cancellationToken = _runCancellation.Token;
+        var cancellationToken = scope.Cancellation.Token;
         try
         {
             var now = DateTimeOffset.Now;

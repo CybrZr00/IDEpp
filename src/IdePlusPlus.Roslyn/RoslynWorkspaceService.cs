@@ -228,9 +228,10 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     /// naturally dropped on the next solution load, which is correct: by then MSBuildWorkspace reads
     /// the file from disk itself.</para>
     /// </summary>
-    /// <returns>False when the file could not be added - the project was not one this workspace
-    /// loaded, or the file is not a source file in that project's language - so the caller can say so
-    /// rather than promising analysis that will not arrive.</returns>
+    /// <returns>False when the file could not be added - the solution the IDE has open isn't loaded
+    /// (yet), the project was not one this workspace loaded, or the file is not a source file in that
+    /// project's language - so the caller can say so rather than promising analysis that will not
+    /// arrive.</returns>
     public async Task<bool> NotifyDocumentAddedAsync(
         string filePath, string projectPath, CancellationToken cancellationToken = default)
     {

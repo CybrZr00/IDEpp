@@ -73,6 +73,12 @@ public sealed class SolutionSwitchIntegrationTests
         service.IsSolutionLoaded.ShouldBeFalse();
         (await service.FindSymbolsAsync("Class1", 10)).ShouldBeEmpty();
         service.IsAnalysed(_fixture.ClassFilePath).ShouldBeFalse();
+
+        // The previous solution is really gone, not just outvoted by the failed load's path: going
+        // back to it without reloading finds nothing loaded.
+        service.SetExpectedSolution(SolutionPath);
+        service.IsSolutionLoaded.ShouldBeFalse();
+        (await service.FindSymbolsAsync("Class1", 10)).ShouldBeEmpty();
     }
 
     /// <summary>A load the IDE has already moved on from (its restore finished after the user opened
