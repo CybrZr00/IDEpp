@@ -1465,6 +1465,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             Messages.Add(proposal);
         }
 
+        // The parser reports Complete for every delta once the accumulated arguments parse, and some
+        // servers (LM Studio among them) send further deltas for the same call - an empty trailing
+        // chunk, a finish chunk carrying the index. Re-completing would re-snapshot a file the first
+        // Accept has already changed and apply the same line range a second time, which is refused
+        // as "no longer fits the file" (or, if it happens to fit, lands twice).
+        if (proposal.IsComplete)
+        {
+            return;
+        }
+
         if (proposalEvent.Status == EditProposalStatus.Complete)
         {
             proposal.Complete(proposalEvent, _solutionDirectory);
