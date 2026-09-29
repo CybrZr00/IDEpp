@@ -286,9 +286,6 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private static int CountLines(string text) =>
         text.Length == 0 ? 0 : text.Replace("\r\n", "\n").Split('\n').Length;
 
-<<<<<<< HEAD
-    private bool CanDecide() => IsComplete && !IsDecided && !_isApplying;
-=======
     /// <summary>Plain-text rendering of this proposal for the chat pane's copy-message button - the
     /// diff itself is otherwise only ever shown as styled, unselectable segments.</summary>
     public string BuildPlainTextSummary()
@@ -314,8 +311,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
         return builder.ToString();
     }
 
-    private bool CanDecide() => IsComplete && !IsDecided;
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
+    private bool CanDecide() => IsComplete && !IsDecided && !_isApplying;
 
     [RelayCommand(CanExecute = nameof(CanDecide))]
     private async Task AcceptAsync()

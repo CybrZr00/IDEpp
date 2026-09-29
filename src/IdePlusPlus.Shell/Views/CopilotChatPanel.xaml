@@ -183,7 +183,6 @@
                         </TextBox.Style>
                     </TextBox>
 
-<<<<<<< HEAD
                     <TextBlock Text="{Binding SourceNote}"
                                Margin="0,2,0,0"
                                FontSize="11"
@@ -244,7 +243,6 @@
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
-=======
                     <!-- The diff itself and Accept/Reject now live in the editor tab this proposal's
                          file was opened/focused in (see TextEditorHost's diff review panel) - this
                          card stays a compact status line so the chat scrollback doesn't repeat it. -->
@@ -253,7 +251,6 @@
                                FontStyle="Italic"
                                TextWrapping="Wrap"
                                Foreground="{DynamicResource MutedForegroundBrush}" />
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
                 </StackPanel>
             </Border>
         </DataTemplate>

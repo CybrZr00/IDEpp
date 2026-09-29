@@ -194,7 +194,6 @@ public partial class App : Application
     }
 
     /// <summary>
-<<<<<<< HEAD
     /// Asks before running the hooks a solution ships in its own settings file. A hook runs on your
     /// machine whenever the assistant edits a file or calls a tool, so the actual command lines are
     /// listed rather than summarized. Defaults to No, and a dismissed dialog is a No.
@@ -202,22 +201,10 @@ public partial class App : Application
     private static bool ConfirmProjectHooks(Window owner, HookTrustRequest request)
     {
         var commands = string.Join(Environment.NewLine, request.CommandLines.Select(c => $"    {c}"));
-=======
-    /// Asks before listing a solution's gulp/grunt tasks, because listing them runs the file that
-    /// defines them - gulp builds its task graph by executing the gulpfile, and there is no way to
-    /// enumerate tasks without it. The files are named in full for the same reason MCP's prompt
-    /// lists commands: "scan this solution's task files" is not something anyone can meaningfully
-    /// consent to. Defaults to No, and a dismissed dialog is a No.
-    /// </summary>
-    private static bool ConfirmJavaScriptTaskDiscovery(Window owner, JavaScriptTaskTrustRequest request)
-    {
-        var files = string.Join(Environment.NewLine, request.ManifestPaths.Select(path => $"    {path}"));
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
 
         var result = MessageBox.Show(
             owner,
             $"""
-<<<<<<< HEAD
              This solution ships its own hooks:
 
              {request.ConfigPath}
@@ -230,7 +217,27 @@ public partial class App : Application
              the file changes.
              """,
             "IDE++ - run this solution's hooks?",
-=======
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        return result == MessageBoxResult.Yes;
+    }
+
+    /// <summary>
+    /// Asks before listing a solution's gulp/grunt tasks, because listing them runs the file that
+    /// defines them - gulp builds its task graph by executing the gulpfile, and there is no way to
+    /// enumerate tasks without it. The files are named in full for the same reason MCP's prompt
+    /// lists commands: "scan this solution's task files" is not something anyone can meaningfully
+    /// consent to. Defaults to No, and a dismissed dialog is a No.
+    /// </summary>
+    private static bool ConfirmJavaScriptTaskDiscovery(Window owner, JavaScriptTaskTrustRequest request)
+    {
+        var files = string.Join(Environment.NewLine, request.ManifestPaths.Select(path => $"    {path}"));
+
+        var result = MessageBox.Show(
+            owner,
+            $"""
              Listing this solution's gulp/grunt tasks means running these files:
 
              {files}
@@ -239,7 +246,6 @@ public partial class App : Application
              this if you trust the source of this solution. You will be asked again if they change.
              """,
             "IDE++ - run this solution's task files?",
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);

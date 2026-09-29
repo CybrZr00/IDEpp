@@ -17,11 +17,8 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
-<<<<<<< HEAD
 using IdePlusPlus.Infrastructure.Hooks;
-=======
 using IdePlusPlus.Publish;
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
@@ -243,12 +240,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         RoslynWorkspaceService roslynWorkspaceService,
         WorkspaceFileReader workspaceFileReader,
         ReadOnlyToolDispatcher readOnlyToolDispatcher,
-<<<<<<< HEAD
-        HookService hookService)
-=======
+        HookService hookService,
         TemplateCatalog templateCatalog,
         TemplateInstantiationService templateInstantiation)
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -268,12 +262,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _testRunService = testRunService;
         _roslynWorkspaceService = roslynWorkspaceService;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
-<<<<<<< HEAD
         _hookService = hookService;
-=======
         _templateCatalog = templateCatalog;
         _templateInstantiation = templateInstantiation;
->>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
