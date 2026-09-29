@@ -37,8 +37,12 @@ public sealed class VectorIndex
         File.WriteAllText(path, JsonSerializer.Serialize(_chunks));
     }
 
+    /// <summary>Replaces the contents with what is on disk. Cleared first, so a missing or corrupt
+    /// file leaves the index empty rather than still holding whatever was loaded before - which, on a
+    /// solution switch, was the previous solution's code.</summary>
     public void LoadFromDisk(string path)
     {
+        _chunks.Clear();
         if (!File.Exists(path))
         {
             return;
@@ -49,7 +53,6 @@ public sealed class VectorIndex
             var loaded = JsonSerializer.Deserialize<List<CodeChunk>>(File.ReadAllText(path));
             if (loaded is not null)
             {
-                _chunks.Clear();
                 _chunks.AddRange(loaded);
             }
         }

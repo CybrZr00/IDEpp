@@ -64,4 +64,38 @@ public class VectorIndexTests
         index.LoadFromDisk(Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid()}.json"));
         index.Count.ShouldBe(0);
     }
+
+    // The case the test above could not catch, because it starts from an empty index: switching to a
+    // solution that has never been indexed used to keep the previous solution's chunks, so its code
+    // kept turning up in the new solution's prompts and search_codebase results.
+    [Fact]
+    public void LoadFromDisk_MissingFile_DropsWhatWasLoadedBefore()
+    {
+        var index = new VectorIndex();
+        index.Add(new CodeChunk("PreviousSolution.cs", 1, 1, "old") { Embedding = [1, 0] });
+
+        index.LoadFromDisk(Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid()}.json"));
+
+        index.Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public void LoadFromDisk_CorruptFile_DropsWhatWasLoadedBefore()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vector-index-corrupt-{Guid.NewGuid()}.json");
+        try
+        {
+            File.WriteAllText(path, "{ not an index");
+            var index = new VectorIndex();
+            index.Add(new CodeChunk("PreviousSolution.cs", 1, 1, "old") { Embedding = [1, 0] });
+
+            index.LoadFromDisk(path);
+
+            index.Count.ShouldBe(0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
