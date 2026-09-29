@@ -9,14 +9,23 @@ using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.NuGet;
+using IdePlusPlus.PluginContracts;
 using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.Shell.ToolPanes;
+using IdePlusPlus.Tasks;
+using IdePlusPlus.Templates;
 using IdePlusPlus.Shell.Views;
 using Microsoft.Win32;
+using Serilog;
 
 namespace IdePlusPlus.Shell;
+
+/// <summary>One File &gt; New shortlist entry - the template's display name, and the short name the
+/// New Item dialog opens pre-selected on.</summary>
+public sealed record NewItemShortcut(string Header, string ShortName);
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
@@ -36,8 +45,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ThemeService _themeService;
     private readonly McpServerManager _mcpServerManager;
     private readonly NuGetService _nuGetService;
+    private readonly PublishService _publishService;
     private readonly AppSettingsStore _appSettingsStore;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
+    private readonly TemplateCatalog _templateCatalog;
+    private readonly TemplateInstantiationService _templateInstantiation;
+    private readonly TemplatePackageService _templatePackages;
     private readonly Dispatcher _dispatcher;
 
     /// <summary>Each Action.Start entry's own launch profile, keyed by the DebugSession StartDebuggingAsync
@@ -54,12 +67,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private SolutionTreeNode? _solutionRoot;
 
+    /// <summary>Reset on every solution load - see RegisterNewFilesForAnalysisAsync.</summary>
+    private bool _warnedAboutNewFileAnalysis;
+
     /// <summary>Every named startup configuration saved for the current solution (see
     /// <see cref="StartupConfigurationStore"/>) - what the Startup Configuration Manager dialog edits.
     /// Run/Start Debugging always act on <see cref="ActiveConfiguration"/>, never on this list directly.</summary>
     private List<StartupConfiguration> _startupConfigurations = [];
 
     private string? _activeConfigurationName;
+
+    private string? _activePublishProfileName;
 
     /// <summary>Extra <see cref="RunService"/> instances for this launch's Action.StartWithoutDebugging
     /// entries - separate from the DI-singleton <see cref="_runService"/> (which only ever tracks the
@@ -69,6 +87,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly List<RunService> _multiProjectRunServices = [];
 
     private readonly ScheduledAutomationService _scheduledAutomationService;
+
+    private readonly PluginBuildEventRegistry _pluginBuildEvents;
 
     private StartupConfiguration? ActiveConfiguration => _startupConfigurations.FirstOrDefault(c => c.Name == _activeConfigurationName);
 
@@ -80,6 +100,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SourceControlPaneViewModel sourceControl,
         NuGetPaneViewModel nuGet,
         TestExplorerPaneViewModel testExplorer,
+        TaskExplorerPaneViewModel taskExplorer,
+        ConnectionsExplorerPaneViewModel connectionsExplorer,
         ScheduledAutomationsPaneViewModel scheduledAutomations,
         ScheduledAutomationService scheduledAutomationService,
         WelcomeDocumentViewModel welcome,
@@ -92,8 +114,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ThemeService themeService,
         McpServerManager mcpServerManager,
         NuGetService nuGetService,
+        PublishService publishService,
         AppSettingsStore appSettingsStore,
-        RoslynWorkspaceService roslynWorkspaceService)
+        RoslynWorkspaceService roslynWorkspaceService,
+        TemplateCatalog templateCatalog,
+        TemplateInstantiationService templateInstantiation,
+        TemplatePackageService templatePackages,
+        PluginBuildEventRegistry pluginBuildEvents)
     {
         SolutionExplorer = solutionExplorer;
         Output = output;
@@ -102,6 +129,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SourceControl = sourceControl;
         NuGet = nuGet;
         TestExplorer = testExplorer;
+        TaskExplorer = taskExplorer;
+        ConnectionsExplorer = connectionsExplorer;
         ScheduledAutomations = scheduledAutomations;
         _scheduledAutomationService = scheduledAutomationService;
         Welcome = welcome;
@@ -114,9 +143,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _themeService = themeService;
         _mcpServerManager = mcpServerManager;
         _nuGetService = nuGetService;
+        _publishService = publishService;
         _appSettingsStore = appSettingsStore;
         _roslynWorkspaceService = roslynWorkspaceService;
+        _templateCatalog = templateCatalog;
+        _templateInstantiation = templateInstantiation;
+        _templatePackages = templatePackages;
+        _pluginBuildEvents = pluginBuildEvents;
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
+
+        // Task output arrives on the task process's own thread (see TaskExplorerPaneViewModel.OutputLine),
+        // so it gets the same dispatch treatment as build output rather than touching Output directly.
+        // Deliberately not OnBuildOutputLine: that also feeds ErrorList.AddIfDiagnostic, whose parser
+        // is MSBuild-specific, and npm output is not MSBuild output.
+        TaskExplorer.OutputLine = line => _dispatcher.Invoke(() => Output.AppendLine(line));
+
+        // ConnectionsExplorerPaneViewModel has no reference to this view model (same as every other
+        // pane), so "open the file this connection string came from" is wired the same way
+        // TaskExplorer.OutputLine is above - a callback handed down rather than an event routed
+        // back up.
+        ConnectionsExplorer.OpenFileRequested = path => OpenPath(path);
+
+        // Same reasoning as ConnectionsExplorer.OpenFileRequested above - CopilotChatPaneViewModel
+        // has no reference to this view model either, so it opens/focuses a proposed edit's target
+        // file through this handed-down callback instead. OpenOrCreatePath rather than OpenPath: a
+        // propose_edit that creates a new file targets a path that doesn't exist yet, which is the
+        // normal case here rather than the "moved/renamed/deleted" error OpenPath's other callers
+        // mean by a missing file.
+        CopilotChat.OpenFileRequested = OpenOrCreatePath;
 
         currentTheme = _themeService.Current;
         _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
@@ -188,6 +242,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public NuGetPaneViewModel NuGet { get; }
 
     public TestExplorerPaneViewModel TestExplorer { get; }
+
+    public TaskExplorerPaneViewModel TaskExplorer { get; }
+
+    public ConnectionsExplorerPaneViewModel ConnectionsExplorer { get; }
 
     public ScheduledAutomationsPaneViewModel ScheduledAutomations { get; }
 
@@ -309,6 +367,101 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveStartupConfigurationName));
     }
 
+    /// <summary>Names of the publish profiles belonging to <see cref="PublishTargetProject"/>, for the
+    /// status-bar picker - kept in sync by <see cref="SyncPublishProfiles"/>. Empty for a project with
+    /// no Properties/PublishProfiles folder, which is most of them.</summary>
+    public ObservableCollection<string> PublishProfileNames { get; } = [];
+
+    /// <summary>Which profile Build > Publish runs. Hand-written rather than [ObservableProperty]
+    /// because selecting one persists it, the same way ActiveStartupConfigurationName does.</summary>
+    public string? ActivePublishProfileName
+    {
+        get => _activePublishProfileName;
+        set
+        {
+            if (value is null || value == _activePublishProfileName || !PublishProfileNames.Contains(value))
+            {
+                return;
+            }
+
+            _activePublishProfileName = value;
+            OnPropertyChanged();
+            PersistPublishSelection();
+            PublishCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// The project Build &gt; Publish and the status-bar picker act on: the active startup
+    /// configuration's first runnable entry, falling back to the solution's first project.
+    ///
+    /// Deliberately the same choice the quick-Run button makes, so Run and Publish never disagree
+    /// about which project the solution is really about. Publishing any other project is done from
+    /// its own Solution Explorer context menu.
+    /// </summary>
+    private SolutionTreeNode? PublishTargetProject
+    {
+        get
+        {
+            var projects = (_solutionRoot?.Flatten() ?? [])
+                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, FullPath: not null })
+                .ToList();
+
+            return RunnableEntry is { } entry
+                   && projects.FirstOrDefault(p => p.FullPath == entry.ProjectPath) is { } startupProject
+                ? startupProject
+                : projects.FirstOrDefault();
+        }
+    }
+
+    private void SyncPublishProfiles()
+    {
+        PublishProfileNames.Clear();
+        _activePublishProfileName = null;
+
+        if (PublishTargetProject?.FullPath is { } projectPath)
+        {
+            foreach (var profileName in PublishProfileStore.Load(projectPath).Select(p => p.Name))
+            {
+                PublishProfileNames.Add(profileName);
+            }
+
+            if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory
+                && PublishSelectionStore.Load(solutionDirectory)
+                    .TryGetValue(PublishSelectionStore.KeyFor(solutionDirectory, projectPath), out var storedName)
+                && PublishProfileNames.Contains(storedName))
+            {
+                _activePublishProfileName = storedName;
+            }
+
+            _activePublishProfileName ??= PublishProfileNames.FirstOrDefault();
+        }
+
+        OnPropertyChanged(nameof(ActivePublishProfileName));
+        PublishCommand.NotifyCanExecuteChanged();
+        OpenPublishSettingsCommand.NotifyCanExecuteChanged();
+    }
+
+    private void PersistPublishSelection()
+    {
+        if (Path.GetDirectoryName(CurrentSolutionPath) is not { } solutionDirectory
+            || PublishTargetProject?.FullPath is not { } projectPath
+            || _activePublishProfileName is not { } profileName)
+        {
+            return;
+        }
+
+        // Merged into whatever is already stored, because the file holds one entry per project and
+        // the other projects' selections must survive this one changing.
+        var selections = new Dictionary<string, string>(
+            PublishSelectionStore.Load(solutionDirectory), StringComparer.OrdinalIgnoreCase)
+        {
+            [PublishSelectionStore.KeyFor(solutionDirectory, projectPath)] = profileName,
+        };
+
+        PublishSelectionStore.Save(solutionDirectory, selections);
+    }
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopCommand))]
@@ -359,6 +512,240 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void NewDocument() => ActiveDocument = _editorWorkspace.NewDocument();
 
+    /// <summary>
+    /// New Project - also reached from the Solution Explorer's solution node. The dialog does the
+    /// creating (it streams into the Output pane while still up); what's left here is reloading the
+    /// solution it changed and revealing the result.
+    /// </summary>
+    [RelayCommand]
+    private async Task NewProjectAsync()
+    {
+        var viewModel = new NewProjectDialogViewModel(
+            _templateCatalog, _templateInstantiation, CurrentSolutionPath, OnBuildOutputLine);
+
+        var dialog = new NewProjectDialog(viewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+
+        if (dialog.ShowDialog() != true || dialog.ResultSolutionPath is not { } solutionPath)
+        {
+            return;
+        }
+
+        // A full reload rather than a targeted insert: the solution file itself changed, and the
+        // new project has to be evaluated by MSBuild before anything can build or run it.
+        await LoadSolutionAsync(solutionPath, clearOutput: false);
+
+        if (dialog.ResultProjectPath is { } projectPath)
+        {
+            RevealProject(projectPath);
+        }
+    }
+
+    /// <summary>
+    /// New Item, from the dialog or from a File > New shortlist entry (which pre-picks the template
+    /// and leaves only the name to type).
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(HasSolution))]
+    private async Task NewItemAsync(string? shortName)
+    {
+        if (ResolveItemTarget() is not { } target)
+        {
+            Output.AppendLine("Open a solution with at least one project before adding an item.");
+            return;
+        }
+
+        var viewModel = new NewItemDialogViewModel(
+            _templateCatalog, _templateInstantiation, target, OnBuildOutputLine, shortName);
+
+        var dialog = new NewItemDialog(viewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        // No solution reload: an SDK-style project globs its sources, so the file is already a
+        // project item, and the tree and the Roslyn workspace are each told directly.
+        AddFilesToTree(target, dialog.ResultFiles);
+
+        foreach (var file in dialog.ResultFiles)
+        {
+            OpenPath(file);
+        }
+
+        await RegisterNewFilesForAnalysisAsync(target, dialog.ResultFiles);
+    }
+
+    /// <summary>
+    /// Where a new item goes. Visual Studio uses the Solution Explorer selection; File &gt; New has no
+    /// selection of its own, so the fallback chain is spelled out rather than left implicit - and
+    /// whichever wins is shown as an editable path in the dialog, so it is never silently wrong.
+    /// </summary>
+    private NewItemTarget? ResolveItemTarget()
+    {
+        if (_solutionRoot is null)
+        {
+            return null;
+        }
+
+        var nodes = _solutionRoot.Flatten().ToList();
+
+        var candidates = new[]
+        {
+            DirectoryForNode(nodes.FirstOrDefault(n => n.IsSelected)),
+            ActiveDocument?.FilePath is { } filePath ? Path.GetDirectoryName(filePath) : null,
+            DirectoryForNode(nodes.FirstOrDefault(n => n.IsStartupProject)),
+            DirectoryForNode(nodes.FirstOrDefault(n => n.Kind == SolutionTreeNodeKind.Project)),
+        };
+
+        foreach (var directory in candidates.OfType<string>())
+        {
+            if (FindProjectContaining(directory) is { FullPath: { } projectPath } project &&
+                Path.GetDirectoryName(projectPath) is { } projectDirectory)
+            {
+                return new NewItemTarget(
+                    projectPath,
+                    projectDirectory,
+                    project.RootNamespace ?? project.Name,
+                    directory);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The directory a tree node stands for - a project's or a file's containing folder, a
+    /// folder's own path. The solution node stands for no project, so it yields nothing.</summary>
+    private static string? DirectoryForNode(SolutionTreeNode? node) => node switch
+    {
+        { Kind: SolutionTreeNodeKind.Project, FullPath: { } path } => Path.GetDirectoryName(path),
+        { Kind: SolutionTreeNodeKind.Folder, FullPath: { } path } => path,
+        { Kind: SolutionTreeNodeKind.File, FullPath: { } path } => Path.GetDirectoryName(path),
+        _ => null,
+    };
+
+    /// <summary>The project owning a directory - longest matching project directory wins, so a
+    /// project nested inside another beats its parent.</summary>
+    private SolutionTreeNode? FindProjectContaining(string directory) =>
+        (_solutionRoot?.Flatten() ?? [])
+            .Where(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath is not null)
+            .Select(n => (Project: n, Directory: Path.GetDirectoryName(n.FullPath!)))
+            .Where(candidate => candidate.Directory is not null && IsInside(directory, candidate.Directory))
+            .OrderByDescending(candidate => candidate.Directory!.Length)
+            .Select(candidate => candidate.Project)
+            .FirstOrDefault();
+
+    private static bool IsInside(string directory, string projectDirectory)
+    {
+        var relative = Path.GetRelativePath(projectDirectory, directory);
+        return !relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative);
+    }
+
+    /// <summary>
+    /// Puts newly created files into the tree without a reload, building the same folder chain
+    /// SolutionLoader would have. Files outside the project directory are skipped: an SDK-style
+    /// project's globs would not have picked them up either, so showing them under the project would
+    /// claim something untrue.
+    /// </summary>
+    private void AddFilesToTree(NewItemTarget target, IReadOnlyList<string> files)
+    {
+        if ((_solutionRoot?.Flatten() ?? []).FirstOrDefault(n =>
+                n.Kind == SolutionTreeNodeKind.Project &&
+                string.Equals(n.FullPath, target.ProjectPath, StringComparison.OrdinalIgnoreCase)) is not { } project)
+        {
+            return;
+        }
+
+        // The solution node too, not just the project: WPF only realizes a TreeViewItem once its
+        // parents are expanded, so expanding the project alone leaves the new file real but
+        // invisible under a collapsed root.
+        if (_solutionRoot is not null)
+        {
+            _solutionRoot.IsExpanded = true;
+        }
+
+        project.IsExpanded = true;
+
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(target.ProjectDirectory, file);
+            if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            {
+                continue;
+            }
+
+            var parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var folder = project.GetOrCreateFolder(parts[..^1], target.ProjectDirectory);
+            folder.IsExpanded = true;
+
+            if (!folder.Children.Any(c => c.Kind == SolutionTreeNodeKind.File && c.Name == parts[^1]))
+            {
+                folder.Children.Add(new SolutionTreeNode(parts[^1], file, SolutionTreeNodeKind.File));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tells the Roslyn workspace about the files just created, so they get IntelliSense and
+    /// diagnostics straight away instead of only after the solution is reopened.
+    ///
+    /// <para>Only code files are offered - the workspace refuses anything else, and an .editorconfig
+    /// was never going to be analysed. A refusal is reported once per solution rather than per file:
+    /// it means the project itself isn't in the Roslyn workspace (an unrestored or failed project),
+    /// which is worth knowing once and not on every add.</para>
+    /// </summary>
+    private async Task RegisterNewFilesForAnalysisAsync(NewItemTarget target, IReadOnlyList<string> files)
+    {
+        var sourceFiles = files.Where(f => Path.GetExtension(f) is ".cs" or ".vb").ToList();
+        if (sourceFiles.Count == 0)
+        {
+            return;
+        }
+
+        var registered = true;
+        foreach (var file in sourceFiles)
+        {
+            registered &= await _roslynWorkspaceService.NotifyDocumentAddedAsync(file, target.ProjectPath);
+        }
+
+        if (registered || _warnedAboutNewFileAnalysis)
+        {
+            return;
+        }
+
+        _warnedAboutNewFileAnalysis = true;
+        Output.AppendLine(
+            "Note: IntelliSense and diagnostics for files added to this project start working once " +
+            "the solution is reopened.");
+    }
+
+    /// <summary>Selects a project node by its file path, expanding the solution so the container
+    /// actually exists to be selected.</summary>
+    private void RevealProject(string projectPath)
+    {
+        if (_solutionRoot is not { } root)
+        {
+            return;
+        }
+
+        root.IsExpanded = true;
+
+        var node = root.Flatten().FirstOrDefault(n =>
+            n.Kind == SolutionTreeNodeKind.Project &&
+            n.FullPath is not null &&
+            string.Equals(n.FullPath, projectPath, StringComparison.OrdinalIgnoreCase));
+
+        if (node is not null)
+        {
+            node.IsSelected = true;
+        }
+    }
+
     [RelayCommand]
     private void OpenDocument()
     {
@@ -376,7 +763,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenRecentFile(string filePath) => OpenPath(filePath);
 
-    public void OpenPath(string filePath)
+    public DocumentViewModel? OpenPath(string filePath)
     {
         var document = _editorWorkspace.Open(filePath);
         if (document is not null)
@@ -387,6 +774,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             Output.AppendLine($"Couldn't open '{filePath}' - it may have been moved, renamed, or deleted.");
         }
+
+        return document;
+    }
+
+    /// <summary>Like OpenPath, but for a proposed edit's target: unlike every other OpenPath caller
+    /// (Solution Explorer, recent files, ...) a target that doesn't exist on disk yet is not an
+    /// error here - it's the normal case for a propose_edit that creates a new file.</summary>
+    public DocumentViewModel? OpenOrCreatePath(string filePath)
+    {
+        var document = _editorWorkspace.OpenOrCreate(filePath);
+        if (document is not null)
+        {
+            ActiveDocument = document;
+        }
+        else
+        {
+            Output.AppendLine($"Couldn't open '{filePath}' - it may have been moved, renamed, or deleted.");
+        }
+
+        return document;
     }
 
     [RelayCommand(CanExecute = nameof(HasActiveDocument))]
@@ -477,9 +884,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    public async Task LoadSolutionAsync(string solutionPath)
+    /// <param name="clearOutput">False for a reload triggered from inside the IDE - creating a
+    /// project streams its own output here, and clearing it would throw away the log of what just
+    /// happened before anyone could read it.</param>
+    public async Task LoadSolutionAsync(string solutionPath, bool clearOutput = true)
     {
-        Output.Clear();
+        if (clearOutput)
+        {
+            Output.Clear();
+        }
+
         Output.AppendLine($"Loading {solutionPath}...");
         try
         {
@@ -487,6 +901,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = solutionPath;
             _solutionRoot = root;
+
+            _warnedAboutNewFileAnalysis = false;
+            NewItemCommand.NotifyCanExecuteChanged();
+            _ = RefreshNewItemShortcutsAsync(Path.GetDirectoryName(solutionPath));
 
             var recentSolutions = RecentSolutionsStore.Touch(solutionPath);
             RecentSolutions.Clear();
@@ -507,9 +925,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, FullPath: not null })
                 .Select(n => n.FullPath!)
                 .ToList());
-            CopilotChat.SetIndexableFiles(root.Flatten()
+            var solutionFilePaths = root.Flatten()
                 .Where(n => n.Kind == SolutionTreeNodeKind.File && n.FullPath is not null)
                 .Select(n => n.FullPath!)
+                .ToList();
+            CopilotChat.SetIndexableFiles(solutionFilePaths);
+            CopilotChat.SetSolutionProjects(root.Flatten()
+                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, FullPath: not null })
+                .Select(n => (n.FullPath!, n.TargetFramework, n.RootNamespace))
                 .ToList());
 
             var projects = root.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project).ToList();
@@ -545,6 +968,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     && ActiveConfiguration?.Entries.Any(e => e.ProjectPath == project.FullPath && e.Action != StartupAction.None) == true;
             }
 
+            SyncPublishProfiles();
             RunCommand.NotifyCanExecuteChanged();
             StartDebuggingCommand.NotifyCanExecuteChanged();
             Output.AppendLine("Solution loaded.");
@@ -553,6 +977,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // session, but may already have build output on disk from a prior one - so discovery
             // might still find real tests immediately. Not gated on success (see DiscoverTestsAsync).
             _ = DiscoverTestsAsync();
+
+            // Unlike test discovery this needs nothing built - it is a JSON parse over files that
+            // are already on disk (see PackageJsonReader).
+            _ = DiscoverTasksAsync(solutionDirectory, solutionFilePaths);
+
+            // Same posture: a plain config-file scan, nothing built or restored first.
+            _ = DiscoverConnectionsAsync(solutionDirectory, solutionFilePaths, projects);
 
             // Default-on: only skipped if the user has explicitly turned it off in Settings.
             var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
@@ -637,6 +1068,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         SyncStartupConfigurationNames();
+        SyncPublishProfiles();
 
         if (Path.GetDirectoryName(CurrentSolutionPath) is { } solutionDirectory)
         {
@@ -745,6 +1177,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             project.IsStartupProject = IsStartupProject(project);
         }
 
+        SyncPublishProfiles();
         RunCommand.NotifyCanExecuteChanged();
         StartDebuggingCommand.NotifyCanExecuteChanged();
         Output.AppendLine($"Active startup configuration: {_activeConfigurationName}.");
@@ -755,6 +1188,94 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// activating/focusing an AvalonDock anchorable (ErrorList/SourceControl don't do it either) - so
     /// this is MVP-scoped to just populating the pane; the user clicks its tab manually.</summary>
     public void OpenNuGetPane(SolutionTreeNode node) => _ = NuGet.SetProjectAsync(node);
+
+    /// <summary>Called from the Solution Explorer Project node's "Publish..." context menu item -
+    /// publishes that project rather than <see cref="PublishTargetProject"/>.</summary>
+    public void OpenPublishDialog(SolutionTreeNode node) => ShowPublishDialog(node);
+
+    [RelayCommand(CanExecute = nameof(HasPublishTarget))]
+    private void OpenPublishSettings()
+    {
+        if (PublishTargetProject is { } project)
+        {
+            ShowPublishDialog(project);
+        }
+    }
+
+    /// <summary>
+    /// The dialog writes .pubxml files itself and publishes in place, so there is no result to commit
+    /// here - only the status-bar picker to refresh, and only when the project it edited is the one
+    /// that picker is about.
+    /// </summary>
+    private void ShowPublishDialog(SolutionTreeNode project)
+    {
+        if (project.FullPath is not { } projectPath)
+        {
+            return;
+        }
+
+        var viewModel = new PublishDialogViewModel(
+            projectPath,
+            project.TargetFramework,
+            PublishProfileStore.Load(projectPath),
+            _publishService,
+            OnBuildOutputLine);
+
+        var dialog = new PublishDialog(viewModel)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+        };
+        dialog.ShowDialog();
+
+        if (PublishTargetProject?.FullPath != projectPath)
+        {
+            return;
+        }
+
+        SyncPublishProfiles();
+        if (dialog.ResultSelectedProfileName is { } selected)
+        {
+            ActivePublishProfileName = selected;
+        }
+    }
+
+    /// <summary>Build menu "Publish" - runs the profile chosen in the status bar without opening the
+    /// dialog, for the repeat-the-last-publish case.</summary>
+    [RelayCommand(CanExecute = nameof(CanPublish))]
+    private async Task PublishAsync()
+    {
+        if (PublishTargetProject is not { FullPath: { } projectPath } project
+            || _activePublishProfileName is not { } profileName)
+        {
+            return;
+        }
+
+        // Re-read rather than caching: the .pubxml is an ordinary file the user may have edited (or
+        // deleted) in the editor since the picker was last populated.
+        if (PublishProfileStore.Load(projectPath).FirstOrDefault(p => p.Name == profileName) is not { } profile)
+        {
+            Output.AppendLine($"Publish profile '{profileName}' no longer exists.");
+            SyncPublishProfiles();
+            return;
+        }
+
+        var exitCode = await RunBuildVerbAsync(
+            $"Publish ({profileName})",
+            () => _publishService.PublishAsync(projectPath, profile, OnBuildOutputLine, project.TargetFramework),
+            profile.Configuration,
+            projectPath);
+
+        if (exitCode == 0
+            && PublishArguments.ResolvePublishDirectory(projectPath, profile, project.TargetFramework) is { } directory
+            && Directory.Exists(directory))
+        {
+            Output.AppendLine($"Published to {directory}");
+        }
+    }
+
+    private bool HasPublishTarget() => PublishTargetProject is not null;
+
+    private bool CanPublish() => PublishTargetProject is not null && _activePublishProfileName is not null;
 
     public void OpenTreeNode(SolutionTreeNode node)
     {
@@ -794,6 +1315,44 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OpenPath(fullPath);
     }
 
+    /// <summary>Fire-and-forget from LoadSolutionAsync, same posture as DiscoverTestsAsync - a
+    /// solution with no package.json anywhere is the common case and must stay silent.</summary>
+    private async Task DiscoverTasksAsync(string? solutionDirectory, IReadOnlyList<string> solutionFilePaths)
+    {
+        try
+        {
+            await TaskExplorer.SetSolutionAsync(solutionDirectory, solutionFilePaths);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Task discovery failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync, same posture as DiscoverTasksAsync - a
+    /// solution with no connection strings anywhere is the common case and must stay silent.</summary>
+    private async Task DiscoverConnectionsAsync(
+        string? solutionDirectory, IReadOnlyList<string> solutionFilePaths, IReadOnlyList<SolutionTreeNode> projects)
+    {
+        try
+        {
+            var projectDirectories = projects
+                .Where(p => p.FullPath is not null)
+                .Select(p => (ProjectPath: p.FullPath!, ProjectDirectory: Path.GetDirectoryName(p.FullPath!)!))
+                .ToList();
+
+            await ConnectionsExplorer.SetSolutionAsync(solutionDirectory, solutionFilePaths, projectDirectories);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine($"Connection discovery failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Opens the package.json a Task Explorer node came from - the manifest-node
+    /// counterpart to double-clicking a task, which runs it instead.</summary>
+    public void OpenTaskManifest(TaskTreeNode node) => OpenPath(node.ManifestPath);
+
     /// <summary>Fire-and-forget from BuildAsync/LoadSolutionAsync - a discovery failure must never
     /// break build/load result reporting, just get logged to Output.</summary>
     private async Task DiscoverTestsAsync()
@@ -813,6 +1372,68 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private bool HasSolution() => CurrentSolutionPath is not null;
 
+    /// <summary>
+    /// Tools > Template Packages, and the same dialog the New Project dialog opens - so a missing
+    /// template can be fetched from where you noticed it was missing.
+    /// </summary>
+    [RelayCommand]
+    private void ManageTemplatePackages()
+    {
+        var changed = ShowTemplatePackagesDialog(System.Windows.Application.Current?.MainWindow);
+        if (changed)
+        {
+            _ = RefreshNewItemShortcutsAsync(
+                CurrentSolutionPath is { } path ? Path.GetDirectoryName(path) : null);
+        }
+    }
+
+    /// <summary>Shared with the New Project dialog, which owns itself while modal and so has to pass
+    /// its own window as the owner. Returns whether anything changed.</summary>
+    public bool ShowTemplatePackagesDialog(System.Windows.Window? owner)
+    {
+        var dialog = new TemplatePackagesDialog(
+            new TemplatePackagesDialogViewModel(
+                _templatePackages,
+                CurrentSolutionPath is { } path ? Path.GetDirectoryName(path) : null))
+        {
+            Owner = owner,
+        };
+
+        dialog.ShowDialog();
+        return dialog.PackagesChanged;
+    }
+
+    /// <summary>
+    /// The item templates File > New offers directly. Populated from the catalog rather than
+    /// assumed, so a machine missing one simply doesn't show it - and empty until a solution is
+    /// open, since an item needs a project to go in.
+    /// </summary>
+    public ObservableCollection<NewItemShortcut> NewItemShortcuts { get; } = [];
+
+    /// <summary>Fire-and-forget from LoadSolutionAsync, same posture as test discovery - reading the
+    /// template cache must never delay or fail a solution load.</summary>
+    private async Task RefreshNewItemShortcutsAsync(string? solutionDirectory)
+    {
+        try
+        {
+            var groups = await _templateCatalog.GetGroupsAsync(TemplateKind.Item, solutionDirectory);
+            var shortcuts = ItemTemplateShortlist.From(groups);
+
+            _dispatcher.Invoke(() =>
+            {
+                NewItemShortcuts.Clear();
+                foreach (var group in shortcuts)
+                {
+                    NewItemShortcuts.Add(new NewItemShortcut(group.Name, group.ShortName));
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Couldn't list item templates for the File > New menu");
+        }
+    }
+
     private void OnBuildOutputLine(string line) => _dispatcher.Invoke(() =>
     {
         Output.AppendLine(line);
@@ -830,8 +1451,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     ///
     /// The already-running check comes before Output.Clear() so a refused second build doesn't wipe
     /// the running one's output; the catch covers losing the race between the two.
+    ///
+    /// Publish goes through here too - BuildService.IsRunning covers it, since a publish writes the
+    /// same obj/bin - but reports its own configuration and target, because a publish uses the
+    /// profile's configuration rather than the status bar's and acts on one project rather than the
+    /// solution.
     /// </summary>
-    private async Task<int?> RunBuildVerbAsync(string label, Func<Task<int>> run)
+    private async Task<int?> RunBuildVerbAsync(
+        string label, Func<Task<int>> run, string? configurationLabel = null, string? targetPath = null)
     {
         if (_buildService.IsRunning)
         {
@@ -841,7 +1468,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Output.Clear();
         ErrorList.ClearBuildDiagnostics();
-        Output.AppendLine($"{label} started ({Configuration}): {CurrentSolutionPath}");
+        Output.AppendLine($"{label} started ({configurationLabel ?? Configuration}): {targetPath ?? CurrentSolutionPath}");
 
         try
         {
@@ -856,12 +1483,53 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Runs a build with whatever is bound around it - Task Explorer's bindings and plugin handlers -
+    /// as one exclusive section, so nothing else can start a build in the gap while a Before Build
+    /// task is still writing files this build is about to read.
+    ///
+    /// Bound work never fails the build: a non-zero task or a throwing handler is reported and the
+    /// build proceeds, matching Visual Studio and keeping a broken lint config from making the IDE
+    /// unable to build.
+    /// </summary>
+    private Task<int> WithBuildEventsAsync(BuildEventKind before, BuildEventKind after, Func<Task<int>> build) =>
+        _buildService.RunExclusiveAsync(async () =>
+        {
+            await RunBuildEventAsync(before);
+            var exitCode = await build();
+            await RunBuildEventAsync(after, exitCode);
+            return exitCode;
+        });
+
+    /// <summary>Bound tasks first, then plugin handlers - the IDE's own feature is the more
+    /// predictable of the two, and a plugin handler is the more likely to be slow.</summary>
+    private async Task RunBuildEventAsync(BuildEventKind kind, int? exitCode = null)
+    {
+        await TaskExplorer.RunBoundTasksAsync(ToBindingKind(kind));
+
+        if (CurrentSolutionPath is { } solutionPath)
+        {
+            await _pluginBuildEvents.DispatchAsync(new BuildEventContext(kind, solutionPath, Configuration, exitCode));
+        }
+    }
+
+    private static TaskBindingKind ToBindingKind(BuildEventKind kind) => kind switch
+    {
+        BuildEventKind.BeforeBuild => TaskBindingKind.BeforeBuild,
+        BuildEventKind.AfterBuild => TaskBindingKind.AfterBuild,
+        BuildEventKind.BeforeClean => TaskBindingKind.BeforeClean,
+        _ => TaskBindingKind.AfterClean,
+    };
+
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private async Task BuildAsync()
     {
         var exitCode = await RunBuildVerbAsync(
             "Build",
-            () => _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
+            () => WithBuildEventsAsync(
+                BuildEventKind.BeforeBuild,
+                BuildEventKind.AfterBuild,
+                () => _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
 
         if (exitCode == 0)
         {
@@ -875,13 +1543,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private Task CleanAsync() =>
         RunBuildVerbAsync(
             "Clean",
-            () => _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
+            () => WithBuildEventsAsync(
+                BuildEventKind.BeforeClean,
+                BuildEventKind.AfterClean,
+                () => _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
 
+    /// <summary>Fires the build events, not the clean ones, even though BuildService.RebuildAsync is
+    /// a clean followed by a build: the clean is an implementation detail of rebuilding here, and
+    /// firing four events for one command would run clean-bound work at a surprising moment.</summary>
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private Task RebuildAsync() =>
         RunBuildVerbAsync(
             "Rebuild",
-            () => _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration));
+            () => WithBuildEventsAsync(
+                BuildEventKind.BeforeBuild,
+                BuildEventKind.AfterBuild,
+                () => _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
 
     /// <summary>The quick-Run/Stop toolbar button targets the first non-None entry in the active
     /// configuration (Start or StartWithoutDebugging - Run never attaches a debugger regardless of
@@ -1145,7 +1822,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         int exitCode;
         try
         {
-            exitCode = await _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration);
+            // F5's implicit build fires bindings too - Visual Studio's do, and a Before Build task
+            // that only runs for the toolbar button would be a trap.
+            exitCode = await WithBuildEventsAsync(
+                BuildEventKind.BeforeBuild,
+                BuildEventKind.AfterBuild,
+                () => _buildService.BuildAsync(projectPath, OnBuildOutputLine, targetFramework, Configuration));
         }
         catch (InvalidOperationException ex)
         {

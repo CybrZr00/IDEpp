@@ -76,4 +76,42 @@ public sealed class ChatHistoryStoreTests : IDisposable
 
         _store.Load(_solutionDirectory).ShouldBeEmpty();
     }
+
+    /// <summary>ToolCallId/ToolCalls were added later so tool calls/results could round-trip too - a
+    /// history file written before that only ever has "Role" and "Text", and must still deserialize
+    /// cleanly rather than throwing or silently dropping every message.</summary>
+    [Fact]
+    public void Load_OldShapeFileWithoutToolCallFields_DeserializesWithThemNull()
+    {
+        Directory.CreateDirectory(ProjectMemoryStore.MemoryDirectory(_solutionDirectory));
+        File.WriteAllText(
+            Path.Combine(ProjectMemoryStore.MemoryDirectory(_solutionDirectory), "chat-history.json"),
+            """[{"Role":"User","Text":"Hello"},{"Role":"Assistant","Text":"Hi there"}]""");
+
+        var loaded = _store.Load(_solutionDirectory);
+
+        loaded.Count.ShouldBe(2);
+        loaded[0].Text.ShouldBe("Hello");
+        loaded[0].ToolCallId.ShouldBeNull();
+        loaded[0].ToolCalls.ShouldBeNull();
+    }
+
+    [Fact]
+    public void SaveThenLoad_RoundTripsToolCallsToo()
+    {
+        var messages = new[]
+        {
+            new StoredChatMessage(
+                "Assistant", "",
+                ToolCalls: [new StoredToolCall("call-1", "propose_edit", """{"file":"Foo.cs"}""")]),
+            new StoredChatMessage("Tool", "Applied to Foo.cs.", ToolCallId: "call-1"),
+        };
+
+        _store.Save(_solutionDirectory, messages);
+        var loaded = _store.Load(_solutionDirectory);
+
+        loaded.Count.ShouldBe(2);
+        loaded[0].ToolCalls.ShouldHaveSingleItem().ArgumentsJson.ShouldBe("""{"file":"Foo.cs"}""");
+        loaded[1].ToolCallId.ShouldBe("call-1");
+    }
 }

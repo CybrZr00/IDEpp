@@ -193,28 +193,51 @@
         </Style>
 
         <HierarchicalDataTemplate DataType="{x:Type projectSystem:SolutionTreeNode}" ItemsSource="{Binding Children}">
-            <!-- Foreground must be set explicitly here, not just on the TreeView - the default
-                 themed TreeViewItem template hardcodes its own (light-theme) text color via
-                 SystemColors, which otherwise wins over the TreeView's inherited Foreground. -->
-            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource WindowForegroundBrush}">
-                <TextBlock.Style>
-                    <Style TargetType="TextBlock">
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsStartupProject}" Value="True">
-                                <Setter Property="FontWeight" Value="Bold" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </TextBlock.Style>
-            </TextBlock>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Margin="0,0,4,0" VerticalAlignment="Center">
+                    <TextBlock.Text>
+                        <MultiBinding Converter="{x:Static toolPanes:SolutionTreeIconConverter.Instance}">
+                            <Binding Path="Kind" />
+                            <Binding Path="Name" />
+                        </MultiBinding>
+                    </TextBlock.Text>
+                </TextBlock>
+                <!-- Foreground must be set explicitly here, not just on the TreeView - the default
+                     themed TreeViewItem template hardcodes its own (light-theme) text color via
+                     SystemColors, which otherwise wins over the TreeView's inherited Foreground. -->
+                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource WindowForegroundBrush}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsStartupProject}" Value="True">
+                                    <Setter Property="FontWeight" Value="Bold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </StackPanel>
         </HierarchicalDataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
             <TreeView ItemsSource="{Binding RootNodes}"
                       Background="{DynamicResource PanelBackgroundBrush}"
                       Foreground="{DynamicResource WindowForegroundBrush}"
                       BorderThickness="0"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel"
                       MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick"
-                      PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown" />
+                      PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown">
+                <!-- Two-way, so the IDE can reveal a node it just created. Expansion is bound too:
+                     WPF only realizes a container once its parents are expanded, so setting
+                     IsSelected on a collapsed branch would otherwise do nothing. -->
+                <TreeView.ItemContainerStyle>
+                    <Style TargetType="TreeViewItem">
+                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                    </Style>
+                </TreeView.ItemContainerStyle>
+            </TreeView>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
             <TextBox Text="{Binding Text, Mode=OneWay}"
@@ -295,6 +318,57 @@
                           SelectedItemChanged="TestTreeView_OnSelectedItemChanged" />
             </DockPanel>
         </DataTemplate>
+        <HierarchicalDataTemplate DataType="{x:Type toolPanes:TaskTreeNode}" ItemsSource="{Binding Children}">
+            <!-- Foreground set explicitly, same reason as the Solution Explorer template above -
+                 the default themed TreeViewItem template hardcodes light-theme text color. -->
+            <TextBlock Text="{Binding Label}"
+                       Foreground="{DynamicResource WindowForegroundBrush}"
+                       ToolTip="{Binding Description}" />
+        </HierarchicalDataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:TaskExplorerPaneViewModel}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+                    <Button Content="Run" Command="{Binding RunSelectedCommand}" Margin="0,0,4,0" />
+                    <Button Content="Stop" Command="{Binding CancelCommand}" Margin="0,0,4,0" />
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,4,0" />
+                    <!-- Only enabled when there is an unapproved gulpfile/Gruntfile to scan; listing
+                         their tasks means executing them, so it is never automatic. -->
+                    <Button Content="Scan gulp/grunt..."
+                            Command="{Binding ScanJavaScriptTasksCommand}"
+                            ToolTip="Lists tasks from this solution's gulpfile or Gruntfile. Doing so runs that file." />
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Bottom"
+                           Text="{Binding Summary}"
+                           Margin="4,2"
+                           FontSize="11"
+                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                <TreeView ItemsSource="{Binding Tree}"
+                          Background="{DynamicResource PanelBackgroundBrush}"
+                          Foreground="{DynamicResource WindowForegroundBrush}"
+                          BorderThickness="0"
+                          MouseDoubleClick="TaskTreeView_OnMouseDoubleClick"
+                          SelectedItemChanged="TaskTreeView_OnSelectedItemChanged">
+                    <!-- Each item toggles rather than sets, so the same menu both binds and
+                         unbinds; the node's own label is what shows the current state. -->
+                    <TreeView.ContextMenu>
+                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                            <MenuItem Header="Run at Before Build"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="BeforeBuild" />
+                            <MenuItem Header="Run at After Build"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="AfterBuild" />
+                            <MenuItem Header="Run at Before Clean"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="BeforeClean" />
+                            <MenuItem Header="Run at After Clean"
+                                      Command="{Binding ToggleBindingCommand}"
+                                      CommandParameter="AfterClean" />
+                        </ContextMenu>
+                    </TreeView.ContextMenu>
+                </TreeView>
+            </DockPanel>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:CopilotChatPaneViewModel}">
             <views:CopilotChatPanel />
         </DataTemplate>
@@ -306,6 +380,9 @@
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:NuGetPaneViewModel}">
             <views:NuGetPanel />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:ConnectionsExplorerPaneViewModel}">
+            <views:ConnectionsExplorerPanel />
         </DataTemplate>
         <DataTemplate DataType="{x:Type local:WelcomeDocumentViewModel}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -397,7 +474,18 @@
               Background="{DynamicResource WindowBackgroundBrush}"
               Foreground="{DynamicResource WindowForegroundBrush}">
             <MenuItem Header="_File">
-                <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" />
+                <!-- The shortlist between the two separators is rebuilt on open from
+                     NewItemShortcuts - see NewMenuItem_OnSubmenuOpened. Built in code rather than
+                     bound, because splicing a live collection between static entries in a WPF menu
+                     needs a CompositeCollection and a binding proxy, and this file already builds
+                     the Solution Explorer's menu the same way. -->
+                <MenuItem x:Name="NewMenuItem" Header="_New" SubmenuOpened="NewMenuItem_OnSubmenuOpened">
+                    <MenuItem Header="_Project..." Command="{Binding NewProjectCommand}" />
+                    <MenuItem Header="_Item..." Command="{Binding NewItemCommand}" />
+                    <Separator x:Name="NewMenuShortlistStart" />
+                    <Separator x:Name="NewMenuShortlistEnd" />
+                    <MenuItem Header="Text _File" Command="{Binding NewDocumentCommand}" />
+                </MenuItem>
                 <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
                 <MenuItem Header="Open _Solution..." Command="{Binding OpenSolutionCommand}" />
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" />
@@ -438,6 +526,9 @@
                 <MenuItem Header="_Build Solution" Command="{Binding BuildCommand}" />
                 <MenuItem Header="_Clean Solution" Command="{Binding CleanCommand}" />
                 <MenuItem Header="_Rebuild Solution" Command="{Binding RebuildCommand}" />
+                <Separator />
+                <MenuItem Header="_Publish" Command="{Binding PublishCommand}" />
+                <MenuItem Header="Publish _Settings..." Command="{Binding OpenPublishSettingsCommand}" />
                 <Separator />
                 <MenuItem Header="_Run" Command="{Binding RunCommand}" />
                 <MenuItem Header="_Stop" Command="{Binding StopCommand}" />
@@ -494,6 +585,7 @@
             </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Settings..." Click="SettingsMenuItem_OnClick" />
+                <MenuItem Header="Template _Packages..." Command="{Binding ManageTemplatePackagesCommand}" />
                 <Separator />
                 <MenuItem Header="Plugins" ItemsSource="{Binding PluginCommands}">
                     <MenuItem.ItemContainerStyle>
@@ -544,6 +636,10 @@
                                                       ContentId="{x:Static toolPanes:NuGetPaneViewModel.PaneContentId}"
                                                       Title="NuGet"
                                                       CanClose="False" />
+                        <avalonDock:LayoutAnchorable x:Name="ConnectionsExplorerAnchorable"
+                                                      ContentId="{x:Static toolPanes:ConnectionsExplorerPaneViewModel.PaneContentId}"
+                                                      Title="Connections"
+                                                      CanClose="False" />
                     </avalonDock:LayoutAnchorablePane>
 
                     <avalonDock:LayoutPanel Orientation="Vertical">
@@ -566,6 +662,10 @@
                             <avalonDock:LayoutAnchorable x:Name="TestExplorerAnchorable"
                                                           ContentId="{x:Static toolPanes:TestExplorerPaneViewModel.PaneContentId}"
                                                           Title="Tests"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="TaskRunnerAnchorable"
+                                                          ContentId="{x:Static toolPanes:TaskExplorerPaneViewModel.PaneContentId}"
+                                                          Title="Task Runner"
                                                           CanClose="False" />
                             <avalonDock:LayoutAnchorable x:Name="CallStackAnchorable"
                                                           ContentId="{x:Static toolPanes:CallStackPaneViewModel.PaneContentId}"
@@ -617,6 +717,14 @@
                           Width="120"
                           FontSize="11"
                           ToolTip="Active startup configuration - which projects Run/Start Debugging launch" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <ComboBox ItemsSource="{Binding PublishProfileNames}"
+                          SelectedItem="{Binding ActivePublishProfileName}"
+                          Margin="8,0,0,0"
+                          Width="120"
+                          FontSize="11"
+                          ToolTip="Active publish profile - the one Build &gt; Publish runs" />
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <StackPanel Orientation="Horizontal">

@@ -39,6 +39,30 @@ public class SolutionLoaderTests
         project.TargetFramework.ShouldBeNull();
     }
 
+    /// <summary>
+    /// The sample declares no &lt;RootNamespace&gt;, which is the common case - the SDK defaults it to
+    /// the project name. New Item derives a new file's namespace from this, so reading it as empty
+    /// would put every generated file in the global namespace.
+    /// </summary>
+    [Fact]
+    public void Load_ProjectWithNoExplicitRootNamespace_StillReportsOne()
+    {
+        var root = SolutionLoader.Load(FixtureSolutionPath);
+
+        var project = root.Children.ShouldHaveSingleItem();
+        project.RootNamespace.ShouldBe("SampleConsoleApp");
+    }
+
+    /// <summary>Only Project nodes have one; a file node's would be meaningless.</summary>
+    [Fact]
+    public void Load_NonProjectNodes_HaveNoRootNamespace()
+    {
+        var root = SolutionLoader.Load(FixtureSolutionPath);
+
+        root.RootNamespace.ShouldBeNull();
+        root.Children.ShouldHaveSingleItem().Children.ShouldHaveSingleItem().RootNamespace.ShouldBeNull();
+    }
+
     [Fact]
     public void Load_MultiTargetedProject_ResolvesTheWindowsTargetFramework()
     {

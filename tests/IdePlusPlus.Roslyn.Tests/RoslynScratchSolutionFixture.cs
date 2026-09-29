@@ -22,12 +22,14 @@ public sealed class RoslynScratchSolutionFixture : IAsyncLifetime
 
     public string Directory { get; }
     public string ClassFilePath { get; }
+    public string ProjectPath { get; }
     public RoslynWorkspaceService WorkspaceService { get; private set; } = null!;
 
     public RoslynScratchSolutionFixture()
     {
         Directory = Path.Combine(Path.GetTempPath(), $"ideplusplus-roslyn-scratch-{Guid.NewGuid():N}");
         ClassFilePath = Path.Combine(Directory, "Class1.cs");
+        ProjectPath = Path.Combine(Directory, "ScratchLib.csproj");
     }
 
     public async Task InitializeAsync()

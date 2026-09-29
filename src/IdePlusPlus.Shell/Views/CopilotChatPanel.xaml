@@ -2,7 +2,6 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes"
-             xmlns:diff="clr-namespace:IdePlusPlus.Copilot.Diff;assembly=IdePlusPlus.Copilot.Diff"
              xmlns:mdxam="clr-namespace:MdXaml;assembly=MdXaml">
 
     <UserControl.Resources>
@@ -21,6 +20,20 @@
                     </Style>
                 </Border.Style>
                 <StackPanel>
+                    <Button Content="⧉"
+                            HorizontalAlignment="Right"
+                            Width="18"
+                            Height="18"
+                            Padding="0"
+                            Margin="0,0,0,2"
+                            FontSize="10"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            Tag="{Binding}"
+                            Click="CopyBubbleText_OnClick"
+                            ToolTip="Copy message" />
+
                     <!-- The model's reasoning trace (only present when Effort is above None and the
                          provider streams one) - collapsed by default since it's a working trace, not
                          the answer itself, but there for anyone who wants to see why the assistant
@@ -30,12 +43,15 @@
                               FontSize="11"
                               Margin="0,0,0,4"
                               Visibility="{Binding HasReasoning, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
-                        <TextBlock Text="{Binding ReasoningText}"
-                                   TextWrapping="Wrap"
-                                   FontStyle="Italic"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource MutedForegroundBrush}"
-                                   Margin="4,4,0,0" />
+                        <TextBox Text="{Binding ReasoningText, Mode=OneWay}"
+                                 TextWrapping="Wrap"
+                                 FontStyle="Italic"
+                                 FontSize="11"
+                                 Foreground="{DynamicResource MutedForegroundBrush}"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 IsReadOnly="True"
+                                 Margin="4,4,0,0" />
                     </Expander>
 
                     <!-- MdXaml's built-in "SasabuneCompact" style derives every color (headings, code
@@ -78,11 +94,24 @@
                     HorizontalAlignment="Left"
                     MaxWidth="480">
                 <StackPanel>
-                    <TextBlock Text="🔍 Independent review"
-                               FontSize="11"
-                               FontWeight="Bold"
-                               Margin="0,0,0,4"
-                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <DockPanel Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right"
+                                Content="⧉"
+                                Width="18"
+                                Height="18"
+                                Padding="0"
+                                FontSize="10"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                Tag="{Binding}"
+                                Click="CopyBubbleText_OnClick"
+                                ToolTip="Copy message" />
+                        <TextBlock Text="🔍 Independent review"
+                                   FontSize="11"
+                                   FontWeight="Bold"
+                                   Foreground="{DynamicResource MutedForegroundBrush}" />
+                    </DockPanel>
                     <mdxam:MarkdownScrollViewer Markdown="{Binding Text}"
                                                 MarkdownStyleName="SasabuneCompact"
                                                 Foreground="{DynamicResource WindowForegroundBrush}"
@@ -91,58 +120,6 @@
                                                 Padding="0"
                                                 VerticalScrollBarVisibility="Disabled"
                                                 HorizontalScrollBarVisibility="Disabled" />
-                </StackPanel>
-            </Border>
-        </DataTemplate>
-
-        <DataTemplate DataType="{x:Type diff:DiffLine}">
-            <Border>
-                <Border.Style>
-                    <Style TargetType="Border">
-                        <Setter Property="Background" Value="Transparent" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding Kind}" Value="Added">
-                                <Setter Property="Background" Value="{DynamicResource DiffAddedBackgroundBrush}" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding Kind}" Value="Removed">
-                                <Setter Property="Background" Value="{DynamicResource DiffRemovedBackgroundBrush}" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </Border.Style>
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="{Binding Kind, Mode=OneWay, Converter={x:Static toolPanes:DiffLinePrefixConverter.Instance}}"
-                               FontWeight="Bold"
-                               FontFamily="Consolas"
-                               FontSize="11" />
-                    <TextBlock Text="{Binding Text, Mode=OneWay}"
-                               FontFamily="Consolas"
-                               FontSize="11"
-                               Visibility="{Binding HasSegments, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
-                    <ItemsControl ItemsSource="{Binding Segments}"
-                                  Visibility="{Binding HasSegments, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate DataType="{x:Type diff:DiffTextSegment}">
-                                <TextBlock Text="{Binding Text, Mode=OneWay}" FontFamily="Consolas" FontSize="11">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
-                                                    <Setter Property="Background" Value="{DynamicResource DiffHighlightBackgroundBrush}" />
-                                                    <Setter Property="FontWeight" Value="Bold" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
                 </StackPanel>
             </Border>
         </DataTemplate>
@@ -156,23 +133,44 @@
                     BorderThickness="1"
                     MaxWidth="320">
                 <StackPanel>
-                    <TextBlock Text="{Binding FilePath}" FontWeight="Bold" TextWrapping="Wrap" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right"
+                                Content="⧉"
+                                Width="18"
+                                Height="18"
+                                Padding="0"
+                                FontSize="10"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                Tag="{Binding}"
+                                Click="CopyBubbleText_OnClick"
+                                ToolTip="Copy edit summary" />
+                        <TextBlock Text="{Binding FilePath}" FontWeight="Bold" TextWrapping="Wrap" />
+                    </DockPanel>
 
-                    <TextBlock Text="{Binding PreviewText}"
-                               FontFamily="Consolas"
-                               FontSize="11"
-                               TextWrapping="Wrap"
-                               MaxHeight="120"
-                               Visibility="{Binding IsComplete, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
+                    <TextBox Text="{Binding PreviewText, Mode=OneWay}"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             TextWrapping="Wrap"
+                             MaxHeight="120"
+                             IsReadOnly="True"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="0"
+                             Visibility="{Binding IsComplete, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
 
-                    <TextBlock Text="{Binding ChangeSummary}"
-                               Margin="0,2,0,4"
-                               Padding="3,1"
-                               FontFamily="Consolas"
-                               FontSize="11"
-                               Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
+                    <TextBox Text="{Binding ChangeSummary, Mode=OneWay}"
+                             Margin="0,2,0,4"
+                             Padding="3,1"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             IsReadOnly="True"
+                             BorderThickness="0"
+                             Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox">
+                                <Setter Property="Background" Value="Transparent" />
                                 <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsLargeDeletion}" Value="True">
@@ -182,9 +180,10 @@
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
+                        </TextBox.Style>
+                    </TextBox>
 
+<<<<<<< HEAD
                     <TextBlock Text="{Binding SourceNote}"
                                Margin="0,2,0,0"
                                FontSize="11"
@@ -245,6 +244,16 @@
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
+=======
+                    <!-- The diff itself and Accept/Reject now live in the editor tab this proposal's
+                         file was opened/focused in (see TextEditorHost's diff review panel) - this
+                         card stays a compact status line so the chat scrollback doesn't repeat it. -->
+                    <TextBlock Text="{Binding StatusText}"
+                               Margin="0,2,0,0"
+                               FontStyle="Italic"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedForegroundBrush}" />
+>>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
                 </StackPanel>
             </Border>
         </DataTemplate>
@@ -258,7 +267,21 @@
                     BorderThickness="1"
                     MaxWidth="320">
                 <StackPanel>
-                    <TextBlock Text="{Binding Summary}" FontWeight="Bold" TextWrapping="Wrap" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right"
+                                Content="⧉"
+                                Width="18"
+                                Height="18"
+                                Padding="0"
+                                FontSize="10"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                Tag="{Binding}"
+                                Click="CopyBubbleText_OnClick"
+                                ToolTip="Copy plan" />
+                        <TextBlock Text="{Binding Summary}" FontWeight="Bold" TextWrapping="Wrap" />
+                    </DockPanel>
 
                     <ItemsControl ItemsSource="{Binding Steps}"
                                   Visibility="{Binding IsComplete, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
@@ -295,19 +318,37 @@
                     BorderThickness="1"
                     MaxWidth="320">
                 <StackPanel>
-                    <TextBlock TextWrapping="Wrap">
-                        <Run Text="🔧" />
-                        <Run Text="{Binding ToolName, Mode=OneWay}" FontWeight="Bold" FontFamily="Consolas" FontSize="11" />
-                        <Run Text="—" />
-                        <Run Text="{Binding Status, Mode=OneWay}" FontStyle="Italic" />
-                    </TextBlock>
-                    <TextBlock Text="{Binding ResultPreview}"
-                               FontFamily="Consolas"
-                               FontSize="10"
-                               TextWrapping="Wrap"
-                               MaxHeight="160"
-                               Margin="0,2,0,0"
-                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right"
+                                Content="⧉"
+                                Width="18"
+                                Height="18"
+                                Padding="0"
+                                FontSize="10"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                Tag="{Binding}"
+                                Click="CopyBubbleText_OnClick"
+                                ToolTip="Copy tool result" />
+                        <TextBlock TextWrapping="Wrap">
+                            <Run Text="🔧" />
+                            <Run Text="{Binding ToolName, Mode=OneWay}" FontWeight="Bold" FontFamily="Consolas" FontSize="11" />
+                            <Run Text="—" />
+                            <Run Text="{Binding Status, Mode=OneWay}" FontStyle="Italic" />
+                        </TextBlock>
+                    </DockPanel>
+                    <TextBox Text="{Binding ResultPreview, Mode=OneWay}"
+                             FontFamily="Consolas"
+                             FontSize="10"
+                             TextWrapping="Wrap"
+                             MaxHeight="160"
+                             Margin="0,2,0,0"
+                             IsReadOnly="True"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="0"
+                             Foreground="{DynamicResource MutedForegroundBrush}" />
                 </StackPanel>
             </Border>
         </DataTemplate>

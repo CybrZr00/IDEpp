@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\IdePlusPlus.Templates\IdePlusPlus.Templates.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A real cache excerpt rather than a hand-written fixture: the shapes that matter here (three
+         classlib entries differing only in precedence and framework choices, a group with no group
+         identity) are ones nobody would think to invent. -->
+    <None Update="templatecache-sample.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

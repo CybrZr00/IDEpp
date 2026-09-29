@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\IdePlusPlus.Build\IdePlusPlus.Build.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,3 +1,4 @@
+using IdePlusPlus.Editor.Diff;
 using Shouldly;
 using Xunit;
 

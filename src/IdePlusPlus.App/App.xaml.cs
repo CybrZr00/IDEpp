@@ -13,10 +13,12 @@ using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
+using IdePlusPlus.Connections;
 using IdePlusPlus.Debug;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
+using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Run;
 using IdePlusPlus.NuGet;
@@ -24,6 +26,8 @@ using IdePlusPlus.PluginContracts;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
+using IdePlusPlus.Tasks;
+using IdePlusPlus.Templates;
 using IdePlusPlus.TestRunner;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
@@ -70,7 +74,9 @@ public partial class App : Application
         EditorServices.CompletionProvider = _serviceProvider.GetRequiredService<DeepSeekFimClient>();
         EditorServices.DiagnosticsProvider = _serviceProvider.GetRequiredService<RoslynWorkspaceService>();
         EditorServices.MemberCompletionProvider = _serviceProvider.GetRequiredService<RoslynCompletionService>();
+        EditorServices.DefinitionProvider = _serviceProvider.GetRequiredService<RoslynDefinitionService>();
         EditorServices.GoToLine = new GoToLineRequest();
+        EditorServices.DiffPreview = new DiffPreviewRequest();
 
         // Both delegates re-query PluginHost fresh on every invocation (not memoized here), so it
         // doesn't matter that PluginLoader.LoadPlugins() below hasn't run yet - by the time either
@@ -100,6 +106,22 @@ public partial class App : Application
         // background rather than blocking startup; GetToolDefinitions() just returns fewer tools
         // until they're ready.
         var output = _serviceProvider.GetRequiredService<OutputPaneViewModel>();
+        var mainWindowViewModel = _serviceProvider.GetRequiredService<MainWindowViewModel>();
+
+        // Ctrl+Click go-to-definition's cross-file half: EditorDefinitionOutcome.Found only carries
+        // a file/line/column, since IdePlusPlus.Editor can't reference Shell to open a document
+        // itself - this composes MainWindowViewModel.OpenPath (which also brings the tab to front)
+        // with EditorServices.GoToLine.Request, the same two steps DiffPreviewRequest's own remarks
+        // describe as already proven to work together for a file that wasn't already open.
+        EditorServices.OpenAndGoTo = (filePath, line, column) =>
+        {
+            if (mainWindowViewModel.OpenPath(filePath) is { } document)
+            {
+                EditorServices.GoToLine.Request(document, line, column);
+            }
+        };
+        EditorServices.StatusLog = line => output.AppendLine(line);
+
         var dispatcher = Dispatcher;
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
         mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
@@ -118,13 +140,23 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
+
+        // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
+        // second or two and is otherwise invisible, so it says so in the Output pane.
+        _serviceProvider.GetRequiredService<TemplateCatalog>().OnLog +=
+            line => dispatcher.Invoke(() => output.AppendLine(line));
+
+        var javaScriptTaskDiscovery = _serviceProvider.GetRequiredService<JavaScriptTaskDiscoveryService>();
+        javaScriptTaskDiscovery.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        javaScriptTaskDiscovery.TrustPrompt = request =>
+            dispatcher.Invoke(() => Task.FromResult(ConfirmJavaScriptTaskDiscovery(mainWindow, request)));
         _ = mcpServerManager.ReconnectAllAsync();
 
         mainWindow.Show();
 
         // Fire-and-forget, same as MCP reconnect above - a large solution shouldn't delay the
         // window appearing.
-        _ = _serviceProvider.GetRequiredService<MainWindowViewModel>().TryReopenLastSolutionOnStartupAsync();
+        _ = mainWindowViewModel.TryReopenLastSolutionOnStartupAsync();
     }
 
     /// <summary>
@@ -162,6 +194,7 @@ public partial class App : Application
     }
 
     /// <summary>
+<<<<<<< HEAD
     /// Asks before running the hooks a solution ships in its own settings file. A hook runs on your
     /// machine whenever the assistant edits a file or calls a tool, so the actual command lines are
     /// listed rather than summarized. Defaults to No, and a dismissed dialog is a No.
@@ -169,10 +202,22 @@ public partial class App : Application
     private static bool ConfirmProjectHooks(Window owner, HookTrustRequest request)
     {
         var commands = string.Join(Environment.NewLine, request.CommandLines.Select(c => $"    {c}"));
+=======
+    /// Asks before listing a solution's gulp/grunt tasks, because listing them runs the file that
+    /// defines them - gulp builds its task graph by executing the gulpfile, and there is no way to
+    /// enumerate tasks without it. The files are named in full for the same reason MCP's prompt
+    /// lists commands: "scan this solution's task files" is not something anyone can meaningfully
+    /// consent to. Defaults to No, and a dismissed dialog is a No.
+    /// </summary>
+    private static bool ConfirmJavaScriptTaskDiscovery(Window owner, JavaScriptTaskTrustRequest request)
+    {
+        var files = string.Join(Environment.NewLine, request.ManifestPaths.Select(path => $"    {path}"));
+>>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
 
         var result = MessageBox.Show(
             owner,
             $"""
+<<<<<<< HEAD
              This solution ships its own hooks:
 
              {request.ConfigPath}
@@ -185,6 +230,16 @@ public partial class App : Application
              the file changes.
              """,
             "IDE++ - run this solution's hooks?",
+=======
+             Listing this solution's gulp/grunt tasks means running these files:
+
+             {files}
+
+             That executes whatever they do when loaded, as you, with your permissions. Only allow
+             this if you trust the source of this solution. You will be asked again if they change.
+             """,
+            "IDE++ - run this solution's task files?",
+>>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);
@@ -313,6 +368,7 @@ public partial class App : Application
         services.AddSingleton<PluginToolWindowRegistry>();
         services.AddSingleton<PluginKeyBindingRegistry>();
         services.AddSingleton<PluginChatToolRegistry>();
+        services.AddSingleton<PluginBuildEventRegistry>();
         services.AddSingleton<PluginHost>();
         // PluginLoader depends on the IPluginHost interface (not the concrete PluginHost) so it can be
         // unit-tested without constructing a real MainWindowViewModel/WPF Application - resolve it to
@@ -345,13 +401,24 @@ public partial class App : Application
         services.AddSingleton<GitService>();
         services.AddSingleton<SourceControlPaneViewModel>();
         services.AddSingleton<NuGetService>();
+        services.AddSingleton<PublishService>();
+        services.AddSingleton<TemplateCatalog>();
+        services.AddSingleton<TemplateInstantiationService>();
+        services.AddSingleton<TemplatePackageService>();
         services.AddSingleton<NuGetSearchClient>();
         services.AddSingleton<NuGetPaneViewModel>();
         services.AddSingleton<TestDiscoveryService>();
         services.AddSingleton<TestRunService>();
         services.AddSingleton<TestExplorerPaneViewModel>();
+        services.AddSingleton<TaskRunService>();
+        services.AddSingleton<JavaScriptTaskTrustStore>();
+        services.AddSingleton<JavaScriptTaskDiscoveryService>();
+        services.AddSingleton<TaskExplorerPaneViewModel>();
         services.AddSingleton<RoslynWorkspaceService>();
         services.AddSingleton<RoslynCompletionService>();
+        services.AddSingleton<RoslynDefinitionService>();
+        services.AddSingleton<SqlSchemaService>();
+        services.AddSingleton<ConnectionsExplorerPaneViewModel>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<MainWindow>();
     }

@@ -1,0 +1,68 @@
+<Window x:Class="IdePlusPlus.Shell.Views.TemplatePackagesDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:templates="clr-namespace:IdePlusPlus.Templates;assembly=IdePlusPlus.Templates"
+        Title="Template Packages"
+        Width="640"
+        Height="460"
+        MinWidth="520"
+        MinHeight="380"
+        WindowStartupLocation="CenterOwner"
+        Closing="TemplatePackagesDialog_OnClosing"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        TextElement.Foreground="{DynamicResource WindowForegroundBrush}">
+
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+            <TextBlock Text="Install a template package"
+                       FontWeight="Bold"
+                       Margin="0,0,0,4" />
+            <DockPanel>
+                <Button DockPanel.Dock="Right"
+                        Content="Install"
+                        Command="{Binding InstallCommand}"
+                        Margin="6,0,0,0"
+                        Padding="12,3" />
+                <TextBox Text="{Binding PackageToInstall, UpdateSourceTrigger=PropertyChanged}"
+                         Padding="4,3"
+                         ToolTip="A NuGet package id, an id::version, or a path to a folder or .nupkg" />
+            </DockPanel>
+            <TextBlock TextWrapping="Wrap"
+                       Margin="0,6,0,0"
+                       FontSize="11"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       Text="A template package is downloaded from NuGet and its templates run on this machine when you use them. Only install packages you trust." />
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <TextBlock Text="{Binding StatusMessage}"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource MutedForegroundBrush}" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                <Button Content="Uninstall" Command="{Binding UninstallCommand}" Padding="12,4" Margin="0,0,8,0" />
+                <Button Content="Close" Click="CloseButton_OnClick" Padding="12,4" IsCancel="True" />
+            </StackPanel>
+        </StackPanel>
+
+        <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="Installed" FontWeight="Bold" Margin="0,0,0,4" />
+            <ListBox ItemsSource="{Binding Packages}"
+                     SelectedItem="{Binding SelectedPackage}"
+                     Background="{DynamicResource PanelBackgroundBrush}"
+                     Foreground="{DynamicResource WindowForegroundBrush}"
+                     BorderThickness="1"
+                     HorizontalContentAlignment="Stretch">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type templates:TemplatePackage}">
+                        <StackPanel Margin="2,3">
+                            <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Author}"
+                                       FontSize="10"
+                                       Foreground="{DynamicResource MutedForegroundBrush}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DockPanel>
+    </DockPanel>
+</Window>

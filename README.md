@@ -28,16 +28,30 @@ never really a notepad to begin with.
 - Git integration: status, stage, commit, push/pull/fetch, branch switching, and an inline diff
   viewer shared with the AI Copilot's own edit-review flow
 - NuGet package management: search, add, remove, restore
+- Publish profiles: reads and writes standard `Properties/PublishProfiles/*.pubxml`, so profiles
+  written by Visual Studio work here and profiles written here work from `dotnet publish`. Folder
+  and container-image targets; profiles using a protocol IDE++ cannot run (MSDeploy, ClickOnce,
+  Azure) are listed read-only rather than hidden or overwritten
 - Test Explorer: discovers and runs `dotnet test` suites, jumps straight to a failing assertion
-- A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings, and
-  chat-tool registration) with each plugin isolated in its own `AssemblyLoadContext`
+- Task Runner: lists the `package.json` scripts in and around the solution and runs one on
+  double-click, using whichever of npm/pnpm/yarn the repo's `packageManager` field or lockfile
+  implies. Discovery is a plain JSON read, so it costs nothing on a solution with no scripts. A task
+  can be bound to Before/After Build or Clean and then runs automatically — including on F5's
+  implicit build — without ever being able to fail the build itself. Gulp and Grunt tasks are
+  listed too, but only after you approve it for that solution: enumerating them means running the
+  gulpfile, so it is never automatic, and the approval is re-asked when the file changes. A
+  gulpfile's Visual Studio `<binding>` comment is imported, so a repo already set up in VS works
+  here on first open
+- A plugin API (context-menu commands, dockable tool windows, hover providers, keybindings,
+  chat-tool registration, and build-lifecycle handlers) with each plugin isolated in its own
+  `AssemblyLoadContext`
 
 ### The AI Copilot agent
 - Works against **OpenRouter** (any hosted model) or a local **LM Studio** server — your choice of
   provider, your call on cost and privacy
-- A real tool-calling loop: reading/searching files and symbols, git diff/status, building, running
-  tests, live diagnostics, and — opt-in, confirmed per use — running shell commands or fetching a
-  public webpage
+- A real tool-calling loop: reading/searching files and symbols, git diff/status, building,
+  publishing with an existing profile, running tests, live diagnostics, and — opt-in, confirmed per
+  use — running shell commands or fetching a public webpage
 - A `propose_edit`/`propose_plan` diff-review workflow, with an Auto Mode toggle for when you'd
   rather it just get on with it
 - **Automated skill creation** — the agent can save a reusable procedure to disk and reload it in a

@@ -71,6 +71,32 @@ public sealed class EditorWorkspace
         return document;
     }
 
+    /// <summary>
+    /// Like Open, but a target that doesn't exist on disk yet is not an error here - it's the
+    /// normal case for reviewing a propose_edit that creates a new file. Opens an empty,
+    /// not-yet-saved document bound to that path instead of failing, so there's a real editor tab
+    /// for the diff review panel to attach to before the file exists.
+    /// </summary>
+    public DocumentViewModel? OpenOrCreate(string filePath)
+    {
+        if (File.Exists(filePath))
+        {
+            return Open(filePath);
+        }
+
+        var existing = OpenDocuments.FirstOrDefault(d =>
+            string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var document = DocumentViewModel.ForNewFile(Path.GetFileName(filePath));
+        document.AttachToFile(filePath);
+        OpenDocuments.Add(document);
+        return document;
+    }
+
     private void RemoveFromRecentFiles(string filePath)
     {
         if (RecentFiles.Remove(filePath))
@@ -84,6 +110,17 @@ public sealed class EditorWorkspace
         if (document.FilePath is null)
         {
             throw new InvalidOperationException($"{nameof(Save)} requires a file path; call {nameof(SaveAs)} for a new document.");
+        }
+
+        // The directory may not exist yet - e.g. OpenOrCreate's document for a propose_edit that
+        // creates a file in a new subfolder, or a manual Save As into one. EditApplicationService.
+        // Apply's direct-disk-write branch already creates it for the same reason; this is that
+        // same guard for every other route to a first write, so an unhandled DirectoryNotFoundException
+        // doesn't take the save down.
+        var directory = Path.GetDirectoryName(document.FilePath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
         }
 
         File.WriteAllText(document.FilePath, document.TextDocument.Text);

@@ -126,6 +126,31 @@ public sealed class EditorWorkspaceTests : IDisposable
         document.IsDirty.ShouldBeFalse();
     }
 
+    /// <summary>Regression coverage for a real crash hit via OpenOrCreate + Save: a propose_edit
+    /// that creates a file in a subfolder that doesn't exist yet (e.g. "scratch/new.md") threw an
+    /// unhandled DirectoryNotFoundException here before Save started creating the directory itself.</summary>
+    [Fact]
+    public void Save_ToAPathWhoseDirectoryDoesNotExistYet_CreatesItAndWrites()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var directory = Path.Combine(Path.GetTempPath(), $"ideplusplus-ws-newdir-{Guid.NewGuid()}");
+        var path = Path.Combine(directory, "new.md");
+        var document = workspace.OpenOrCreate(path)!;
+        document.TextDocument.Text = "content";
+
+        try
+        {
+            workspace.Save(document);
+
+            File.ReadAllText(path).ShouldBe("content");
+            document.IsDirty.ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void SaveAs_AttachesToNewPathAndWritesContent()
     {
@@ -138,6 +163,47 @@ public sealed class EditorWorkspaceTests : IDisposable
 
         document.FilePath.ShouldBe(newPath);
         File.ReadAllText(newPath).ShouldBe("brand new");
+    }
+
+    [Fact]
+    public void OpenOrCreate_ExistingFile_BehavesLikeOpen()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var path = CreateTempFile("content");
+
+        var document = workspace.OpenOrCreate(path);
+
+        document.ShouldNotBeNull();
+        document.TextDocument.Text.ShouldBe("content");
+        workspace.RecentFiles.ShouldContain(path);
+    }
+
+    [Fact]
+    public void OpenOrCreate_MissingFile_OpensAnEmptyUnsavedDocumentBoundToThatPath()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var path = Path.Combine(Path.GetTempPath(), "does-not-exist-" + Guid.NewGuid() + ".txt");
+
+        var document = workspace.OpenOrCreate(path);
+
+        document.ShouldNotBeNull();
+        document.FilePath.ShouldBe(path);
+        document.TextDocument.Text.ShouldBe("");
+        document.IsDirty.ShouldBeFalse();
+        workspace.OpenDocuments.ShouldContain(document);
+    }
+
+    [Fact]
+    public void OpenOrCreate_SameMissingPathTwice_ReturnsTheSameDocumentInstance()
+    {
+        var workspace = new EditorWorkspace(_recentFilesPath);
+        var path = Path.Combine(Path.GetTempPath(), "does-not-exist-" + Guid.NewGuid() + ".txt");
+
+        var first = workspace.OpenOrCreate(path);
+        var second = workspace.OpenOrCreate(path);
+
+        second.ShouldBeSameAs(first);
+        workspace.OpenDocuments.Count.ShouldBe(1);
     }
 
     [Fact]

@@ -59,6 +59,21 @@ public sealed class EditApplicationService
     public string? TryGetUnsavedText(string fullPath) =>
         FindOpenDocument(fullPath) is { IsDirty: true } document ? document.TextDocument.Text : null;
 
+    /// <summary>Whether fullPath already has an open, editor-backed document - used by the
+    /// propose_edit review flow (EditProposalViewModel) to tell whether opening the file for
+    /// review is itself what makes Apply's buffer-only branch kick in below, so it knows when it
+    /// must also flush straight to disk to preserve the "a closed file's accepted edit is durable
+    /// immediately" guarantee that would otherwise only apply while the file stayed closed.</summary>
+    public bool IsOpen(string fullPath) => FindOpenDocument(fullPath) is not null;
+
+    /// <summary>Writes one document's current buffer to disk - used by EditProposalViewModel.Accept
+    /// right after Apply, for a document it opened itself purely to show the diff for review (see
+    /// IsOpen above). Not exposed more broadly than that: for a document the user already had open
+    /// independently, forcing a save on every AI edit would remove their ability to review/undo it
+    /// in the editor before it hits disk, which is the whole reason Apply leaves an open document's
+    /// edit buffer-only in the first place.</summary>
+    public void SaveDocument(DocumentViewModel document) => _editorWorkspace.Save(document);
+
     /// <summary>
     /// Writes every open document with unsaved changes to disk, returning the paths written.
     ///

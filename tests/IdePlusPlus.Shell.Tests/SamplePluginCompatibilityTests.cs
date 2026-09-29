@@ -109,11 +109,18 @@ public sealed class SamplePluginCompatibilityTests
         startInfo.ArgumentList.Add(csprojPath);
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add("Release");
+        // Same reasoning as AccessVbaPluginCompatibilityTests.BuildAccessVbaPlugin: reusable MSBuild
+        // nodes and the compiler server inherit the redirected streams and idle on after the build,
+        // which stalls ReadToEnd until they exit whenever no node was already running.
+        startInfo.ArgumentList.Add("-nodeReuse:false");
+        startInfo.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = Process.Start(startInfo)!;
-        var stdOut = process.StandardOutput.ReadToEnd();
-        var stdErr = process.StandardError.ReadToEnd();
+        var stdOutTask = process.StandardOutput.ReadToEndAsync();
+        var stdErrTask = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
+        var stdOut = stdOutTask.GetAwaiter().GetResult();
+        var stdErr = stdErrTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"'dotnet build' on SamplePlugin failed with exit code {process.ExitCode}.\n{stdOut}\n{stdErr}");

@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -15,11 +17,16 @@ using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
+<<<<<<< HEAD
 using IdePlusPlus.Infrastructure.Hooks;
+=======
+using IdePlusPlus.Publish;
+>>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.TestRunner;
+using IdePlusPlus.Templates;
 using Serilog;
 
 namespace IdePlusPlus.Shell.ToolPanes;
@@ -170,6 +177,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly PluginChatToolRegistry _pluginChatToolRegistry;
     private readonly GitService _gitService;
     private readonly BuildService _buildService;
+    private readonly PublishService _publishService;
     private readonly TestRunService _testRunService;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
@@ -194,11 +202,20 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly WorkspaceFileReader _workspaceFileReader;
     private readonly Dispatcher _dispatcher;
     private DocumentViewModel? _currentDocument;
+    private readonly TemplateCatalog _templateCatalog;
+
+    private readonly TemplateInstantiationService _templateInstantiation;
+
     private string? _solutionDirectory;
     private string? _solutionPath;
     private Func<string>? _currentConfiguration;
     private IReadOnlyList<string> _indexableFiles = [];
     private IReadOnlyList<string> _testProjectPaths = [];
+
+    /// <summary>Every project in the solution with the framework the solution tree resolved for it,
+    /// so publish_project can default to the only project and pass --framework for a multi-targeted
+    /// one. Same arrangement as _testProjectPaths: the chat pane never sees the solution tree.</summary>
+    private IReadOnlyList<(string Path, string? TargetFramework, string? RootNamespace)> _solutionProjects = [];
     private CancellationTokenSource? _streamCancellation;
 
     /// <summary>The request that produced whatever is currently uncommitted, for
@@ -221,11 +238,17 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         PluginChatToolRegistry pluginChatToolRegistry,
         GitService gitService,
         BuildService buildService,
+        PublishService publishService,
         TestRunService testRunService,
         RoslynWorkspaceService roslynWorkspaceService,
         WorkspaceFileReader workspaceFileReader,
         ReadOnlyToolDispatcher readOnlyToolDispatcher,
+<<<<<<< HEAD
         HookService hookService)
+=======
+        TemplateCatalog templateCatalog,
+        TemplateInstantiationService templateInstantiation)
+>>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
         : base(PaneContentId, "Copilot Chat")
     {
         _openRouterClient = openRouterClient;
@@ -241,10 +264,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _pluginChatToolRegistry = pluginChatToolRegistry;
         _gitService = gitService;
         _buildService = buildService;
+        _publishService = publishService;
         _testRunService = testRunService;
         _roslynWorkspaceService = roslynWorkspaceService;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
+<<<<<<< HEAD
         _hookService = hookService;
+=======
+        _templateCatalog = templateCatalog;
+        _templateInstantiation = templateInstantiation;
+>>>>>>> 8f8e199e6460c54cc8fe14eb450d7b0acfeaf610
         _dispatcher = System.Windows.Application.Current!.Dispatcher;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
@@ -369,6 +398,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
+    /// <summary>Opens/focuses a file in the main editor tab area and returns the resulting document -
+    /// wired to MainWindowViewModel.OpenPath the same way ConnectionsExplorer.OpenFileRequested is,
+    /// since this pane has no reference to MainWindowViewModel. Used by HandleToolCallDelta so a
+    /// proposed edit's diff review happens in the editor rather than the chat pane.</summary>
+    public Func<string, DocumentViewModel?>? OpenFileRequested { get; set; }
+
     /// <summary>
     /// The open solution, as the copilot's tools need to see it.
     ///
@@ -392,6 +427,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             Messages.Clear();
             foreach (var stored in _chatHistoryStore.Load(directory))
             {
+                // Tool-call/tool-result entries (see BuildChatHistory/PersistChatHistory) are stored
+                // for the model's benefit, not the UI's - there is no proposal card to reconstruct
+                // them into, so showing their raw text as a chat bubble would just be visual noise.
+                // Restoring these into the model's context too, not just plain prose, is tracked as a
+                // deliberately separate follow-up (see BuildChatHistory's doc comment).
+                if (stored.ToolCallId is not null || stored.ToolCalls is not null)
+                {
+                    continue;
+                }
+
                 if (Enum.TryParse<ChatRole>(stored.Role, out var role))
                 {
                     Messages.Add(new ChatMessageViewModel(role) { Text = stored.Text });
@@ -424,19 +469,79 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return;
         }
 
-        var stored = Messages
-            .OfType<ChatMessageViewModel>()
-            .Where(m => !string.IsNullOrWhiteSpace(m.Text))
-            .Select(m => new StoredChatMessage(m.Role.ToString(), m.Text))
+        // ToolCalls/ToolCallId are only ever set on the synthetic entries BuildChatHistory produces
+        // for a decided EditProposalViewModel/McpToolCallViewModel - their Content is deliberately
+        // blank (the call) or always non-blank (the result), so this keeps filtering out only the
+        // empty streaming placeholder the original blank-text check existed for.
+        var stored = BuildChatHistory(Messages)
+            .Where(m => m.ToolCalls is not null || m.ToolCallId is not null || !string.IsNullOrWhiteSpace(m.Content))
+            .Select(m => new StoredChatMessage(
+                m.Role.ToString(),
+                m.Content,
+                m.ToolCallId,
+                m.ToolCalls?.Select(c => new StoredToolCall(c.Id, c.FunctionName, c.ArgumentsJson)).ToList()))
             .ToList();
 
         _chatHistoryStore.Save(_solutionDirectory, stored);
+    }
+
+    /// <summary>
+    /// Rebuilds the ChatMessage/ChatToolCall shape RunAssistantTurnsAsync already produces in-memory
+    /// mid-turn, but from a resting Messages collection instead. Without this, a proposal decided
+    /// after its own turn already stopped - the common manual-mode case, since AssistantTurnPolicy
+    /// stops the turn the moment a proposal needs a human - only ever existed in the UI: SendAsync's
+    /// history rebuild used to walk ChatMessageViewModel entries alone, so the model had no way to
+    /// find out what became of a held-back edit unless the user explained it by hand. Every call site
+    /// that reconstructs history from Messages should go through this one, so a decided outcome is
+    /// visible on the next turn regardless of which flow re-enters the model.
+    ///
+    /// Only decided entries (IsComplete, and for McpToolCallViewModel that means Complete() has run)
+    /// can answer for themselves this way - anything still mid-stream is skipped rather than replayed
+    /// half-formed, the same as it would be if the app were restarted before it were included at all
+    /// (see SetSolutionContext, which does not restore proposal cards from storage).
+    /// </summary>
+    internal static List<ChatMessage> BuildChatHistory(IEnumerable<ObservableObject> messages)
+    {
+        var history = new List<ChatMessage>();
+        foreach (var message in messages)
+        {
+            switch (message)
+            {
+                case ChatMessageViewModel chatMessage:
+                    history.Add(new ChatMessage(chatMessage.Role, chatMessage.Text));
+                    break;
+
+                case EditProposalViewModel { IsComplete: true } proposal:
+                    history.Add(new ChatMessage(
+                        ChatRole.Assistant,
+                        "",
+                        ToolCalls: [new ChatToolCall(proposal.ToolCallId, ProposeEditTool.ToolName, proposal.ArgumentsJson ?? "{}")]));
+                    history.Add(new ChatMessage(ChatRole.Tool, proposal.ToolResultText, ToolCallId: proposal.ToolCallId));
+                    break;
+
+                case McpToolCallViewModel { ResultText: { } resultText } toolCall:
+                    history.Add(new ChatMessage(
+                        ChatRole.Assistant,
+                        "",
+                        ToolCalls: [new ChatToolCall(toolCall.ToolCallId, toolCall.ToolName, toolCall.ArgumentsJson ?? "{}")]));
+                    history.Add(new ChatMessage(ChatRole.Tool, resultText, ToolCallId: toolCall.ToolCallId));
+                    break;
+            }
+        }
+
+        return history;
     }
 
     /// <summary>The solution's test projects, so run_tests can default to all of them. Detected
     /// during solution load (see TestProjectDetector); the chat pane never sees the solution tree
     /// itself.</summary>
     public void SetTestProjects(IReadOnlyList<string> projectPaths) => _testProjectPaths = projectPaths;
+
+    /// <summary>The solution's projects, for publish_project (target framework) and add_item (root
+    /// namespace).</summary>
+    public void SetSolutionProjects(
+        IReadOnlyList<(string Path, string? TargetFramework, string? RootNamespace)> projects) =>
+        _solutionProjects = projects;
 
     public void SetIndexableFiles(IReadOnlyList<string> filePaths)
     {
@@ -461,11 +566,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // the response never arrives.
         PersistChatHistory();
 
-        var history = Messages
-            .OfType<ChatMessageViewModel>()
-            .Where(m => m != userMessage)
-            .Select(m => new ChatMessage(m.Role, m.Text))
-            .ToList();
+        var history = BuildChatHistory(Messages.Where(m => m != userMessage));
 
         await PrependContextAsync(history, userText);
         history.Add(new ChatMessage(ChatRole.User, userText));
@@ -587,7 +688,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                     foreach (var call in turn.Calls)
                     {
-                        var callViewModel = new McpToolCallViewModel(call.Name!);
+                        var callViewModel = new McpToolCallViewModel(call.EffectiveId, call.Name!, call.Arguments.ToString());
                         _dispatcher.Invoke(() =>
                         {
                             CurrentActivity = $"Calling {call.Name}...";
@@ -769,6 +870,34 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
+            case PublishTools.PublishToolName:
+                return await RunPublishAsync(
+                    arguments?["profile"]?.GetValue<string>(),
+                    arguments?["project"]?.GetValue<string>(),
+                    cancellationToken);
+
+            case TemplateTools.ListTemplatesToolName:
+                return await RunListTemplatesAsync(
+                    arguments?["kind"]?.GetValue<string>(),
+                    arguments?["search"]?.GetValue<string>(),
+                    cancellationToken);
+
+            case TemplateTools.CreateProjectToolName:
+                return await RunCreateProjectAsync(
+                    arguments?["template"]?.GetValue<string>(),
+                    arguments?["name"]?.GetValue<string>(),
+                    arguments?["framework"]?.GetValue<string>(),
+                    arguments?["solutionFolder"]?.GetValue<string>(),
+                    cancellationToken);
+
+            case TemplateTools.AddItemToolName:
+                return await RunAddItemAsync(
+                    arguments?["template"]?.GetValue<string>(),
+                    arguments?["name"]?.GetValue<string>(),
+                    arguments?["folder"]?.GetValue<string>(),
+                    arguments?["project"]?.GetValue<string>(),
+                    cancellationToken);
+
             case ShellTools.RunCommandToolName:
                 return await RunShellCommandAsync(
                     arguments?["command"]?.GetValue<string>(),
@@ -923,6 +1052,160 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return (false, FormatBuildReport(exitCode, configuration, saved, outputLines));
+    }
+
+    /// <summary>
+    /// Publishes with an existing profile and reports what happened.
+    ///
+    /// Every refusal here names what would have made it work - the profiles that do exist, the
+    /// projects that do exist - because the alternative is the model guessing at a second call.
+    ///
+    /// Container profiles are declined. One with a registry configured pushes an image to that
+    /// registry, which is outward-facing and has no undo; this codebase gates actions like that
+    /// behind an explicit per-action prompt, and publish has no equivalent yet. Creating or editing a
+    /// profile is likewise not offered - what gets shipped and where is the user's decision, made in
+    /// a dialog built for it.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunPublishAsync(
+        string? profileName, string? project, CancellationToken cancellationToken)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is nothing to publish.");
+        }
+
+        var (projectPath, targetFramework, projectError) = ResolvePublishProject(project);
+        if (projectError is not null)
+        {
+            return (true, projectError);
+        }
+
+        var profiles = PublishProfileStore.Load(projectPath!);
+        if (profiles.Count == 0)
+        {
+            return (true,
+                $"{Path.GetFileName(projectPath)} has no publish profiles. The user can create one from " +
+                "Build > Publish Settings; this tool cannot create one.");
+        }
+
+        if (string.IsNullOrWhiteSpace(profileName))
+        {
+            return (true, $"Which profile? {Path.GetFileName(projectPath)} has: {NameList(profiles)}.");
+        }
+
+        if (profiles.FirstOrDefault(p => string.Equals(p.Name, profileName, StringComparison.OrdinalIgnoreCase)) is not { } profile)
+        {
+            return (true, $"No publish profile named '{profileName}'. {Path.GetFileName(projectPath)} has: {NameList(profiles)}.");
+        }
+
+        if (profile.Kind != PublishKind.Folder)
+        {
+            return (true,
+                $"'{profile.Name}' is a {profile.Kind.ToString().ToLowerInvariant()} profile, which this tool will not run. " +
+                "Ask the user to publish it from Build > Publish Settings instead.");
+        }
+
+        if (_buildService.IsRunning)
+        {
+            return (true, "A build is already running - wait for it to finish before publishing.");
+        }
+
+        var saved = _dispatcher.Invoke(_editApplicationService.SaveDirtyDocuments);
+        var outputLines = new List<string>();
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(BuildTimeout);
+
+        int exitCode;
+        try
+        {
+            exitCode = await _publishService.PublishAsync(
+                projectPath!, profile, line => { lock (outputLines) { outputLines.Add(line); } },
+                targetFramework, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return (true, $"The publish was still running after {BuildTimeout.TotalMinutes:0} minutes and was stopped.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (true, ex.Message);
+        }
+
+        return (false, FormatPublishReport(exitCode, profile, projectPath!, targetFramework, saved, outputLines));
+    }
+
+    /// <summary>Resolves the project to publish, defaulting to the solution's only project. Anything
+    /// ambiguous or outside the solution root comes back as a message rather than a guess.</summary>
+    private (string? Path, string? TargetFramework, string? Error) ResolvePublishProject(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project))
+        {
+            return _solutionProjects.Count == 1
+                ? (_solutionProjects[0].Path, _solutionProjects[0].TargetFramework, null)
+                : (null, null,
+                    "This solution has more than one project, so 'project' is required. It has: " +
+                    string.Join(", ", _solutionProjects.Select(p => Path.GetFileName(p.Path))) + ".");
+        }
+
+        if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory!, project) is not { } resolved)
+        {
+            return (null, null, $"Refused: '{project}' resolves outside the open solution directory.");
+        }
+
+        if (!File.Exists(resolved))
+        {
+            return (null, null, $"Project not found: {project}");
+        }
+
+        // The framework comes from the solution tree where the project is one this solution knows
+        // about; a path that resolves to something else still publishes, just without --framework.
+        var known = _solutionProjects.FirstOrDefault(p => string.Equals(p.Path, resolved, StringComparison.OrdinalIgnoreCase));
+        return (resolved, known.TargetFramework, null);
+    }
+
+    private static string NameList(IReadOnlyList<PublishProfile> profiles) =>
+        string.Join(", ", profiles.Select(p => p.Kind == PublishKind.Folder ? p.Name : $"{p.Name} ({p.Kind})"));
+
+    private static string FormatPublishReport(
+        int exitCode,
+        PublishProfile profile,
+        string projectPath,
+        string? targetFramework,
+        IReadOnlyList<string> saved,
+        IReadOnlyList<string> outputLines)
+    {
+        var report = new StringBuilder();
+        report.Append(exitCode == 0
+            ? $"Publish succeeded with profile '{profile.Name}' ({profile.Configuration})."
+            : $"Publish FAILED with profile '{profile.Name}' ({profile.Configuration}), exit code {exitCode}.");
+
+        if (saved.Count > 0)
+        {
+            report.Append($" Saved {saved.Count} file(s) with unsaved changes first.");
+        }
+
+        if (exitCode == 0)
+        {
+            if (PublishArguments.ResolvePublishDirectory(projectPath, profile, targetFramework) is { } directory
+                && Directory.Exists(directory))
+            {
+                report.Append($" Output is in {directory}.");
+            }
+
+            return report.ToString();
+        }
+
+        // Publish failures are usually MSBuild's or the SDK's own (NETSDK####, MSB####) rather than
+        // compiler diagnostics, so the raw tail is the useful thing rather than a parsed list.
+        var raw = string.Join("\n", outputLines.TakeLast(40));
+        if (raw.Length > PublishTools.MaxRawOutputChars)
+        {
+            raw = raw[^PublishTools.MaxRawOutputChars..];
+        }
+
+        report.Append($"\n\nOutput (tail):\n{raw}");
+        return report.ToString();
     }
 
     /// <summary>
@@ -1479,6 +1762,32 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             proposal.Complete(proposalEvent, _solutionDirectory);
 
+            // Open/focus the target file and hand the proposal its editor tab to show the diff in -
+            // review now happens there instead of the chat pane. Skipped only for a proposal refused
+            // on arrival (ResolvedFullPath null), which has no valid file to open.
+            if (proposal.ResolvedFullPath is { } fullPath)
+            {
+                // Captured before opening, for ShowInEditor's openedForReview - see its remarks on
+                // why Accept() needs to know whether opening the file for review is what made it
+                // "open" (this call), rather than it already being open independently.
+                var wasAlreadyOpen = _editApplicationService.IsOpen(fullPath);
+
+                // Auto Mode can process several proposals in one turn, each flipping the active tab
+                // for visibility even when nothing needs approving - that shouldn't steal keyboard
+                // focus away from the chat input if the user is still typing there.
+                var previouslyFocused = Keyboard.FocusedElement as IInputElement;
+                var openedDocument = OpenFileRequested?.Invoke(fullPath);
+                if (openedDocument is not null)
+                {
+                    proposal.ShowInEditor(openedDocument, openedForReview: !wasAlreadyOpen);
+                }
+
+                if (previouslyFocused is not null)
+                {
+                    _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => previouslyFocused.Focus());
+                }
+            }
+
             // A saved skill's raw text later gets injected straight into the model's own context as
             // trusted instruction-shaped content (see PrependContextAsync/read_skill) - so unlike an
             // ordinary code file, Auto Mode writing and auto-accepting a new one with nobody looking
@@ -1717,11 +2026,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             """;
         _lastUserRequestText = instruction;
 
-        var history = Messages
-            .OfType<ChatMessageViewModel>()
-            .Where(m => m != marker)
-            .Select(m => new ChatMessage(m.Role, m.Text))
-            .ToList();
+        var history = BuildChatHistory(Messages.Where(m => m != marker));
         history.Add(new ChatMessage(ChatRole.User, instruction));
 
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);

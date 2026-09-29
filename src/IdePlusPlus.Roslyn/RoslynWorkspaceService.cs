@@ -136,6 +136,109 @@ public sealed class RoslynWorkspaceService : ILiveDiagnosticsProvider, IDisposab
     /// <inheritdoc />
     public void NotifyDocumentChanged(string filePath, string text) => ScheduleDiagnostics(filePath, text);
 
+    /// <summary>
+    /// Tells the workspace about a file that has just been created on disk, so it gets IntelliSense
+    /// and diagnostics without reopening the solution.
+    ///
+    /// <para>Needed because an SDK-style project globs its sources: a new .cs file is a project item
+    /// the moment it exists, but this workspace only learns what a project contains at
+    /// <see cref="LoadSolutionAsync"/> time. Before this, a file added through New Item was real,
+    /// compiled and invisible to analysis until the solution was reopened.</para>
+    ///
+    /// <para>Adds to the in-memory <see cref="_currentSolution"/> snapshot only, never through
+    /// <c>TryApplyChanges</c> - see this class's type-level remarks. That also means the addition is
+    /// naturally dropped on the next solution load, which is correct: by then MSBuildWorkspace reads
+    /// the file from disk itself.</para>
+    /// </summary>
+    /// <returns>False when the file could not be added - the project was not one this workspace
+    /// loaded, or the file is not a source file in that project's language - so the caller can say so
+    /// rather than promising analysis that will not arrive.</returns>
+    public async Task<bool> NotifyDocumentAddedAsync(
+        string filePath, string projectPath, CancellationToken cancellationToken = default)
+    {
+        // Read before taking the lock: this is the only I/O here, and holding the workspace lock
+        // across it would block every completion request for the duration.
+        string text;
+        try
+        {
+            text = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+
+        await _workspaceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Already known - a reload raced this, or the same file was added twice. Not a failure:
+            // the caller's goal (this file is analysed) already holds.
+            if (_documentIdsByPath.ContainsKey(filePath))
+            {
+                return true;
+            }
+
+            var project = _currentSolution.Projects.FirstOrDefault(
+                p => string.Equals(p.FilePath, projectPath, StringComparison.OrdinalIgnoreCase));
+
+            if (project is null || !IsSourceFileFor(project, filePath))
+            {
+                return false;
+            }
+
+            var documentId = DocumentId.CreateNewId(project.Id);
+
+            _currentSolution = _currentSolution.AddDocument(
+                documentId,
+                Path.GetFileName(filePath),
+                SourceText.From(text),
+                FoldersFor(project, filePath),
+                filePath);
+
+            _documentIdsByPath[filePath] = documentId;
+            return true;
+        }
+        finally
+        {
+            _workspaceLock.Release();
+        }
+    }
+
+    /// <summary>A .cs file is not a document of a VB project, and neither is a .json file of
+    /// either - those are additional documents, which nothing here consumes.</summary>
+    private static bool IsSourceFileFor(Project project, string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+
+        return project.Language switch
+        {
+            LanguageNames.CSharp => string.Equals(extension, ".cs", StringComparison.OrdinalIgnoreCase),
+            LanguageNames.VisualBasic => string.Equals(extension, ".vb", StringComparison.OrdinalIgnoreCase),
+            _ => false,
+        };
+    }
+
+    /// <summary>The document's logical folder chain, matching what MSBuildWorkspace would have given
+    /// it had the file existed at load time.</summary>
+    private static IReadOnlyList<string> FoldersFor(Project project, string filePath)
+    {
+        if (Path.GetDirectoryName(project.FilePath) is not { } projectDirectory ||
+            Path.GetDirectoryName(filePath) is not { } fileDirectory)
+        {
+            return [];
+        }
+
+        var relative = Path.GetRelativePath(projectDirectory, fileDirectory);
+        if (relative is "." || relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+        {
+            return [];
+        }
+
+        return relative.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+    }
+
     /// <inheritdoc />
     public void NotifyDocumentClosed(string filePath)
     {

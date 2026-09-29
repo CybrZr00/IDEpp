@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.Build;
 
@@ -9,10 +10,19 @@ public sealed class BuildService
     private bool _isRunning;
 
     /// <summary>
-    /// Whether a build/clean/rebuild started here is still going. RunService and TestRunService
-    /// have always had a guard like this; BuildService did not, which was survivable while the
-    /// toolbar button was the only caller and stops being so once the copilot can start one too -
-    /// two `dotnet build` processes over the same obj/bin is not a race worth having.
+    /// Whether the current async flow already holds the guard via <see cref="RunExclusiveAsync"/>.
+    /// AsyncLocal rather than a plain field: it has to follow one logical operation's await chain
+    /// so the inner Build/Clean call recognises the guard as already held by its own caller, while
+    /// an unrelated concurrent caller still sees it as taken and is refused.
+    /// </summary>
+    private readonly AsyncLocal<bool> _holdsGuard = new();
+
+    /// <summary>
+    /// Whether a build/clean/rebuild - or a publish, which goes through <see cref="RunDotnetAsync"/> -
+    /// started here is still going. RunService and TestRunService have always had a guard like this;
+    /// BuildService did not, which was survivable while the toolbar button was the only caller and
+    /// stops being so once the copilot can start one too - two `dotnet build` processes over the same
+    /// obj/bin is not a race worth having.
     /// </summary>
     public bool IsRunning
     {
@@ -61,7 +71,69 @@ public sealed class BuildService
         return await BuildAsync(projectOrSolutionPath, onOutputLine, targetFramework, configuration, cancellationToken);
     }
 
-    private async Task<int> RunDotnetVerbAsync(
+    /// <summary>
+    /// Runs an arbitrary `dotnet` invocation under the same single-build-at-a-time guard as
+    /// Build/Clean, streaming its output the same way.
+    ///
+    /// This exists so PublishService doesn't need a lock of its own: `dotnet publish` writes the same
+    /// obj/bin a concurrent build would, so the two have to exclude each other, and one guard that
+    /// <see cref="IsRunning"/> reports on is simpler than two that have to agree. Arguments are passed
+    /// through verbatim - assembling them is the caller's business, which keeps publish-profile
+    /// knowledge out of this project entirely.
+    /// </summary>
+    public Task<int> RunDotnetAsync(
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        Action<string> onOutputLine,
+        CancellationToken cancellationToken = default) =>
+        RunGuardedAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
+
+    /// <summary>
+    /// Runs arbitrary work holding the same one-at-a-time guard Build/Clean/publish take, so a
+    /// sequence of them counts as a single build for <see cref="IsRunning"/>'s purposes.
+    ///
+    /// This exists for build bindings: a Before Build task and the `dotnet build` after it have to
+    /// be one indivisible run, or the copilot's build tool can start a second `dotnet build` in the
+    /// gap while the bound task is still writing files the build is about to read. Calls to
+    /// Build/Clean/RunDotnet from inside <paramref name="work"/> see the guard as already held by
+    /// their own caller and proceed, rather than throwing.
+    ///
+    /// Throws <see cref="InvalidOperationException"/> - like the verbs themselves - if something
+    /// else already holds the guard.
+    /// </summary>
+    public async Task<T> RunExclusiveAsync<T>(Func<Task<T>> work)
+    {
+        if (_holdsGuard.Value)
+        {
+            return await work();
+        }
+
+        lock (_stateLock)
+        {
+            if (_isRunning)
+            {
+                throw new InvalidOperationException("A build is already running.");
+            }
+
+            _isRunning = true;
+        }
+
+        _holdsGuard.Value = true;
+        try
+        {
+            return await work();
+        }
+        finally
+        {
+            _holdsGuard.Value = false;
+            lock (_stateLock)
+            {
+                _isRunning = false;
+            }
+        }
+    }
+
+    private Task<int> RunDotnetVerbAsync(
         string verb,
         string projectOrSolutionPath,
         Action<string> onOutputLine,
@@ -69,6 +141,36 @@ public sealed class BuildService
         string? configuration,
         CancellationToken cancellationToken)
     {
+        var arguments = new List<string> { verb, projectOrSolutionPath };
+        if (targetFramework is not null)
+        {
+            arguments.Add("--framework");
+            arguments.Add(targetFramework);
+        }
+
+        if (configuration is not null)
+        {
+            arguments.Add("--configuration");
+            arguments.Add(configuration);
+        }
+
+        return RunGuardedAsync(
+            arguments, Path.GetDirectoryName(projectOrSolutionPath) ?? "", onOutputLine, cancellationToken);
+    }
+
+    private async Task<int> RunGuardedAsync(
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        Action<string> onOutputLine,
+        CancellationToken cancellationToken)
+    {
+        // An enclosing RunExclusiveAsync on this same flow already holds the guard on this call's
+        // behalf, and taking it again here would refuse the very build it was taken for.
+        if (_holdsGuard.Value)
+        {
+            return await RunProcessAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
+        }
+
         lock (_stateLock)
         {
             if (_isRunning)
@@ -81,8 +183,7 @@ public sealed class BuildService
 
         try
         {
-            return await RunProcessAsync(
-                verb, projectOrSolutionPath, onOutputLine, targetFramework, configuration, cancellationToken);
+            return await RunProcessAsync(arguments, workingDirectory, onOutputLine, cancellationToken);
         }
         finally
         {
@@ -94,11 +195,9 @@ public sealed class BuildService
     }
 
     private static async Task<int> RunProcessAsync(
-        string verb,
-        string projectOrSolutionPath,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
         Action<string> onOutputLine,
-        string? targetFramework,
-        string? configuration,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo("dotnet")
@@ -107,25 +206,26 @@ public sealed class BuildService
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(projectOrSolutionPath),
+            WorkingDirectory = workingDirectory,
         };
-        startInfo.ArgumentList.Add(verb);
-        startInfo.ArgumentList.Add(projectOrSolutionPath);
-        if (targetFramework is not null)
+        foreach (var argument in arguments)
         {
-            startInfo.ArgumentList.Add("--framework");
-            startInfo.ArgumentList.Add(targetFramework);
-        }
-
-        if (configuration is not null)
-        {
-            startInfo.ArgumentList.Add("--configuration");
-            startInfo.ArgumentList.Add(configuration);
+            startInfo.ArgumentList.Add(argument);
         }
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) onOutputLine(e.Data); };
+
+        // Created before Start so assignment can happen as soon as possible afterwards - see
+        // ProcessJob for the race that narrows but cannot fully close.
+        //
+        // KILL_ON_JOB_CLOSE means any MSBuild worker node this build spawns dies with it rather than
+        // surviving for reuse. Measured on the .NET 10 SDK, that costs nothing: three consecutive
+        // clean builds ran in 1.50s/1.23s/1.27s and not one worker node was created-and-killed,
+        // because `dotnet build` reuses nodes started outside this job - which are not members and
+        // are therefore untouched. Worth re-measuring if build times ever regress after a cancel.
+        using var job = ProcessJob.TryCreate();
 
         try
         {
@@ -136,6 +236,8 @@ public sealed class BuildService
             onOutputLine($"Could not run dotnet - is the SDK installed and on PATH? ({ex.Message})");
             return -1;
         }
+
+        job?.TryAssign(process);
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -150,14 +252,14 @@ public sealed class BuildService
             // used to abandon a running dotnet build - and MSBuild's own worker nodes under it -
             // still holding locks on obj/bin. TestRunService.Cancel and RunService.Stop both kill
             // the whole tree; this now matches. Without it a tool timeout leaks a build.
-            KillBestEffort(process);
+            KillBestEffort(process, job);
             throw;
         }
 
         return process.ExitCode;
     }
 
-    private static void KillBestEffort(Process process)
+    private static void KillBestEffort(Process process, ProcessJob? job)
     {
         try
         {
@@ -171,5 +273,10 @@ public sealed class BuildService
             // Already gone, or refused to die - either way there is nothing further to do, and
             // throwing here would replace the caller's cancellation with a less useful error.
         }
+
+        // After the tree kill, not instead of it: the tree kill reaches anything spawned in the
+        // window before the job assignment, and the job reaches what the parent-PID walk cannot -
+        // a grandchild whose own parent has already exited is orphaned and invisible to it.
+        job?.Kill();
     }
 }

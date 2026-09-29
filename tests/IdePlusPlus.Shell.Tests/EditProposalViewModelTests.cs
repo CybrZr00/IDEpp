@@ -17,13 +17,18 @@ public class EditProposalViewModelTests : IDisposable
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "IdePlusPlusProposalTests", Guid.NewGuid().ToString("N"));
 
+    private readonly EditorWorkspace _workspace;
     private readonly EditApplicationService _service;
 
     public EditProposalViewModelTests()
     {
         Directory.CreateDirectory(_root);
-        _service = new EditApplicationService(
-            new EditorWorkspace(Path.Combine(_root, "recent-files.json")));
+        _workspace = new EditorWorkspace(Path.Combine(_root, "recent-files.json"));
+        _service = new EditApplicationService(_workspace);
+
+        // ShowInEditor pushes through this ambient locator - in the real app App.xaml.cs sets it
+        // once at startup (see EditorServices' remarks), which never runs here.
+        EditorServices.DiffPreview = new DiffPreviewRequest();
     }
 
     public void Dispose()
@@ -131,6 +136,85 @@ public class EditProposalViewModelTests : IDisposable
         proposal.ToolResultText.ShouldContain("now 3 line(s) long (was 5)");
         proposal.ToolResultText.ShouldContain("line number");
         File.ReadAllText(Path.Combine(_root, "Foo.cs")).ShouldBe("a\nB\ne");
+    }
+
+    /// <summary>
+    /// ShowInEditor opens the proposal's target file in the editor for review before a decision is
+    /// made - which means EditApplicationService.Apply always finds it open by the time Accept runs,
+    /// and its buffer-only branch would otherwise leave a closed file's accepted edit sitting only in
+    /// memory. openedForReview:true is how Accept() knows to flush it straight to disk itself,
+    /// restoring the same immediate-durability guarantee a closed file's edit already had before this
+    /// proposal touched it.
+    /// </summary>
+    [Fact]
+    public void Accept_AfterShowInEditorOpenedAPreviouslyClosedFile_StillWritesToDiskImmediately()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc\nd\ne");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 4, "B"), _root);
+        var document = _workspace.Open(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.WasApplied.ShouldBeTrue();
+        File.ReadAllText(path).ShouldBe("a\nB\ne");
+        document.IsDirty.ShouldBeFalse();
+    }
+
+    /// <summary>The other half of the guarantee above: a file the user already had open
+    /// independently must keep behaving exactly as before - accepting an edit to it stays buffer-only,
+    /// so the user can still review/undo it in the editor before it reaches disk.</summary>
+    [Fact]
+    public void Accept_ForAFileAlreadyOpenBeforeTheProposal_LeavesDiskUntouchedUntilSaved()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc\nd\ne");
+        var document = _workspace.Open(path)!;
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 4, "B"), _root);
+        proposal.ShowInEditor(document, openedForReview: false);
+
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.WasApplied.ShouldBeTrue();
+        document.TextDocument.Text.ShouldBe("a\nB\ne");
+        File.ReadAllText(path).ShouldBe("a\nb\nc\nd\ne");
+    }
+
+    /// <summary>The other real gap this closes: a propose_edit that creates a brand-new file targets
+    /// a path with nothing open and nothing on disk. Complete()/Apply() already tolerate that (diffing
+    /// against "" and writing fresh), but only once something has opened a document for the review
+    /// panel to attach to first - EditorWorkspace.OpenOrCreate is that something.</summary>
+    [Fact]
+    public void Accept_ForANewlyCreatedFileOpenedForReview_WritesItToDisk()
+    {
+        var path = Path.Combine(_root, "New.md");
+        var proposal = Complete(new EditOperation(path, "whole_file", null, null, "hello"), _root);
+        var document = _workspace.OpenOrCreate(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.WasApplied.ShouldBeTrue();
+        File.Exists(path).ShouldBeTrue();
+        File.ReadAllText(path).ShouldBe("hello");
+    }
+
+    /// <summary>The subfolder case specifically - a real crash caught by live-testing this feature:
+    /// creating a file inside a subfolder that doesn't exist yet reached EditorWorkspace.Save (via
+    /// SaveDocument) before Save started creating the directory itself, throwing an unhandled
+    /// DirectoryNotFoundException that aborted Accept partway through, leaving IsDecided false.</summary>
+    [Fact]
+    public void Accept_ForANewlyCreatedFileInANewSubfolder_CreatesTheDirectoryAndWritesIt()
+    {
+        var path = Path.Combine(_root, "scratch", "new.md");
+        var proposal = Complete(new EditOperation(path, "whole_file", null, null, "hello"), _root);
+        var document = _workspace.OpenOrCreate(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.IsDecided.ShouldBeTrue();
+        proposal.WasApplied.ShouldBeTrue();
+        File.ReadAllText(path).ShouldBe("hello");
     }
 
     /// <summary>The tripwire for silent truncation: the model can only notice it deleted most of a

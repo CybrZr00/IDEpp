@@ -14,6 +14,7 @@ public sealed class PluginHost : IPluginHost
     private readonly PluginToolWindowRegistry _toolWindowRegistry;
     private readonly PluginKeyBindingRegistry _keyBindingRegistry;
     private readonly PluginChatToolRegistry _chatToolRegistry;
+    private readonly PluginBuildEventRegistry _buildEventRegistry;
 
     private readonly List<(string PluginName, string Header, Func<EditorContextMenuContext, bool> CanExecute, Action<EditorContextMenuContext> Execute)> _editorContextMenuCommands = [];
     private readonly List<(string PluginName, string Header, Func<SolutionExplorerContextMenuContext, bool> CanExecute, Action<SolutionExplorerContextMenuContext> Execute)> _solutionExplorerContextMenuCommands = [];
@@ -31,13 +32,15 @@ public sealed class PluginHost : IPluginHost
         OutputPaneViewModel output,
         PluginToolWindowRegistry toolWindowRegistry,
         PluginKeyBindingRegistry keyBindingRegistry,
-        PluginChatToolRegistry chatToolRegistry)
+        PluginChatToolRegistry chatToolRegistry,
+        PluginBuildEventRegistry buildEventRegistry)
     {
         _mainWindowViewModel = mainWindowViewModel;
         _output = output;
         _toolWindowRegistry = toolWindowRegistry;
         _keyBindingRegistry = keyBindingRegistry;
         _chatToolRegistry = chatToolRegistry;
+        _buildEventRegistry = buildEventRegistry;
     }
 
     /// <summary>Every editor context-menu command registered so far, with <c>CanExecute</c>/<c>Execute</c>
@@ -68,6 +71,10 @@ public sealed class PluginHost : IPluginHost
         _mainWindowViewModel.AddPluginCommand(header, () => RunPluginCommand(header, execute));
 
     public void LogInfo(string message) => _output.AppendLine($"[Plugin] {message}");
+
+    public Task<string?> GetInlineCompletionAsync(string prefix, string suffix, CancellationToken cancellationToken)
+        => EditorServices.CompletionProvider?.GetCompletionAsync(prefix, suffix, cancellationToken)
+           ?? Task.FromResult<string?>(null);
 
     public void RegisterEditorContextMenuCommand(string header, Func<EditorContextMenuContext, bool> canExecute, Action<EditorContextMenuContext> execute)
     {
@@ -106,6 +113,9 @@ public sealed class PluginHost : IPluginHost
 
     public void RegisterChatTool(PluginToolDefinition definition, Func<JsonNode?, CancellationToken, Task<PluginToolResult>> execute) =>
         _chatToolRegistry.Register(_currentPluginName, definition, execute);
+
+    public void RegisterBuildEventHandler(BuildEventKind kind, Func<BuildEventContext, CancellationToken, Task> handler) =>
+        _buildEventRegistry.Register(_currentPluginName, kind, handler);
 
     // PluginLoader guards a plugin's Initialize() call, but nothing previously guarded a command
     // registered via RegisterToolsMenuCommand once wired into the menu - a throw from here reached

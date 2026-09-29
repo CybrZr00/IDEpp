@@ -79,4 +79,30 @@ public interface IPluginHost
     /// information to react to.
     /// </summary>
     void RegisterChatTool(PluginToolDefinition definition, Func<JsonNode?, CancellationToken, Task<PluginToolResult>> execute);
+
+    /// <summary>
+    /// Registers a handler to run at a point in the build lifecycle, alongside whatever Task
+    /// Explorer has bound to the same point. Handlers for one event run one after another, in
+    /// registration order, and the build waits for them.
+    ///
+    /// A handler that throws is logged and skipped: it does not fail the build, on the same
+    /// reasoning as everywhere else here - a broken plugin must not be able to make the IDE unable
+    /// to build. One that hangs is abandoned after a timeout for the same reason, so a handler that
+    /// never returns costs one slow build rather than every future one. Neither the handler's
+    /// outcome nor its duration is reported back to the plugin.
+    ///
+    /// The <paramref name="handler"/>'s CancellationToken is cancelled on that timeout; a
+    /// well-behaved handler should honour it.
+    /// </summary>
+    void RegisterBuildEventHandler(BuildEventKind kind, Func<BuildEventContext, CancellationToken, Task> handler);
+
+    /// <summary>
+    /// Asks the IDE's configured inline (fill-in-the-middle) completion model - the same one that
+    /// produces ghost-text suggestions in IDE++'s own editor - for what should come next between
+    /// <paramref name="prefix"/> and <paramref name="suffix"/>. Returns null when no such model is
+    /// configured, or it has nothing to suggest. Rendering the suggestion is the plugin's own job:
+    /// this exists so a plugin that hosts its own editor (a tool window with an embedded AvalonEdit,
+    /// say) can offer the same completions without reaching into IDE++'s editor internals.
+    /// </summary>
+    Task<string?> GetInlineCompletionAsync(string prefix, string suffix, CancellationToken cancellationToken);
 }

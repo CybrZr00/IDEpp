@@ -1,0 +1,246 @@
+<?xml version="1.0"?>
+<!--
+  VBA syntax highlighting for the embedded editor in AccessVbaToolWindow. Loaded directly into
+  that AvalonEdit TextEditor (not via IPluginHost.RegisterHighlighting, which is for file-based
+  documents opened in IDE++'s main editor - this tool window has its own embedded editor instead,
+  since there's no plugin extension point for opening a file in the main one).
+
+  Notes on choices made here (see the research this was written from, in the conversation that
+  added this file, for the full reasoning):
+  - VBA has no Class...End Class block (unlike VB.NET) - "Class" is deliberately NOT a keyword.
+  - String/Date/Time are colored as data types only, not duplicated into the builtin-function
+    list, since they're also valid "As Xxx" type names.
+  - Rem-as-comment (only when first on a line, or after a bare colon) isn't specially handled -
+    Rem is just colored as an ordinary keyword. Real-world VBA almost never uses it over '.
+  - String literals use doubled-quote escaping ("He said ""hi"""), not backslash escapes.
+  - Date literals are #...#, comments are ' to end of line, and there is no block comment form.
+-->
+<SyntaxDefinition name="VBA" extensions=".bas;.cls;.frm" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+
+  <Color name="Comment" foreground="#FF008000" />
+  <Color name="String" foreground="#FFA31515" />
+  <Color name="DateLiteral" foreground="#FFA31515" />
+  <Color name="Keyword" foreground="#FF0000FF" />
+  <Color name="BuiltinFunction" foreground="#FF800080" />
+  <Color name="Constant" foreground="#FF008080" />
+  <Color name="DataType" foreground="#FF2B91AF" />
+  <Color name="Preprocessor" foreground="#FF808080" />
+  <Color name="Attribute" foreground="#FF808080" />
+
+  <RuleSet ignoreCase="true">
+    <Span color="Comment" begin="'" />
+
+    <!--
+      AvalonEdit compiles these with RegexOptions.IgnorePatternWhitespace, where an unescaped "#"
+      starts a comment to the end of the pattern - so every "#" outside a character class below MUST
+      be written "\#", or the rule silently becomes an empty regex and the highlighter throws
+      "A highlighting rule matched 0 characters" the first time it renders any text.
+    -->
+    <Rule color="String">&quot;([^&quot;]|&quot;&quot;)*&quot;</Rule>
+    <Rule color="DateLiteral">\#[^\#\r\n]*\#</Rule>
+
+    <Rule color="Preprocessor">\#\s*(If|ElseIf|Else|End\s*If|Const)\b</Rule>
+
+    <Rule color="Attribute">^Attribute\s+VB_\w+</Rule>
+
+    <Rule color="BuiltinFunction">\bErr\.(Number|Description|Clear|Raise|Source|HelpFile|HelpContext)\b</Rule>
+
+    <Keywords color="Keyword">
+      <Word>Alias</Word>
+      <Word>And</Word>
+      <Word>ByRef</Word>
+      <Word>ByVal</Word>
+      <Word>Call</Word>
+      <Word>Case</Word>
+      <Word>Compare</Word>
+      <Word>Const</Word>
+      <Word>Declare</Word>
+      <Word>Dim</Word>
+      <Word>Do</Word>
+      <Word>Each</Word>
+      <Word>Else</Word>
+      <Word>ElseIf</Word>
+      <Word>End</Word>
+      <Word>Enum</Word>
+      <Word>Eqv</Word>
+      <Word>Error</Word>
+      <Word>Exit</Word>
+      <Word>Explicit</Word>
+      <Word>For</Word>
+      <Word>Friend</Word>
+      <Word>Function</Word>
+      <Word>Get</Word>
+      <Word>Global</Word>
+      <Word>GoSub</Word>
+      <Word>GoTo</Word>
+      <Word>If</Word>
+      <Word>Imp</Word>
+      <Word>Implements</Word>
+      <Word>In</Word>
+      <Word>Is</Word>
+      <Word>Let</Word>
+      <Word>Lib</Word>
+      <Word>Like</Word>
+      <Word>Loop</Word>
+      <Word>Mod</Word>
+      <Word>New</Word>
+      <Word>Next</Word>
+      <Word>Not</Word>
+      <Word>Nothing</Word>
+      <Word>On</Word>
+      <Word>Option</Word>
+      <Word>Optional</Word>
+      <Word>Or</Word>
+      <Word>ParamArray</Word>
+      <Word>Preserve</Word>
+      <Word>Private</Word>
+      <Word>Property</Word>
+      <Word>PtrSafe</Word>
+      <Word>Public</Word>
+      <Word>ReDim</Word>
+      <Word>Rem</Word>
+      <Word>Resume</Word>
+      <Word>Return</Word>
+      <Word>Select</Word>
+      <Word>Set</Word>
+      <Word>Static</Word>
+      <Word>Step</Word>
+      <Word>Sub</Word>
+      <Word>Then</Word>
+      <Word>To</Word>
+      <Word>Type</Word>
+      <Word>TypeOf</Word>
+      <Word>Until</Word>
+      <Word>Wend</Word>
+      <Word>While</Word>
+      <Word>With</Word>
+      <Word>Xor</Word>
+    </Keywords>
+
+    <Keywords color="BuiltinFunction">
+      <Word>Abs</Word>
+      <Word>Array</Word>
+      <Word>Asc</Word>
+      <Word>CBool</Word>
+      <Word>CByte</Word>
+      <Word>CCur</Word>
+      <Word>CDate</Word>
+      <Word>CDbl</Word>
+      <Word>CInt</Word>
+      <Word>CLng</Word>
+      <Word>CSng</Word>
+      <Word>CStr</Word>
+      <Word>Choose</Word>
+      <Word>Chr</Word>
+      <Word>CurrentDb</Word>
+      <Word>CurrentProject</Word>
+      <Word>CVar</Word>
+      <Word>DAvg</Word>
+      <Word>DCount</Word>
+      <Word>DateAdd</Word>
+      <Word>DateDiff</Word>
+      <Word>DatePart</Word>
+      <Word>DateSerial</Word>
+      <Word>DateValue</Word>
+      <Word>Day</Word>
+      <Word>DFirst</Word>
+      <Word>DLast</Word>
+      <Word>DLookup</Word>
+      <Word>DMax</Word>
+      <Word>DMin</Word>
+      <Word>DoCmd</Word>
+      <Word>DoEvents</Word>
+      <Word>DSum</Word>
+      <Word>Environ</Word>
+      <Word>Erase</Word>
+      <Word>Eval</Word>
+      <Word>Exp</Word>
+      <Word>Filter</Word>
+      <Word>Fix</Word>
+      <Word>Format</Word>
+      <Word>FormatCurrency</Word>
+      <Word>FormatDateTime</Word>
+      <Word>FormatNumber</Word>
+      <Word>Hour</Word>
+      <Word>IIf</Word>
+      <Word>InputBox</Word>
+      <Word>InStr</Word>
+      <Word>InStrRev</Word>
+      <Word>Int</Word>
+      <Word>IsArray</Word>
+      <Word>IsDate</Word>
+      <Word>IsEmpty</Word>
+      <Word>IsError</Word>
+      <Word>IsNull</Word>
+      <Word>IsNumeric</Word>
+      <Word>IsObject</Word>
+      <Word>Join</Word>
+      <Word>LBound</Word>
+      <Word>LCase</Word>
+      <Word>Left</Word>
+      <Word>Len</Word>
+      <Word>Log</Word>
+      <Word>LTrim</Word>
+      <Word>Mid</Word>
+      <Word>Minute</Word>
+      <Word>Month</Word>
+      <Word>MonthName</Word>
+      <Word>MsgBox</Word>
+      <Word>Now</Word>
+      <Word>Nz</Word>
+      <Word>Randomize</Word>
+      <Word>Replace</Word>
+      <Word>Right</Word>
+      <Word>Rnd</Word>
+      <Word>Round</Word>
+      <Word>RTrim</Word>
+      <Word>Second</Word>
+      <Word>Sgn</Word>
+      <Word>Shell</Word>
+      <Word>Space</Word>
+      <Word>Split</Word>
+      <Word>Sqr</Word>
+      <Word>StrComp</Word>
+      <Word>StrConv</Word>
+      <Word>Switch</Word>
+      <Word>SysCmd</Word>
+      <Word>TimeSerial</Word>
+      <Word>Trim</Word>
+      <Word>TypeName</Word>
+      <Word>UBound</Word>
+      <Word>UCase</Word>
+      <Word>Val</Word>
+      <Word>VarType</Word>
+      <Word>Weekday</Word>
+      <Word>WeekdayName</Word>
+      <Word>Year</Word>
+    </Keywords>
+
+    <Keywords color="Constant">
+      <Word>True</Word>
+      <Word>False</Word>
+      <Word>Null</Word>
+      <Word>Empty</Word>
+    </Keywords>
+    <!-- (?-i:) keeps the third character case-sensitive despite the rule set's ignoreCase, so "vba" isn't colored as a constant. -->
+    <Rule color="Constant">\bvb(?-i:[A-Z])\w*\b</Rule>
+
+    <Keywords color="DataType">
+      <Word>Boolean</Word>
+      <Word>Byte</Word>
+      <Word>Currency</Word>
+      <Word>Date</Word>
+      <Word>Decimal</Word>
+      <Word>Double</Word>
+      <Word>Integer</Word>
+      <Word>Long</Word>
+      <Word>LongLong</Word>
+      <Word>LongPtr</Word>
+      <Word>Object</Word>
+      <Word>Single</Word>
+      <Word>String</Word>
+      <Word>Time</Word>
+      <Word>Variant</Word>
+    </Keywords>
+  </RuleSet>
+</SyntaxDefinition>

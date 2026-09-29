@@ -15,9 +15,13 @@ public sealed record ShellCommandResult(int ExitCode, string Output, bool TimedO
 /// are the difference between a command that fails and one that hangs forever waiting for input
 /// nobody can type - the same problem GitService solves with GIT_TERMINAL_PROMPT=0.
 ///
-/// Kills the whole process tree on timeout or cancellation. A shell command routinely spawns
-/// children (dotnet spawns MSBuild worker nodes, npm spawns node), and killing only the shell
-/// leaves those running - the exact bug BuildService had.
+/// On timeout or cancellation it kills the whole process tree and then kills a
+/// <see cref="ProcessJob"/> the shell was assigned to. Both, because neither on its own is enough:
+/// a shell command routinely spawns children (dotnet spawns MSBuild worker nodes, npm spawns node)
+/// so killing only the shell leaves those running - the exact bug BuildService had - while the tree
+/// kill was measured leaving an orphaned grandchild alive under a real `npm run watch`, still
+/// holding the redirected stdout pipe open so the reader never saw EOF. See <see cref="ProcessJob"/>
+/// for the chain and why a job object does reach it.
 /// </summary>
 public sealed class ShellCommandRunner
 {
@@ -69,6 +73,13 @@ public sealed class ShellCommandRunner
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) Append(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) Append(e.Data); };
 
+        // Created before Start so assignment can happen as soon as possible afterwards - see
+        // ProcessJob for the race that narrows but cannot fully close. Disposing it here is also
+        // the backstop for a command that finished normally but left something running behind it:
+        // KILL_ON_JOB_CLOSE takes that with it, which is the right end of a call that promises one
+        // command's output and hands back no handle on anything else.
+        using var job = ProcessJob.TryCreate();
+
         try
         {
             process.Start();
@@ -77,6 +88,8 @@ public sealed class ShellCommandRunner
         {
             return new ShellCommandResult(-1, $"Could not start PowerShell: {ex.Message}", TimedOut: false);
         }
+
+        job?.TryAssign(process);
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -95,7 +108,7 @@ public sealed class ShellCommandRunner
         }
         catch (OperationCanceledException)
         {
-            KillTree(process);
+            KillTree(process, job);
             if (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -118,7 +131,7 @@ public sealed class ShellCommandRunner
         return new ShellCommandResult(timedOut ? -1 : process.ExitCode, text, timedOut);
     }
 
-    private static void KillTree(Process process)
+    private static void KillTree(Process process, ProcessJob? job)
     {
         try
         {
@@ -131,5 +144,9 @@ public sealed class ShellCommandRunner
         {
             // Already gone, or refused to die - nothing further to do here.
         }
+
+        // After the tree kill, not instead of it: the tree kill reaches anything spawned in the
+        // window before the job assignment, and the job reaches the orphans the tree walk cannot.
+        job?.Kill();
     }
 }

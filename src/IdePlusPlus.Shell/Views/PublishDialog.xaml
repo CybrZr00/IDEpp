@@ -1,0 +1,220 @@
+<Window x:Class="IdePlusPlus.Shell.Views.PublishDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes"
+        Title="Publish"
+        Width="820"
+        Height="580"
+        MinWidth="700"
+        MinHeight="470"
+        WindowStartupLocation="CenterOwner"
+        Closing="PublishDialog_OnClosing"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        TextElement.Foreground="{DynamicResource WindowForegroundBrush}">
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Margin="0,0,0,8"
+                   Text="{Binding ProjectName, StringFormat='Publish profiles for {0}'}"
+                   FontWeight="Bold" />
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="Profiles:" Margin="0,0,0,4" />
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                    <Button Content="New" Command="{Binding NewProfileCommand}" Padding="8,2" />
+                    <Button Content="Duplicate" Command="{Binding DuplicateProfileCommand}" Margin="6,0,0,0" Padding="8,2" />
+                    <Button Content="Delete" Command="{Binding DeleteProfileCommand}" Margin="6,0,0,0" Padding="8,2" />
+                </StackPanel>
+                <ListBox ItemsSource="{Binding Profiles}"
+                         SelectedItem="{Binding SelectedProfile}"
+                         Background="{DynamicResource PanelBackgroundBrush}"
+                         BorderThickness="1">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type toolPanes:PublishProfileEditorViewModel}">
+                            <StackPanel Margin="2">
+                                <TextBlock Text="{Binding Name}" />
+                                <TextBlock Text="{Binding Kind}"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel DataContext="{Binding SelectedProfile}">
+                    <TextBlock Text="{Binding UnsupportedMessage}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,10"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
+                               Visibility="{Binding IsEditable, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
+
+                    <Grid IsEnabled="{Binding IsEditable}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Name:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <TextBox Grid.Row="0" Grid.Column="1"
+                                 Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="4,2" Margin="0,0,0,6" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Target:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <ComboBox Grid.Row="1" Grid.Column="1"
+                                  ItemsSource="{Binding AvailableKinds}"
+                                  SelectedItem="{Binding Kind}"
+                                  Margin="0,0,0,6"
+                                  ToolTip="Folder publishes files to a directory; Container builds a container image with the .NET SDK" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Configuration:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <ComboBox Grid.Row="2" Grid.Column="1"
+                                  IsEditable="True"
+                                  ItemsSource="{Binding AvailableConfigurations}"
+                                  Text="{Binding Configuration, UpdateSourceTrigger=PropertyChanged}"
+                                  Margin="0,0,0,6"
+                                  ToolTip="Used for this publish regardless of the Debug/Release picker in the status bar" />
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Target framework:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <TextBox Grid.Row="3" Grid.Column="1"
+                                 Text="{Binding TargetFramework, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="4,2" Margin="0,0,0,6"
+                                 ToolTip="Leave blank to use the framework the project targets" />
+                    </Grid>
+
+                    <!-- Folder settings -->
+                    <StackPanel Visibility="{Binding IsFolderTarget, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="130" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Runtime identifier:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      IsEditable="True"
+                                      ItemsSource="{Binding AvailableRuntimeIdentifiers}"
+                                      Text="{Binding RuntimeIdentifier, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,0,0,6"
+                                      ToolTip="Leave blank for a portable, runtime-agnostic publish" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Deployment mode:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="1"
+                                      ItemsSource="{Binding AvailableDeploymentModes}"
+                                      SelectedItem="{Binding DeploymentMode}"
+                                      Margin="0,0,0,6" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Output folder:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                            <DockPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,6">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Browse..."
+                                        Click="BrowseButton_OnClick"
+                                        Margin="6,0,0,0"
+                                        Padding="8,2" />
+                                <TextBox Text="{Binding PublishDir, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="4,2"
+                                         ToolTip="Relative to the project folder. Leave blank for the SDK default under bin." />
+                            </DockPanel>
+                        </Grid>
+
+                        <CheckBox Content="Produce a single file"
+                                  IsChecked="{Binding PublishSingleFile}"
+                                  Margin="130,2,0,2" />
+                        <CheckBox Content="Enable ReadyToRun compilation"
+                                  IsChecked="{Binding PublishReadyToRun}"
+                                  Margin="130,2,0,2" />
+                        <CheckBox Content="Trim unused code"
+                                  IsChecked="{Binding PublishTrimmed}"
+                                  Margin="130,2,0,2"
+                                  ToolTip="Requires a runtime identifier and a self-contained deployment" />
+                    </StackPanel>
+
+                    <!-- Container settings -->
+                    <Grid Visibility="{Binding IsContainerTarget, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Image name:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <TextBox Grid.Row="0" Grid.Column="1"
+                                 Text="{Binding ContainerRepository, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="4,2" Margin="0,0,0,6" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Tag:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <TextBox Grid.Row="1" Grid.Column="1"
+                                 Text="{Binding ContainerImageTag, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="4,2" Margin="0,0,0,6" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Registry:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <TextBox Grid.Row="2" Grid.Column="1"
+                                 Text="{Binding ContainerRegistry, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="4,2" Margin="0,0,0,6"
+                                 ToolTip="Leave blank to load the image into the local container daemon instead of pushing it" />
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Base image:" VerticalAlignment="Center" Margin="0,0,6,6" />
+                        <TextBox Grid.Row="3" Grid.Column="1"
+                                 Text="{Binding ContainerBaseImage, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="4,2" Margin="0,0,0,6"
+                                 ToolTip="Leave blank to let the SDK choose a base image for the project type" />
+
+                        <TextBlock Grid.Row="4" Grid.Column="1"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                   FontSize="11"
+                                   Text="Building a container image needs a running container daemon unless the profile sets ContainerArchiveOutputPath." />
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <TextBlock Grid.Row="2"
+                   Text="{Binding StatusMessage}"
+                   TextWrapping="Wrap"
+                   Margin="0,10,0,0"
+                   Foreground="{DynamicResource MutedForegroundBrush}" />
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="Open Folder"
+                    Command="{Binding OpenPublishFolderCommand}"
+                    Padding="12,4"
+                    Margin="0,0,8,0" />
+            <Button Content="Save" Command="{Binding SaveCommand}" Padding="12,4" Margin="0,0,8,0" />
+            <Button Content="Publish" Command="{Binding PublishCommand}" Padding="12,4" IsDefault="True" />
+            <Button Content="Close" Click="CloseButton_OnClick" Margin="8,0,0,0" Padding="12,4" IsCancel="True" />
+        </StackPanel>
+    </Grid>
+</Window>

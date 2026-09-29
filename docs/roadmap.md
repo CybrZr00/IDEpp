@@ -6,6 +6,20 @@ subsystems (Editor, Build/Run/Debug/ProjectSystem, the Copilot ecosystem, Infras
 Shell UX). Every item below is grounded in an actual file, not generic IDE advice.
 
 **Execution status** (this plan is being executed autonomously in-repo; updated as milestones land):
+- [x] New Project (project-templates Phase 1) — a new `IdePlusPlus.Templates` project reading the SDK's
+      own `templatecache.json` (parsing `dotnet new list` is not viable: it truncates the template-name
+      column and is localized), collapsing the SDK's side-by-side 8.0/9.0/10.0 template bands into one
+      row each, and a New Project dialog on File > New > Project and the Solution Explorer's solution
+      node. Phase 2 adds New Item: a File > New shortlist (Class, Interface, Enum, Record, API
+      Controller) and Add New Item... on the Solution Explorer, with the namespace computed from the
+      project's RootNamespace plus the target folder — `dotnet new` will not do it, binding instead to
+      msbuild:RootNamespace, which is folder-blind. See
+      [project-templates-design.md](project-templates-design.md). Phase 3 renders each template's own
+      parameters in both dialogs, adds Tools > Template Packages for `dotnet new install`/`uninstall`,
+      and gives the copilot `list_templates`/`create_project`/`add_item` — installing a package
+      deliberately has no tool, since it is arbitrary code fetched by name that later runs as a
+      template. Follow-up landed alongside: `RoslynWorkspaceService.NotifyDocumentAddedAsync`, so a
+      file added through New Item is analysed without reopening the solution.
 - [x] Reliability & safety net (Part 2) — global exception handler, Serilog wiring, plugin crash guards,
       missing-file/save-cancel/ghost-text bug fixes, secrets pruning, `.bak` backup, new
       `IdePlusPlus.Infrastructure.Tests` project.
@@ -259,6 +273,27 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
         build (0 warnings/errors), full test suite (217 tests across 17 projects, all passing), and a
         real launch smoke test (with no plugin installed, confirming the no-plugin path is unaffected).
 
+- [x] Publish profiles — new `IdePlusPlus.Publish` project reading and writing standard
+      `Properties/PublishProfiles/*.pubxml`, so a profile authored in Visual Studio is consumed
+      as-is and one authored here runs from `dotnet publish -p:PublishProfile=x`. Folder and
+      container-image (`-t:PublishContainer`) targets; both argument forms were verified against a
+      real SDK before being written down. A Publish dialog (Build menu, Solution Explorer project
+      context menu, status-bar profile picker persisted per project in `.ideplusplus/publish.json`)
+      and a `publish_project` copilot tool. Two design points carried most of the weight: unmodelled
+      properties round-trip verbatim and existing files are edited in place, because a writer that
+      emitted only the properties IDE++ understands would delete everything Visual Studio wrote (and
+      the comment block in this repo's own `win-x64.pubxml`) on the first save; and `dotnet publish`
+      runs through a new `BuildService.RunDotnetAsync` rather than a lock of its own, since a publish
+      writes the same `obj/bin` a concurrent build does. Profiles using a protocol IDE++ cannot run
+      (MSDeploy, ClickOnce, Azure, FTP) are listed read-only rather than hidden — hiding them would
+      make a shared solution look like it has fewer profiles than it does — and the writer refuses
+      them outright. The copilot tool runs folder profiles only and never authors one: a container
+      profile with a registry configured pushes an image outward with no undo, and what gets shipped
+      where is the user's decision. 74 new tests across `IdePlusPlus.Publish.Tests` and
+      `IdePlusPlus.Shell.Tests`; full suite 594 tests across 18 projects, all passing. Not yet
+      verified interactively: the dialog's own click-through, and a container publish against a
+      running daemon.
+
 **All five "bigger bet" initiatives are now shipped.** Signature help, go-to-definition,
 find-all-references, rename, debugging a single test, remote/non-local attach, NuGet
 version-conflict UI, and a real out-of-process plugin sandbox (Tier 3) all remain explicitly
@@ -384,7 +419,7 @@ Confirmed asymmetry: MCP tool calls **already** auto-execute in a loop; `propose
 - Add a test project for the editor's pure-logic classes (`DocumentViewModel`, `EditorWorkspace`, `BreakpointManager`, `BraceFoldingStrategy`) — all directly unit-testable today, zero WPF dependency, zero coverage (M).
 - Persist breakpoints across restarts — reuse the exact JSON-persistence pattern `EditorWorkspace` already has for `recent-files.json` (S).
 - Surface DeepSeek FIM failures (auth errors, network errors) instead of failing silently — currently indistinguishable from "no suggestion available" (S).
-- Live bracket-matching highlight distinct from folding; go-to-definition/symbol navigation; minimap; multi-cursor; split-view; line-ending/encoding indicator — larger, lower-priority polish items (L, mostly build-from-scratch since AvalonEdit doesn't provide them).
+- Live bracket-matching highlight distinct from folding; minimap; multi-cursor; split-view; line-ending/encoding indicator — larger, lower-priority polish items (L, mostly build-from-scratch since AvalonEdit doesn't provide them). Go-to-definition shipped as Ctrl+Click (main editor: `RoslynDefinitionService`/`SymbolFinder.FindSymbolAtPositionAsync`; the `samples/AccessVbaPlugin` tool window got the same gesture over its own symbol index) — find-all-references and rename remain the deferred half of this group.
 - **Bigger bet**: no IntelliSense/LSP/Roslyn at all — completion is single-line AI ghost text only, no diagnostics/squiggles, no member lists, no signature help. This is the single largest capability gap in the editor and would be its own multi-milestone initiative (Roslyn workspace hosting + a completion/diagnostics provider wired into AvalonEdit).
 
 ### Build / Run / Debug / Project System
@@ -396,6 +431,9 @@ Confirmed asymmetry: MCP tool calls **already** auto-execute in a loop; `propose
 - Add condition/hit-count support to breakpoints, and pass them through the DAP `setBreakpoints` call netcoredbg already supports (M).
 - Add a minimal Watch pane using the DAP `evaluate` request, which is never sent today — `VariableInfo` and the `LocalsPaneViewModel` pattern already exist to reuse (M).
 - No NuGet package management (add/remove/restore) anywhere, no Test Explorer/`dotnet test` integration (the repo's own xUnit suite can't be run from inside IDE++ itself), no New Project/New Item wizards, no multi-project debug or attach-to-process — larger initiatives, roughly in that priority order.
+- No publish of any kind — no `dotnet publish`, no `.pubxml` reading, no deployment UI. The only publish in the repo is IDE++ publishing itself, via a hand-written profile nothing in the app can read (M). *(Shipped — see the execution status above.)*
+- No Task Runner Explorer equivalent — nothing discovers `package.json` scripts, `gulpfile.js` or `Gruntfile.js`, and there is no before/after-build binding mechanism for anything to hang off (`IPluginHost` has no build-lifecycle member either). Designed in [task-runner-design.md](task-runner-design.md) as three phases (M/M/S). *(Shipped — `package.json` scripts in a Task Runner pane, bindable to Before/After Build and Clean, an `IPluginHost` build-event member, and approval-gated gulp/grunt discovery with Visual Studio `<binding>` import.)*
+- No New Project / New Item wizards — `File > _New` creates an untitled in-memory buffer and nothing can add a project to the open solution, so both start outside the IDE. Designed in [project-templates-design.md](project-templates-design.md) as three phases (M/M/S), reading the SDK's own `templatecache.json` rather than parsing `dotnet new list`'s truncated, localized table.
 
 ### Copilot / AI ecosystem
 
