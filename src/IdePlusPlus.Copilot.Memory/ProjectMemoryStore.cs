@@ -22,12 +22,25 @@ public sealed class ProjectMemoryStore
         return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
-    public void SaveSessionLog(string solutionDirectory, string transcript)
+    public static string SessionsDirectory(string solutionDirectory) =>
+        Path.Combine(MemoryDirectory(solutionDirectory), "sessions");
+
+    /// <summary>Writes the transcript to a new file and returns its path. Never overwrites: the name
+    /// only has one-second resolution, and Save Memory followed straight away by New Chat would
+    /// otherwise lose the first of the two logs.</summary>
+    public string SaveSessionLog(string solutionDirectory, string transcript)
     {
-        var sessionsDirectory = Path.Combine(MemoryDirectory(solutionDirectory), "sessions");
+        var sessionsDirectory = SessionsDirectory(solutionDirectory);
         Directory.CreateDirectory(sessionsDirectory);
 
-        var fileName = $"{DateTime.Now:yyyy-MM-dd_HHmmss}.md";
-        File.WriteAllText(Path.Combine(sessionsDirectory, fileName), transcript);
+        var stem = $"{DateTime.Now:yyyy-MM-dd_HHmmss}";
+        var path = Path.Combine(sessionsDirectory, $"{stem}.md");
+        for (var suffix = 2; File.Exists(path); suffix++)
+        {
+            path = Path.Combine(sessionsDirectory, $"{stem}_{suffix}.md");
+        }
+
+        File.WriteAllText(path, transcript);
+        return path;
     }
 }

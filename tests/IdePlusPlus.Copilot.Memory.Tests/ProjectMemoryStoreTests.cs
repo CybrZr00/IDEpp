@@ -40,6 +40,27 @@ public sealed class ProjectMemoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void SaveSessionLog_ReturnsThePathItWrote()
+    {
+        var path = _store.SaveSessionLog(_solutionDirectory, "**User:** hi");
+
+        Path.GetDirectoryName(path).ShouldBe(ProjectMemoryStore.SessionsDirectory(_solutionDirectory));
+        File.ReadAllText(path).ShouldBe("**User:** hi");
+    }
+
+    // Save Memory and New Chat both archive the conversation, and can easily run in the same second.
+    [Fact]
+    public void SaveSessionLog_TwiceInQuickSuccession_KeepsBothLogs()
+    {
+        var first = _store.SaveSessionLog(_solutionDirectory, "first");
+        var second = _store.SaveSessionLog(_solutionDirectory, "second");
+
+        second.ShouldNotBe(first);
+        File.ReadAllText(first).ShouldBe("first");
+        File.ReadAllText(second).ShouldBe("second");
+    }
+
+    [Fact]
     public void MemoryFilePath_IsUnderTheCopilotSubdirectoryOfDotIdePlusPlus()
     {
         var path = ProjectMemoryStore.MemoryFilePath(_solutionDirectory);
