@@ -15,6 +15,28 @@ public partial class CopilotChatPanel : UserControl
     {
         InitializeComponent();
         DataContextChanged += (_, _) => Rebind();
+        PreviewKeyDown += OnPanelPreviewKeyDown;
+    }
+
+    /// <summary>
+    /// Ctrl+L starts a new conversation from anywhere in the pane. Handled on the way down rather
+    /// than as a KeyBinding so no child control can claim the gesture first - the rich-text editing
+    /// commands bind Ctrl+L to AlignLeft on some text controls. Pane-scoped on purpose: in the code
+    /// editor Ctrl+L means something else to anyone coming from Visual Studio, and pressing it there
+    /// must never wipe the chat.
+    /// </summary>
+    private void OnPanelPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.L || Keyboard.Modifiers != ModifierKeys.Control)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_boundViewModel?.NewConversationCommand.CanExecute(null) == true)
+        {
+            _boundViewModel.NewConversationCommand.Execute(null);
+        }
     }
 
     private void Rebind()

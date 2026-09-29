@@ -140,6 +140,14 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
+        copilotChatPane.NewConversationConfirmation = warning =>
+            MessageBox.Show(
+                mainWindow,
+                warning,
+                "IDE++ - new conversation",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.No) == MessageBoxResult.Yes;
 
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.

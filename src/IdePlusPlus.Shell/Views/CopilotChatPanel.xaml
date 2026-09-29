@@ -4,6 +4,12 @@
              xmlns:toolPanes="clr-namespace:IdePlusPlus.Shell.ToolPanes"
              xmlns:mdxam="clr-namespace:MdXaml;assembly=MdXaml">
 
+    <!-- Pane-scoped, so Esc in the editor still means whatever the editor makes it mean. Ctrl+L
+         (New Chat) is handled in code-behind instead - see OnPanelPreviewKeyDown. -->
+    <UserControl.InputBindings>
+        <KeyBinding Key="Escape" Command="{Binding CancelStreamingCommand}" />
+    </UserControl.InputBindings>
+
     <UserControl.Resources>
         <DataTemplate DataType="{x:Type toolPanes:ChatMessageViewModel}">
             <Border Margin="4" Padding="6" CornerRadius="4" MaxWidth="340">
@@ -339,25 +345,36 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="4,4,4,4">
-            <StackPanel Orientation="Horizontal">
-                <ComboBox ItemsSource="{Binding AvailableProviders}"
+            <!-- New Chat sits top-right, where chat panes conventionally put it; the model picker
+                 takes whatever width is left. -->
+            <DockPanel LastChildFill="True">
+                <Button DockPanel.Dock="Right"
+                        Content="New Chat"
+                        Command="{Binding NewConversationCommand}"
+                        Margin="4,0,0,0"
+                        Padding="6,0"
+                        FontSize="11"
+                        ToolTip="Start a new conversation (Ctrl+L, or type /clear). The current one is saved to .ideplusplus/copilot/sessions first." />
+                <Button DockPanel.Dock="Right"
+                        Content="⟳"
+                        Command="{Binding RefreshModelsCommand}"
+                        ToolTip="Refresh the model list from the selected provider"
+                        Width="24"
+                        Margin="4,0,0,0"
+                        Padding="0" />
+                <ComboBox DockPanel.Dock="Left"
+                          ItemsSource="{Binding AvailableProviders}"
                           SelectedItem="{Binding SelectedProvider}"
                           Width="90"
                           FontSize="11" />
                 <ComboBox ItemsSource="{Binding AvailableModels}"
                           Text="{Binding SelectedModel, UpdateSourceTrigger=PropertyChanged}"
                           IsEditable="True"
-                          Width="190"
+                          MinWidth="80"
                           FontSize="11"
                           Margin="4,0,0,0"
                           ToolTip="Model to chat with. Type to filter, or enter any model id the provider accepts - the list shows tool-capable models, since editing files needs tool support." />
-                <Button Content="⟳"
-                        Command="{Binding RefreshModelsCommand}"
-                        ToolTip="Refresh the model list from the selected provider"
-                        Width="24"
-                        Margin="4,0,0,0"
-                        Padding="0" />
-            </StackPanel>
+            </DockPanel>
             <TextBlock Text="Fetching models…"
                        FontSize="10"
                        Foreground="{DynamicResource MutedForegroundBrush}"
@@ -455,6 +472,12 @@
                         Visibility="{Binding IsStreaming, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
                 <ProgressBar IsIndeterminate="True" Width="16" Height="16" Margin="0,0,6,0" />
                 <TextBlock Text="{Binding CurrentActivity}" FontSize="11" VerticalAlignment="Center" />
+                <Button Content="■ Stop"
+                        Command="{Binding CancelStreamingCommand}"
+                        Margin="8,0,0,0"
+                        Padding="6,0"
+                        FontSize="11"
+                        ToolTip="Stop the current response (Esc)" />
             </StackPanel>
         </StackPanel>
 
