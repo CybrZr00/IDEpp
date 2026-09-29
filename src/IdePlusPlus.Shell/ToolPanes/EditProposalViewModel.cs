@@ -139,10 +139,26 @@ public sealed partial class EditProposalViewModel : ObservableObject
         }
     }
 
-    public void Complete(EditProposalEvent proposalEvent, string? baseDirectory)
+    /// <summary>Set for a proposal built from a code block in the reply rather than from an edit
+    /// tool call, so the card can say where it came from and that the placement was inferred.</summary>
+    [ObservableProperty]
+    private string? sourceNote;
+
+    public void Complete(EditProposalEvent proposalEvent, string? baseDirectory) =>
+        CompleteCore(proposalEvent.Operation!, proposalEvent.ArgumentsJson, baseDirectory);
+
+    /// <summary>For a model that cannot call tools: the operation was worked out from its text
+    /// (CodeBlockEditPlanner) instead of streamed as arguments. Reviewed and applied like any other.</summary>
+    public void CompleteFromReplyText(EditOperation operation, string? baseDirectory, string note)
     {
-        _operation = proposalEvent.Operation!;
-        ArgumentsJson = proposalEvent.ArgumentsJson;
+        SourceNote = note;
+        CompleteCore(operation, null, baseDirectory);
+    }
+
+    private void CompleteCore(EditOperation operation, string? argumentsJson, string? baseDirectory)
+    {
+        _operation = operation;
+        ArgumentsJson = argumentsJson;
         FilePath = _operation.FilePath;
         _workspaceDirectory = baseDirectory;
         _fullPath = EditApplicationService.ResolveWithinWorkspace(_operation.FilePath, baseDirectory);

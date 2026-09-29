@@ -185,6 +185,24 @@
                         </TextBlock.Style>
                     </TextBlock>
 
+                    <TextBlock Text="{Binding SourceNote}"
+                               Margin="0,2,0,0"
+                               FontSize="11"
+                               FontStyle="Italic"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedForegroundBrush}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SourceNote}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
                     <!-- ItemsControl has no ScrollViewer in its default template, so a bare
                          MaxHeight clipped the diff instead of scrolling it - for any file longer
                          than a few lines the changed region sat below the clip, which made this

@@ -561,6 +561,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             {
                 var turn = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
 
+                // A model without tool calling can only show code. When a reply made no call at all
+                // but contains code that can be placed exactly, offer it as a normal reviewable edit.
+                if (turn.Calls.Count == 0 && turn.EditProposals.Count == 0 && !turn.ProducedPlanProposal && !IsPlanMode)
+                {
+                    _dispatcher.Invoke(() => ProposeEditsFromReplyText(assistantMessage.Text));
+                }
+
                 // propose_edit is replayed here alongside the read-only and MCP calls, so the
                 // model sees its own edits as tool calls with tool results. Before this, an
                 // edit-only iteration recorded nothing at all - not even the assistant's own
@@ -1567,6 +1574,89 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         return input;
+    }
+
+    private static readonly HashSet<string> NonSourceLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bash", "sh", "shell", "zsh", "powershell", "pwsh", "ps1", "cmd", "bat", "console", "text", "txt", "diff", "log", "output",
+    };
+
+    /// <summary>
+    /// Turns code blocks in a plain-text reply into edit proposals, for models with no tool calling.
+    ///
+    /// Never auto-accepted, even in Auto Mode: the placement is inferred from the text rather than
+    /// stated by the model, so a person looks at the diff first. Blocks that cannot be placed exactly
+    /// (no matching file, an ambiguous or missing member) produce nothing - the code is still there
+    /// in the reply to copy.
+    /// </summary>
+    private void ProposeEditsFromReplyText(string replyText)
+    {
+        var directory = _solutionDirectory;
+        if (directory is null || string.IsNullOrWhiteSpace(replyText))
+        {
+            return;
+        }
+
+        foreach (var block in CodeBlockEditPlanner.ExtractBlocks(replyText))
+        {
+            var language = block.Info.Split(' ', 2)[0];
+            if (NonSourceLanguages.Contains(language))
+            {
+                continue;
+            }
+
+            string? fullPath = null;
+            var isNewFile = false;
+            foreach (var hint in CodeBlockEditPlanner.PathHints(block))
+            {
+                if (WorkspaceFileReader.ResolveWithinRoot(directory, hint) is not { } resolved)
+                {
+                    continue;
+                }
+
+                if (File.Exists(resolved))
+                {
+                    fullPath = resolved;
+                    break;
+                }
+
+                // Only a path the fence itself names may create a file - a filename mentioned in
+                // passing in the prose is not a request to make one.
+                if (block.Info.Contains(hint, StringComparison.OrdinalIgnoreCase))
+                {
+                    fullPath = resolved;
+                    isNewFile = true;
+                    break;
+                }
+            }
+
+            if (fullPath is null && _currentDocument?.FilePath is { } activePath
+                && WorkspaceFileReader.ResolveWithinRoot(directory, activePath) is { } activeResolved)
+            {
+                fullPath = activeResolved;
+            }
+
+            if (fullPath is null)
+            {
+                continue;
+            }
+
+            var current = isNewFile ? null : _editApplicationService.GetCurrentContent(fullPath);
+            var relativePath = Path.GetRelativePath(directory, fullPath);
+            if (!CodeBlockEditPlanner.TryPlan(block, relativePath, current, out var operation, out _))
+            {
+                continue;
+            }
+
+            var proposal = new EditProposalViewModel($"reply-edit-{Guid.NewGuid():N}", _editApplicationService);
+            AttachEditHooks(proposal);
+            Messages.Add(proposal);
+            proposal.CompleteFromReplyText(
+                operation,
+                directory,
+                "Built from a code block in the reply - this model did not call the edit tool, so where it "
+                + "goes was inferred. Check the diff before accepting; Auto Mode does not apply these.");
+        }
     }
 
     private void HandlePlanToolCallDelta(
