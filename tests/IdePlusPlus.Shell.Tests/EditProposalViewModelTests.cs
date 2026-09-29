@@ -161,6 +161,24 @@ public class EditProposalViewModelTests : IDisposable
         document.IsDirty.ShouldBeFalse();
     }
 
+    /// <summary>The review tab can be closed before the accept lands - opening another solution closes
+    /// every document while an accept may still be waiting on a PreToolUse hook. Apply then writes the
+    /// file itself, and the closed tab's stale buffer must not be saved back over it.</summary>
+    [Fact]
+    public void Accept_AfterItsReviewTabWasClosed_KeepsTheEditOnDisk()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc\nd\ne");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 4, "B"), _root);
+        var document = _workspace.Open(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+        _workspace.Close(document);
+
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.WasApplied.ShouldBeTrue();
+        File.ReadAllText(path).ShouldBe("a\nB\ne");
+    }
+
     /// <summary>The other half of the guarantee above: a file the user already had open
     /// independently must keep behaving exactly as before - accepting an edit to it stays buffer-only,
     /// so the user can still review/undo it in the editor before it reaches disk.</summary>

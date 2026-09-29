@@ -66,6 +66,10 @@ public sealed class EditApplicationService
     /// immediately" guarantee that would otherwise only apply while the file stayed closed.</summary>
     public bool IsOpen(string fullPath) => FindOpenDocument(fullPath) is not null;
 
+    /// <summary>Whether this particular document is still open - not just some document for the same
+    /// path, which after a close and reopen is a different buffer.</summary>
+    public bool IsOpen(DocumentViewModel document) => _editorWorkspace.OpenDocuments.Contains(document);
+
     /// <summary>Writes one document's current buffer to disk - used by EditProposalViewModel.Accept
     /// right after Apply, for a document it opened itself purely to show the diff for review (see
     /// IsOpen above). Not exposed more broadly than that: for a document the user already had open

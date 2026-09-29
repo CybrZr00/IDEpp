@@ -407,7 +407,13 @@ public sealed partial class EditProposalViewModel : ObservableObject
         // remarks). For one that's only open because this proposal opened it for review, flush it
         // ourselves so a closed file's accepted edit is still durable immediately, same as before
         // every proposal started opening its target.
-        if (result == ApplyResult.Applied && _openedForReview && _attachedDocument is { } document)
+        //
+        // Only while that tab is still open, though. Closed in the meantime (opening another solution
+        // closes every document while an accept can still be waiting on a PreToolUse hook), Apply has
+        // already written the file itself - and saving the closed tab's buffer would put the old text
+        // straight back over it.
+        if (result == ApplyResult.Applied && _openedForReview && _attachedDocument is { } document
+            && _applicationService.IsOpen(document))
         {
             _applicationService.SaveDocument(document);
         }
