@@ -94,7 +94,9 @@ public sealed partial class EditProposalViewModel : ObservableObject
     public string? ResolvedFullPath => _fullPath;
 
     private DocumentViewModel? _attachedDocument;
+    private DiffPreview? _pushedPreview;
     private bool _openedForReview;
+    private bool _isDiscarded;
 
     /// <summary>Called once the target file has been opened/focused in the editor - pushes this
     /// proposal's diff into that document's editor tab, docked above the code. Accept()/Reject() call
@@ -128,16 +130,50 @@ public sealed partial class EditProposalViewModel : ObservableObject
 
     private void PushEditorPreview()
     {
-        if (_attachedDocument is not { } document)
+        // A discarded proposal's panel stays gone - an accept that was already in flight when the
+        // conversation was cleared would otherwise put it back when it finishes.
+        if (_attachedDocument is not { } document || _isDiscarded)
         {
             return;
         }
 
-        EditorServices.DiffPreview.Request(document, new DiffPreview(
+        _pushedPreview = new DiffPreview(
             DiffLines, ChangeSummary, IsLargeDeletion, IsDecided, DecisionText,
             Accept: IsDecided ? null : () => AcceptCommand.Execute(null),
             Reject: IsDecided ? null : () => RejectCommand.Execute(null),
-            Dismiss: () => EditorServices.DiffPreview.Request(document, null)));
+            Dismiss: () => EditorServices.DiffPreview.Request(document, null));
+        EditorServices.DiffPreview.Request(document, _pushedPreview);
+    }
+
+    /// <summary>
+    /// Withdraws this proposal because the conversation it belongs to is going away (New Chat, or a
+    /// different solution being opened). Without this the diff panel stayed in its editor tab with a
+    /// live Accept button that no conversation would ever hear about - and accepting it ran whatever
+    /// hooks the *current* solution had configured, against a file of the previous one.
+    ///
+    /// An undecided proposal is closed as not applied. One already being accepted (an Auto Mode accept
+    /// waiting on a PreToolUse hook) is left to finish - it was already approved, and marking it
+    /// decided underneath Apply would race it. Either way the panel is taken down, but only if it is
+    /// still this proposal's: another proposal for the same file may have replaced it since.
+    /// </summary>
+    public void Discard(string reason)
+    {
+        _isDiscarded = true;
+
+        if (IsComplete && !IsDecided && !_isApplying)
+        {
+            IsDecided = true;
+            DecisionText = reason;
+            ToolResultText = $"Not applied: {reason}";
+            StatusText = reason;
+        }
+
+        if (_attachedDocument is { } document
+            && _pushedPreview is { } pushed
+            && ReferenceEquals(EditorServices.DiffPreview.CurrentFor(document), pushed))
+        {
+            EditorServices.DiffPreview.Request(document, null);
+        }
     }
 
     /// <summary>True once this proposal is complete and its resolved target lies inside the given
@@ -316,6 +352,14 @@ public sealed partial class EditProposalViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanDecide))]
     private async Task AcceptAsync()
     {
+        // The editor panel's Accept calls Execute directly, which does not consult CanExecute - so a
+        // panel still on screen for a proposal that has since been decided or discarded must not be
+        // able to apply it.
+        if (!CanDecide() || _isDiscarded)
+        {
+            return;
+        }
+
         _isApplying = true;
         RejectCommand.NotifyCanExecuteChanged();
         try
@@ -399,6 +443,11 @@ public sealed partial class EditProposalViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanDecide))]
     private void Reject()
     {
+        if (!CanDecide())
+        {
+            return;
+        }
+
         IsDecided = true;
         DecisionText = "Rejected";
         ToolResultText =

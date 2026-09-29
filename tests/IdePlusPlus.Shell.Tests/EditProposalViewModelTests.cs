@@ -364,4 +364,81 @@ public class EditProposalViewModelTests : IDisposable
 
         proposal.ToolResultText.ShouldBe(appliedText);
     }
+
+    /// <summary>
+    /// Discard is how a proposal is withdrawn when its conversation goes away (New Chat, or another
+    /// solution being opened). Before it existed, clearing the chat left the diff panel in the editor
+    /// with a live Accept button that no conversation would ever hear about.
+    /// </summary>
+    [Fact]
+    public void Discard_AnUndecidedProposal_ClosesItUnappliedAndTakesDownItsPanel()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+        var document = _workspace.Open(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+        EditorServices.DiffPreview.CurrentFor(document).ShouldNotBeNull();
+
+        proposal.Discard("Discarded - a new conversation was started.");
+
+        proposal.IsDecided.ShouldBeTrue();
+        proposal.WasApplied.ShouldBeFalse();
+        proposal.StatusText.ShouldBe("Discarded - a new conversation was started.");
+        proposal.ToolResultText.ShouldStartWith("Not applied");
+        EditorServices.DiffPreview.CurrentFor(document).ShouldBeNull();
+        File.ReadAllText(path).ShouldBe("a\nb\nc");
+    }
+
+    /// <summary>The panel's Accept calls AcceptCommand.Execute directly, which does not check
+    /// CanExecute - so a panel captured before the discard must not be able to write the edit.</summary>
+    [Fact]
+    public void Discard_ThenAStaleAcceptFromThePanel_WritesNothing()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+        var document = _workspace.Open(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+        var stalePanel = EditorServices.DiffPreview.CurrentFor(document)!;
+
+        proposal.Discard("Discarded.");
+        stalePanel.Accept!.Invoke();
+
+        proposal.WasApplied.ShouldBeFalse();
+        File.ReadAllText(path).ShouldBe("a\nb\nc");
+        document.TextDocument.Text.ShouldBe("a\nb\nc");
+    }
+
+    [Fact]
+    public void Discard_AnAlreadyAcceptedProposal_KeepsItsOutcomeButClearsItsBanner()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc");
+        var proposal = Complete(ReplaceRange("Foo.cs", 2, 2, "B"), _root);
+        var document = _workspace.Open(path)!;
+        proposal.ShowInEditor(document, openedForReview: true);
+        proposal.AcceptCommand.Execute(null);
+
+        proposal.Discard("Discarded.");
+
+        proposal.WasApplied.ShouldBeTrue();
+        proposal.DecisionText.ShouldBe("Accepted");
+        EditorServices.DiffPreview.CurrentFor(document).ShouldBeNull();
+    }
+
+    /// <summary>Two proposals for the same file share one panel slot; withdrawing the older one must
+    /// not take down the panel the newer one is showing.</summary>
+    [Fact]
+    public void Discard_LeavesAPanelThatAnotherProposalHasSinceReplaced()
+    {
+        var path = WriteFile("Foo.cs", "a\nb\nc");
+        var document = _workspace.Open(path)!;
+        var older = Complete(ReplaceRange("Foo.cs", 1, 1, "A"), _root);
+        older.ShowInEditor(document, openedForReview: false);
+        var newer = Complete(ReplaceRange("Foo.cs", 3, 3, "C"), _root);
+        newer.ShowInEditor(document, openedForReview: false);
+        var newerPanel = EditorServices.DiffPreview.CurrentFor(document);
+
+        older.Discard("Discarded.");
+
+        EditorServices.DiffPreview.CurrentFor(document).ShouldBeSameAs(newerPanel);
+    }
 }

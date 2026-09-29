@@ -14,11 +14,16 @@ namespace IdePlusPlus.Shell.ToolPanes;
 public sealed partial class PlanProposalViewModel : ObservableObject
 {
     private readonly Func<PlanProposalViewModel, Task> _onApprove;
+    private readonly Func<bool>? _canApprove;
 
-    public PlanProposalViewModel(string toolCallId, Func<PlanProposalViewModel, Task> onApprove)
+    /// <param name="canApprove">Whether approving may start implementing right now - false while
+    /// another turn is streaming, since approving starts a turn of its own and two at once trample
+    /// each other's cancellation and output. Re-checked through <see cref="RefreshCanApprove"/>.</param>
+    public PlanProposalViewModel(string toolCallId, Func<PlanProposalViewModel, Task> onApprove, Func<bool>? canApprove = null)
     {
         ToolCallId = toolCallId;
         _onApprove = onApprove;
+        _canApprove = canApprove;
     }
 
     public string ToolCallId { get; }
@@ -55,9 +60,21 @@ public sealed partial class PlanProposalViewModel : ObservableObject
 
     private bool CanDecide() => IsComplete && !IsDecided;
 
-    [RelayCommand(CanExecute = nameof(CanDecide))]
+    private bool CanApprove() => CanDecide() && (_canApprove?.Invoke() ?? true);
+
+    /// <summary>For the owner to call when whatever canApprove depends on has changed.</summary>
+    public void RefreshCanApprove() => ApproveCommand.NotifyCanExecuteChanged();
+
+    [RelayCommand(CanExecute = nameof(CanApprove))]
     private async Task ApproveAsync()
     {
+        // Checked before IsDecided is set, so a refused approve leaves the plan still approvable
+        // rather than marked "implementing" with nothing running.
+        if (!CanApprove())
+        {
+            return;
+        }
+
         IsDecided = true;
         DecisionText = "Approved - implementing...";
         await _onApprove(this);
