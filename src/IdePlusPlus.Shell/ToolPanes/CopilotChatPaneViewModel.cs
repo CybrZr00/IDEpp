@@ -162,6 +162,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     // CancelStreaming is always available as the actual safety valve.
     private const int AutoModeMaxToolLoopIterations = 30;
 
+    /// <summary>How long New Chat or a solution switch waits for a cancelled turn to finish before
+    /// cutting it loose. Cancellation is cooperative, and an MCP server or plugin tool that ignores it
+    /// must not be able to wedge either one.</summary>
+    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
+
     private readonly OpenRouterChatClient _openRouterClient;
     private readonly LmStudioChatClient _lmStudioClient;
     private readonly AppSettingsStore _appSettingsStore;
@@ -181,11 +186,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly WebContentFetcher _webContentFetcher = new();
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly HookService _hookService;
-
-    /// <summary>Auto Mode accepts for the turn being streamed. With a PreToolUse hook configured an
-    /// accept is genuinely asynchronous, and the turn must not be judged (did every edit apply?)
-    /// until they have all finished.</summary>
-    private readonly List<Task> _pendingAutoAccepts = [];
 
     /// <summary>Commands the user has already approved this session, so an agentic loop that runs
     /// the same command twice asks once. Keyed on the exact command text - a different command is a
@@ -213,7 +213,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// so publish_project can default to the only project and pass --framework for a multi-targeted
     /// one. Same arrangement as _testProjectPaths: the chat pane never sees the solution tree.</summary>
     private IReadOnlyList<(string Path, string? TargetFramework, string? RootNamespace)> _solutionProjects = [];
-    private CancellationTokenSource? _streamCancellation;
+
+    /// <summary>The turn currently allowed to touch this pane - see <see cref="TurnScope"/>.</summary>
+    private TurnScope? _activeTurn;
+
+    /// <summary>Bumped whenever the conversation is thrown away (New Chat, a solution switch), so a
+    /// callback that outlives its conversation - an edit hook finishing late - can tell.</summary>
+    private int _conversationEpoch;
+
+    /// <summary>The Index Codebase run in progress, cancelled if the solution changes under it.</summary>
+    private CancellationTokenSource? _indexCancellation;
 
     /// <summary>The request that produced whatever is currently uncommitted, for
     /// ReviewLastChangeAsync to hand to the reviewer as context. Tracked separately from Messages
@@ -265,7 +274,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _hookService = hookService;
         _templateCatalog = templateCatalog;
         _templateInstantiation = templateInstantiation;
-        _dispatcher = System.Windows.Application.Current!.Dispatcher;
+        // Falls back to the constructing thread's dispatcher where there is no Application - tests.
+        _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        Messages.CollectionChanged += (_, _) => NewConversationCommand.NotifyCanExecuteChanged();
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
         selectedModel = ModelSettingFor(selectedProvider) ?? DefaultModelFor(selectedProvider);
@@ -387,6 +398,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// model's stated reason. Unset, nothing is fetched - same rule as ShellCommandApprovalPrompt.</summary>
     public Func<string, string, Task<bool>>? WebFetchApprovalPrompt { get; set; }
 
+    /// <summary>Asked before New Chat throws away something the saved transcript won't bring back - a
+    /// response still running, edits or plans still waiting for a decision - with a description of
+    /// exactly that. Unset, New Chat goes ahead: unlike the shell and web prompts this is a chance to
+    /// back out, not a safety gate.</summary>
+    public Func<string, bool>? NewConversationConfirmation { get; set; }
+
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
     /// <summary>Opens/focuses a file in the main editor tab area and returns the resulting document -
@@ -401,13 +418,39 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// A directory alone was enough while every tool only read files. Building needs the solution
     /// file itself, and the configuration the user has selected - which they can change at any
     /// time, hence a callback rather than a snapshot taken at solution load.
+    ///
+    /// Opening a different solution ends the current conversation - it is saved to the previous
+    /// solution's own history first, and comes back when that solution is reopened - and anything
+    /// still running for it is cut loose, so none of it can reach the new solution: a turn that
+    /// carried on across the switch used to run its tools and apply its edits against the new
+    /// solution, and save itself into the new solution's history. Call
+    /// <see cref="PrepareForSolutionChangeAsync"/> first to give that work a chance to stop cleanly.
+    /// Reopening the solution that is already open (New Project adding to it) is not a switch, and
+    /// leaves the conversation alone.
     /// </summary>
     public void SetSolutionContext(string? solutionPath, string? directory, Func<string>? currentConfiguration)
     {
-        _solutionPath = solutionPath;
         _currentConfiguration = currentConfiguration;
+
+        if (IsSameSolution(_solutionPath, solutionPath))
+        {
+            // Still re-read, so an edited hooks config is picked up the way it always was on a reload.
+            _hookService.SetSolution(directory);
+            return;
+        }
+
+        CancelIndexing();
+        PersistChatHistory();
+        ResetConversation("Discarded - a different solution was opened.", solutionChanged: true);
+
+        _solutionPath = solutionPath;
         _solutionDirectory = directory;
-        _hookService.SetSolution(directory);
+
+        // Cleared rather than just reloaded: a solution with no index file of its own must end up
+        // with no index, not the previous solution's.
+        _codebaseIndexService.Clear();
+        IndexStatus = null;
+
         if (directory is not null)
         {
             _codebaseIndexService.LoadFromDisk(ProjectMemoryStore.IndexFilePath(directory));
@@ -415,7 +458,6 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 ? $"Loaded index: {_codebaseIndexService.IndexedChunkCount} chunks."
                 : null;
 
-            Messages.Clear();
             foreach (var stored in _chatHistoryStore.Load(directory))
             {
                 // Tool-call/tool-result entries (see BuildChatHistory/PersistChatHistory) are stored
@@ -435,9 +477,157 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             }
         }
 
+        // Last: loading a solution's hooks can show a trust prompt, and a modal prompt pumps the
+        // dispatcher - by this point everything queued behind it sees the new solution throughout.
+        _hookService.SetSolution(directory);
+
         SaveMemoryCommand.NotifyCanExecuteChanged();
         IndexCodebaseCommand.NotifyCanExecuteChanged();
         ReviewLastChangeCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Asks whatever is running against the current solution - a turn, a review, an index run - to
+    /// stop, and waits (bounded by <see cref="StopTimeout"/>) for the turn to finish. The shell awaits
+    /// this before switching solution, while the previous solution is still the current one, so the
+    /// turn's own wind-down (its "[cancelled]" note, saving its history) lands where it belongs.
+    /// </summary>
+    public async Task PrepareForSolutionChangeAsync()
+    {
+        CancelIndexing();
+        await StopActiveTurnAsync();
+    }
+
+    private static bool IsSameSolution(string? current, string? next) =>
+        current is not null && next is not null
+        && string.Equals(Path.GetFullPath(current), Path.GetFullPath(next), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// One running turn - a Send, a plan approval, Save Memory or a Review - with its cancellation,
+    /// the solution it started in, and the Auto Mode accepts it is waiting on.
+    ///
+    /// A turn only touches the pane while it is <see cref="_activeTurn"/>. New Chat and a solution
+    /// switch cut a turn loose (cancelled, and no longer active) when it hasn't stopped in time, and
+    /// from then on whatever it does on its way out - a late tool card, a reply fragment, saving the
+    /// history - is dropped instead of landing in a conversation it no longer belongs to.
+    /// </summary>
+    private sealed class TurnScope(string? solutionDirectory)
+    {
+        public string? SolutionDirectory { get; } = solutionDirectory;
+
+        public CancellationTokenSource Cancellation { get; } = new();
+
+        public CancellationToken Token => Cancellation.Token;
+
+        /// <summary>With a PreToolUse hook configured an Auto Mode accept is genuinely asynchronous,
+        /// and the turn must not be judged (did every edit apply?) until they have all finished.</summary>
+        public List<Task> PendingAutoAccepts { get; } = [];
+
+        /// <summary>Completes when the turn has fully unwound, cancelled or not.</summary>
+        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private bool IsLive(TurnScope turn) => ReferenceEquals(_activeTurn, turn);
+
+    private void ThrowIfDetached(TurnScope turn)
+    {
+        if (!IsLive(turn))
+        {
+            throw new OperationCanceledException(turn.Token);
+        }
+    }
+
+    private TurnScope BeginTurn(string activity)
+    {
+        // Nothing should start a turn while another is live (every entry point is disabled while
+        // streaming), but if something does, the older one is stopped rather than left to trample
+        // the new one's output.
+        _activeTurn?.Cancellation.Cancel();
+
+        var turn = new TurnScope(_solutionDirectory);
+        _activeTurn = turn;
+        IsStreaming = true;
+        CurrentActivity = activity;
+        return turn;
+    }
+
+    private void EndTurn(TurnScope turn)
+    {
+        turn.Completion.TrySetResult();
+        if (!IsLive(turn))
+        {
+            return;
+        }
+
+        _activeTurn = null;
+        IsStreaming = false;
+        CurrentActivity = null;
+    }
+
+    private async Task StopActiveTurnAsync()
+    {
+        if (_activeTurn is not { } turn)
+        {
+            return;
+        }
+
+        turn.Cancellation.Cancel();
+        CurrentActivity = "Stopping...";
+
+        // Only ever awaited, never blocked on: the turn needs this thread to unwind.
+        await Task.WhenAny(turn.Completion.Task, Task.Delay(StopTimeout));
+    }
+
+    private void CancelIndexing()
+    {
+        if (_indexCancellation is not { } cancellation)
+        {
+            return;
+        }
+
+        cancellation.Cancel();
+        _indexCancellation = null;
+        IsIndexing = false;
+    }
+
+    /// <summary>
+    /// Throws the current conversation away - the single reset path shared by New Chat and a
+    /// solution switch, so the two cannot drift apart. Does not touch chat-history.json: New Chat
+    /// empties it, a switch leaves it as the previous solution's saved conversation.
+    ///
+    /// Undecided edit proposals are withdrawn from their editor tabs (see
+    /// EditProposalViewModel.Discard); plan cards need nothing, since removing the card removes the
+    /// only way to approve one. Token totals are deliberately left alone - they count what this
+    /// session has billed, not this conversation.
+    /// </summary>
+    private void ResetConversation(string discardReason, bool solutionChanged)
+    {
+        if (_activeTurn is { } turn)
+        {
+            turn.Cancellation.Cancel();
+            _activeTurn = null;
+            IsStreaming = false;
+            CurrentActivity = null;
+        }
+
+        _conversationEpoch++;
+
+        foreach (var proposal in Messages.OfType<EditProposalViewModel>())
+        {
+            proposal.Discard(discardReason);
+        }
+
+        Messages.Clear();
+        _lastUserRequestText = null;
+        StatusMessage = null;
+
+        if (solutionChanged)
+        {
+            // Approved for one solution's scripts and hosts, not whichever is opened next -
+            // `.\build.ps1` in one repository is a different command from the same text in another.
+            _approvedCommands.Clear();
+            _approvedWebHosts.Clear();
+        }
     }
 
     /// <summary>
@@ -547,6 +737,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         var userText = InputText.Trim();
         InputText = "";
+
+        if (IsNewConversationCommand(userText))
+        {
+            await NewConversationAsync();
+            return;
+        }
+
         StatusMessage = null;
         _lastUserRequestText = userText;
 
@@ -558,23 +755,129 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         PersistChatHistory();
 
         var history = BuildChatHistory(Messages.Where(m => m != userMessage));
-
-        await PrependContextAsync(history, userText);
         history.Add(new ChatMessage(ChatRole.User, userText));
-
-        if (history.Sum(m => m.Content.Length) > LongConversationCharThreshold)
-        {
-            StatusMessage = "This conversation is getting long and may hit the model's context limit soon - " +
-                             "consider using Save Memory and starting a fresh conversation.";
-        }
 
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
 
-        await RunAssistantTurnsAsync(history, assistantMessage);
+        // The context (memory, skills, the open file, a codebase search) is gathered inside the turn,
+        // not before it: the codebase search is a network call, and until the turn has started
+        // nothing shows it is running, nothing can stop it, and a solution switch in the meantime
+        // would have sent this solution's question off to run against the next one.
+        await RunAssistantTurnsAsync(history, assistantMessage, contextQuery: userText);
     }
 
-    private async Task PrependContextAsync(List<ChatMessage> history, string userText)
+    /// <summary>Typed in place of a message, starts a new conversation - the same as New Chat. Only
+    /// the whole input, so a message that merely mentions /clear is still sent.</summary>
+    internal static bool IsNewConversationCommand(string text) =>
+        text.Trim() is var trimmed
+        && (trimmed.Equals("/clear", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("/new", StringComparison.OrdinalIgnoreCase));
+
+    private bool CanStartNewConversation() => Messages.Count > 0 || IsStreaming;
+
+    /// <summary>
+    /// Starts a fresh conversation. The current one is saved to .ideplusplus/copilot/sessions first
+    /// (the same raw transcript Save Memory keeps) and chat-history.json is emptied, so it is gone from
+    /// the pane and from what the model is sent, but not lost.
+    ///
+    /// Stops a running response rather than being disabled during one: this is also how to get out of
+    /// a turn that has gone wrong. Asks first only when something would be lost that the saved
+    /// transcript doesn't bring back - see <see cref="NewConversationConfirmation"/>.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanStartNewConversation))]
+    private async Task NewConversationAsync()
+    {
+        if (DescribeWhatNewConversationDiscards() is { } warning
+            && NewConversationConfirmation is { } confirm
+            && !confirm(warning))
+        {
+            return;
+        }
+
+        await StopActiveTurnAsync();
+
+        string? archivePath = null;
+        if (_solutionDirectory is { } solutionDirectory
+            && BuildTranscriptMarkdown(Messages) is { Length: > 0 } transcript)
+        {
+            try
+            {
+                archivePath = _projectMemoryStore.SaveSessionLog(solutionDirectory, transcript);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Clearing now would be the one way this loses a conversation outright.
+                StatusMessage = $"Couldn't save the current conversation, so it was kept: {ex.Message}";
+                return;
+            }
+        }
+
+        ResetConversation("Discarded - a new conversation was started.", solutionChanged: false);
+
+        // Writes the now-empty conversation, so the old one doesn't come back on the next reload.
+        PersistChatHistory();
+
+        StatusMessage = archivePath is not null && _solutionDirectory is { } directory
+            ? $"New conversation. The previous one was saved to {Path.GetRelativePath(directory, archivePath)}."
+            : "New conversation.";
+    }
+
+    private string? DescribeWhatNewConversationDiscards()
+    {
+        var losses = new List<string>();
+
+        if (IsStreaming)
+        {
+            losses.Add("stop the response that is still running");
+        }
+
+        var undecidedEdits = Messages.OfType<EditProposalViewModel>().Count(p => p.IsComplete && !p.IsDecided);
+        if (undecidedEdits > 0)
+        {
+            losses.Add(undecidedEdits == 1
+                ? "discard 1 proposed edit you haven't accepted or rejected"
+                : $"discard {undecidedEdits} proposed edits you haven't accepted or rejected");
+        }
+
+        var undecidedPlans = Messages.OfType<PlanProposalViewModel>().Count(p => p.IsComplete && !p.IsDecided);
+        if (undecidedPlans > 0)
+        {
+            losses.Add(undecidedPlans == 1 ? "discard the plan waiting for approval" : $"discard {undecidedPlans} plans waiting for approval");
+        }
+
+        if (_solutionDirectory is null && Messages.Count > 0)
+        {
+            losses.Add("lose this conversation - no solution is open, so it can't be saved first");
+        }
+
+        return losses.Count == 0
+            ? null
+            : $"Starting a new conversation will {string.Join(", and ", losses)}.\n\nStart a new conversation anyway?";
+    }
+
+    /// <summary>A readable record of the conversation, for the sessions/ archive and Save Memory.
+    /// Proposals and tool calls are summarised to what became of them - the diffs themselves are in
+    /// git, and a tool's full output was only ever for the model.</summary>
+    internal static string BuildTranscriptMarkdown(IEnumerable<ObservableObject> messages) =>
+        string.Join("\n\n", messages
+            .Select(message => message switch
+            {
+                ChatMessageViewModel { Text: var text } chat when !string.IsNullOrWhiteSpace(text) =>
+                    $"**{chat.Role}:** {text}",
+                EditProposalViewModel { IsComplete: true } edit =>
+                    $"**Edit:** {edit.FilePath} - {edit.DecisionText ?? "not decided"}",
+                PlanProposalViewModel { IsComplete: true } plan =>
+                    $"**Plan:** {plan.Summary} - {plan.DecisionText ?? "not decided"}"
+                    + string.Concat(plan.Steps.Select(step => $"\n- {step}")),
+                ReviewMessageViewModel { Text: var text } when !string.IsNullOrWhiteSpace(text) =>
+                    $"**Review:** {text}",
+                McpToolCallViewModel toolCall => $"**Tool:** {toolCall.ToolName} - {toolCall.Status}",
+                _ => null,
+            })
+            .OfType<string>());
+
+    private async Task PrependContextAsync(List<ChatMessage> history, string userText, CancellationToken cancellationToken)
     {
         var systemPrompt = _appSettingsStore.Get(SystemPromptSettingKey);
         history.Insert(0, new ChatMessage(
@@ -613,13 +916,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         if (IncludeCurrentFileContext && _currentDocument is { FilePath: { } path })
         {
+            // Said rather than dropped: a file opened from outside the solution on purpose is still
+            // worth having, but the model shouldn't take it for part of the code it is working on.
+            var outsideNote = IsPartOfSolution(path) ? "" : " - it is not part of the open solution";
             history.Insert(0, new ChatMessage(
-                ChatRole.System, $"The user currently has this file open ({path}):\n\n{_currentDocument.TextDocument.Text}"));
+                ChatRole.System, $"The user currently has this file open ({path}{outsideNote}):\n\n{_currentDocument.TextDocument.Text}"));
         }
 
         if (UseCodebaseSearch && _codebaseIndexService.IsIndexed)
         {
-            var relevantChunks = await _codebaseIndexService.SearchAsync(userText, CodebaseSearchTopK, CancellationToken.None);
+            var relevantChunks = await _codebaseIndexService.SearchAsync(userText, CodebaseSearchTopK, cancellationToken);
             if (relevantChunks.Count > 0)
             {
                 var contextText = string.Join(
@@ -629,6 +935,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             }
         }
     }
+
+    /// <summary>Inside the solution directory, or one of the solution's own files that lives outside
+    /// it (a project referenced from ..\shared, say). True with no solution open - there is nothing
+    /// for a file to be outside of.</summary>
+    private bool IsPartOfSolution(string path) =>
+        _solutionDirectory is null
+        || WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, path) is not null
+        || _indexableFiles.Contains(path, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Streams the assistant's response, automatically executing any tool calls (workspace
@@ -641,21 +955,36 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// edit doesn't just silently end the conversation. In manual mode a proposal remains terminal
     /// until the user decides it, same as always.
     /// </summary>
-    private async Task RunAssistantTurnsAsync(List<ChatMessage> history, ChatMessageViewModel assistantMessage)
+    /// <param name="contextQuery">For a turn answering the user's own message: gathers the
+    /// conversation's context (see PrependContextAsync) once the turn is under way, searching the
+    /// codebase for this text.</param>
+    private async Task RunAssistantTurnsAsync(
+        List<ChatMessage> history, ChatMessageViewModel assistantMessage, string? contextQuery = null)
     {
-        IsStreaming = true;
-        CurrentActivity = "Thinking...";
-        _streamCancellation = new CancellationTokenSource();
+        var turn = BeginTurn("Thinking...");
         try
         {
+            if (contextQuery is not null)
+            {
+                await PrependContextAsync(history, contextQuery, turn.Token);
+                ThrowIfDetached(turn);
+
+                if (history.Sum(m => m.Content.Length) > LongConversationCharThreshold)
+                {
+                    StatusMessage = "This conversation is getting long and may hit the model's context limit soon - " +
+                                     "consider using Save Memory and then New Chat (Ctrl+L) to start a fresh one.";
+                }
+            }
+
             var maxIterations = IsAutoMode ? AutoModeMaxToolLoopIterations : MaxToolLoopIterations;
             for (var iteration = 0; iteration < maxIterations; iteration++)
             {
-                var turn = await StreamOneTurnAsync(history, assistantMessage, _streamCancellation.Token);
+                var result = await StreamOneTurnAsync(turn, history, assistantMessage);
+                ThrowIfDetached(turn);
 
                 // A model without tool calling can only show code. When a reply made no call at all
                 // but contains code that can be placed exactly, offer it as a normal reviewable edit.
-                if (turn.Calls.Count == 0 && turn.EditProposals.Count == 0 && !turn.ProducedPlanProposal && !IsPlanMode)
+                if (result.Calls.Count == 0 && result.EditProposals.Count == 0 && !result.ProducedPlanProposal && !IsPlanMode)
                 {
                     _dispatcher.Invoke(() => ProposeEditsFromReplyText(assistantMessage.Text));
                 }
@@ -667,18 +996,23 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 // was told only "- Applied edit to {path}." by a synthetic user message. It could
                 // not tell an edit that landed from one that was refused, nor notice that it had
                 // just removed most of a file.
-                if (turn.Calls.Count > 0 || turn.EditProposals.Count > 0)
+                if (result.Calls.Count > 0 || result.EditProposals.Count > 0)
                 {
-                    var toolCalls = turn.Calls
+                    var toolCalls = result.Calls
                         .Select(c => new ChatToolCall(c.EffectiveId, c.Name!, c.Arguments.ToString()))
-                        .Concat(turn.EditProposals.Select(p => new ChatToolCall(
+                        .Concat(result.EditProposals.Select(p => new ChatToolCall(
                             p.ToolCallId, ProposeEditTool.ToolName, p.ArgumentsJson ?? "{}")))
                         .ToList();
 
                     history.Add(new ChatMessage(ChatRole.Assistant, assistantMessage.Text, ToolCalls: toolCalls));
 
-                    foreach (var call in turn.Calls)
+                    foreach (var call in result.Calls)
                     {
+                        // Checked before each call, not just once: a tool can run for minutes, and
+                        // one started after this turn was cut loose would run against whatever
+                        // solution is open by then.
+                        ThrowIfDetached(turn);
+
                         var callViewModel = new McpToolCallViewModel(call.EffectiveId, call.Name!, call.Arguments.ToString());
                         _dispatcher.Invoke(() =>
                         {
@@ -686,7 +1020,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                             Messages.Add(callViewModel);
                         });
 
-                        var (isError, text) = await ExecuteToolAsync(call, _streamCancellation.Token);
+                        var (isError, text) = await ExecuteToolAsync(call, turn.Token);
                         _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
 
                         history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
@@ -695,20 +1029,21 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     // Every replayed call needs an answer or the next request is malformed, so this
                     // runs for refused and undecided proposals too - ToolResultText always says
                     // something true about where the edit got to.
-                    foreach (var proposal in turn.EditProposals)
+                    foreach (var proposal in result.EditProposals)
                     {
                         history.Add(new ChatMessage(
                             ChatRole.Tool, proposal.ToolResultText, ToolCallId: proposal.ToolCallId));
                     }
 
+                    ThrowIfDetached(turn);
                     _dispatcher.Invoke(() => CurrentActivity = "Thinking...");
                 }
 
                 var action = AssistantTurnPolicy.Decide(
-                    toolCallCount: turn.Calls.Count,
-                    editProposalCount: turn.EditProposals.Count,
-                    allEditProposalsApplied: turn.EditProposals.Count > 0 && turn.EditProposals.All(p => p.WasApplied),
-                    producedPlanProposal: turn.ProducedPlanProposal,
+                    toolCallCount: result.Calls.Count,
+                    editProposalCount: result.EditProposals.Count,
+                    allEditProposalsApplied: result.EditProposals.Count > 0 && result.EditProposals.All(p => p.WasApplied),
+                    producedPlanProposal: result.ProducedPlanProposal,
                     isAutoMode: IsAutoMode);
 
                 if (action == AssistantTurnAction.Stop)
@@ -740,15 +1075,23 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             _dispatcher.Invoke(() =>
             {
                 assistantMessage.Append($"\n\n[error: the assistant stopped unexpectedly - {ex.Message}]");
-                StatusMessage = "The assistant stopped due to an unexpected error - see the message above.";
+                if (IsLive(turn))
+                {
+                    StatusMessage = "The assistant stopped due to an unexpected error - see the message above.";
+                }
             });
         }
         finally
         {
-            IsStreaming = false;
-            CurrentActivity = null;
-            _streamCancellation = null;
-            PersistChatHistory();
+            // A turn cut loose by New Chat or a solution switch saves nothing: the conversation it
+            // belonged to has already been saved or cleared, and _solutionDirectory may now be a
+            // different solution's.
+            var wasLive = IsLive(turn);
+            EndTurn(turn);
+            if (wasLive)
+            {
+                PersistChatHistory();
+            }
         }
     }
 
@@ -1467,6 +1810,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return (true, "investigate_parallel requires a non-empty 'tasks' array of strings.");
         }
 
+        // Read once: the sub-agents run on the thread pool and outlive any single check of the field.
+        var solutionDirectory = _solutionDirectory;
         IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
         using var concurrencyLimit = new SemaphoreSlim(SubAgentTools.MaxConcurrency);
 
@@ -1477,7 +1822,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             {
                 var loop = new HeadlessAgentLoop(
                     client, SelectedModel, SelectedEffort, SubAgentTools.AllowedTools,
-                    (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, _solutionDirectory, ct));
+                    (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, solutionDirectory, ct));
                 var result = await loop.RunAsync(
                     SubAgentSystemPrompt, task, SubAgentTools.MaxIterationsPerTask, cancellationToken);
                 return (Description: task, Result: result);
@@ -1588,7 +1933,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private sealed record TurnResult(List<PendingMcpCall> Calls, List<EditProposalViewModel> EditProposals, bool ProducedPlanProposal);
 
     private async Task<TurnResult> StreamOneTurnAsync(
-        List<ChatMessage> history, ChatMessageViewModel assistantMessage, CancellationToken cancellationToken)
+        TurnScope turn, List<ChatMessage> history, ChatMessageViewModel assistantMessage)
     {
         var proposalParser = new EditProposalParser();
         var proposalsByToolCallId = new Dictionary<string, EditProposalViewModel>();
@@ -1612,10 +1957,25 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
 
-        await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, SelectedEffort, cancellationToken))
+        await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, SelectedEffort, turn.Token))
         {
             _dispatcher.Invoke(() =>
             {
+                // Counted whether or not anyone is still listening - it was billed either way.
+                if (streamEvent is UsageReceived usage)
+                {
+                    TotalPromptTokens += usage.PromptTokens;
+                    TotalCompletionTokens += usage.CompletionTokens;
+                    return;
+                }
+
+                // A turn cut loose mid-stream must not add proposal cards to the next conversation,
+                // or complete an edit against the next solution.
+                if (!IsLive(turn))
+                {
+                    return;
+                }
+
                 switch (streamEvent)
                 {
                     case TextDelta delta:
@@ -1640,7 +2000,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                         switch (routeByIndex.GetValueOrDefault(toolCallDelta.Index, ToolCallRoute.Mcp))
                         {
                             case ToolCallRoute.ProposeEdit:
-                                HandleToolCallDelta(toolCallDelta, proposalParser, proposalsByToolCallId);
+                                HandleToolCallDelta(turn, toolCallDelta, proposalParser, proposalsByToolCallId);
                                 break;
                             case ToolCallRoute.ProposePlan:
                                 HandlePlanToolCallDelta(toolCallDelta, planParser, planProposalsByToolCallId);
@@ -1663,19 +2023,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     case FinishReasonReceived { Reason: "length" }:
                         assistantMessage.Append("\n\n[response was cut off - it hit the model's output length limit before finishing]");
                         break;
-
-                    case UsageReceived usage:
-                        TotalPromptTokens += usage.PromptTokens;
-                        TotalCompletionTokens += usage.CompletionTokens;
-                        break;
                 }
             });
         }
 
         // A no-op unless a PreToolUse hook made an accept asynchronous: the loop's next decision
         // depends on WasApplied, which is only final once every accept has finished.
-        var autoAccepts = _pendingAutoAccepts.ToArray();
-        _pendingAutoAccepts.Clear();
+        var autoAccepts = turn.PendingAutoAccepts.ToArray();
+        turn.PendingAutoAccepts.Clear();
         await Task.WhenAll(autoAccepts);
 
         return new TurnResult(
@@ -1725,6 +2080,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     private void HandleToolCallDelta(
+        TurnScope turn,
         ToolCallDelta delta,
         EditProposalParser proposalParser,
         Dictionary<string, EditProposalViewModel> proposalsByToolCallId)
@@ -1751,7 +2107,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         if (proposalEvent.Status == EditProposalStatus.Complete)
         {
-            proposal.Complete(proposalEvent, _solutionDirectory);
+            proposal.Complete(proposalEvent, turn.SolutionDirectory);
 
             // Open/focus the target file and hand the proposal its editor tab to show the diff in -
             // review now happens there instead of the chat pane. Skipped only for a proposal refused
@@ -1783,8 +2139,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             // trusted instruction-shaped content (see PrependContextAsync/read_skill) - so unlike an
             // ordinary code file, Auto Mode writing and auto-accepting a new one with nobody looking
             // is a real risk, not just the ordinary case. Held back the same way a large deletion is.
-            var isSkillWrite = _solutionDirectory is not null
-                && proposal.TargetsPathUnder(SkillStore.SkillsDirectory(_solutionDirectory));
+            var isSkillWrite = turn.SolutionDirectory is { } turnDirectory
+                && proposal.TargetsPathUnder(SkillStore.SkillsDirectory(turnDirectory));
 
             // Auto Mode applies edits with nobody looking, which is fine for the ordinary case and
             // not fine for an edit that removes most of a file, or one that writes a skill - the
@@ -1801,7 +2157,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 }
                 else
                 {
-                    _pendingAutoAccepts.Add(proposal.AcceptCommand.ExecuteAsync(null));
+                    turn.PendingAutoAccepts.Add(proposal.AcceptCommand.ExecuteAsync(null));
                 }
             }
         }
@@ -1819,13 +2175,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// </summary>
     private void AttachEditHooks(EditProposalViewModel proposal)
     {
+        var epoch = _conversationEpoch;
+
         if (_hookService.MayHaveHooks(HookEvents.PreToolUse))
         {
             proposal.PreApplyHook = async (operation, fullPath) =>
             {
                 var decision = await _hookService.RunAsync(
                     HookEvents.PreToolUse, ProposeEditTool.ToolName, EditInput(operation),
-                    null, false, _streamCancellation?.Token ?? CancellationToken.None);
+                    null, false, _activeTurn?.Token ?? CancellationToken.None);
                 ReportHookNotice(decision);
                 return decision.Block ? decision.Feedback : null;
             };
@@ -1839,13 +2197,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                 var decision = await _hookService.RunAsync(
                     HookEvents.PostToolUse, ProposeEditTool.ToolName, EditInput(operation),
-                    $"Applied to {operation.FilePath}.", false, _streamCancellation?.Token ?? CancellationToken.None);
+                    $"Applied to {operation.FilePath}.", false, _activeTurn?.Token ?? CancellationToken.None);
                 ReportHookNotice(decision);
 
                 // In manual mode the accept comes after the turn has ended, so nothing would carry the
                 // feedback to the model. Recording it as a message means it is in the history the next
-                // request replays - the same trick the review markers use.
-                if (decision.Feedback is { } feedback && !IsStreaming)
+                // request replays - the same trick the review markers use. Not once the conversation
+                // this edit belonged to has been replaced: the note would land in the next one.
+                if (decision.Feedback is { } feedback && !IsStreaming && epoch == _conversationEpoch)
                 {
                     Messages.Add(new ChatMessageViewModel(ChatRole.User)
                     {
@@ -1978,7 +2337,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         if (!proposalsByToolCallId.TryGetValue(planEvent.ToolCallId, out var proposal))
         {
-            proposal = new PlanProposalViewModel(planEvent.ToolCallId, ApprovePlanAsync);
+            proposal = new PlanProposalViewModel(planEvent.ToolCallId, ApprovePlanAsync, canApprove: () => !IsStreaming);
             proposalsByToolCallId[planEvent.ToolCallId] = proposal;
             Messages.Add(proposal);
         }
@@ -2027,7 +2386,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     [RelayCommand]
-    private void CancelStreaming() => _streamCancellation?.Cancel();
+    private void CancelStreaming()
+    {
+        if (_activeTurn is not { } turn)
+        {
+            return;
+        }
+
+        turn.Cancellation.Cancel();
+        CurrentActivity = "Stopping...";
+    }
 
     private bool CanSaveMemory() => _solutionDirectory is not null && !IsStreaming;
 
@@ -2036,9 +2404,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         var solutionDirectory = _solutionDirectory!;
         var existingMemory = _projectMemoryStore.LoadMemory(solutionDirectory);
-        var transcript = string.Join(
-            "\n\n",
-            Messages.OfType<ChatMessageViewModel>().Select(m => $"**{m.Role}:** {m.Text}"));
+        var transcript = BuildTranscriptMarkdown(Messages);
 
         if (string.IsNullOrWhiteSpace(transcript))
         {
@@ -2085,55 +2451,58 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     [RelayCommand(CanExecute = nameof(CanReviewLastChange))]
     private async Task ReviewLastChangeAsync()
     {
-        var solutionDirectory = _solutionDirectory!;
-
-        var (success, diff) = await _gitService.GetDiffAsync(solutionDirectory, null, staged: false, CancellationToken.None);
-        if (!success)
-        {
-            StatusMessage = $"Couldn't get a diff to review: {diff}";
-            return;
-        }
-
-        if (diff.Length == 0)
-        {
-            StatusMessage = "Nothing to review yet - there are no uncommitted changes.";
-            return;
-        }
-
-        Messages.Add(new ChatMessageViewModel(ChatRole.User) { Text = "🔍 Review last change" });
-        var reviewMessage = new ReviewMessageViewModel();
-        Messages.Add(reviewMessage);
-
-        var reviewHistory = new List<ChatMessage>
-        {
-            new(ChatRole.System, AdversarialReviewSystemPrompt),
-            new(ChatRole.User,
-                $"--- ORIGINAL REQUEST (context only) ---\n{_lastUserRequestText ?? "(not available)"}\n\n"
-                + $"--- DIFF TO REVIEW ---\n{Cap(diff, GitTools.MaxOutputChars, "diff")}"),
-        };
-
-        IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
-
-        IsStreaming = true;
-        CurrentActivity = "Reviewing...";
-        _streamCancellation = new CancellationTokenSource();
+        // A turn from the start, so fetching the diff is already stoppable and covered by a solution
+        // switch - the review of one solution's diff must not be posted into the next one's chat.
+        var turn = BeginTurn("Reviewing...");
+        var solutionDirectory = turn.SolutionDirectory!;
+        ReviewMessageViewModel? reviewMessage = null;
         try
         {
+            var (success, diff) = await _gitService.GetDiffAsync(solutionDirectory, null, staged: false, turn.Token);
+            ThrowIfDetached(turn);
+
+            if (!success)
+            {
+                StatusMessage = $"Couldn't get a diff to review: {diff}";
+                return;
+            }
+
+            if (diff.Length == 0)
+            {
+                StatusMessage = "Nothing to review yet - there are no uncommitted changes.";
+                return;
+            }
+
+            Messages.Add(new ChatMessageViewModel(ChatRole.User) { Text = "🔍 Review last change" });
+            var review = new ReviewMessageViewModel();
+            reviewMessage = review;
+            Messages.Add(review);
+
+            var reviewHistory = new List<ChatMessage>
+            {
+                new(ChatRole.System, AdversarialReviewSystemPrompt),
+                new(ChatRole.User,
+                    $"--- ORIGINAL REQUEST (context only) ---\n{_lastUserRequestText ?? "(not available)"}\n\n"
+                    + $"--- DIFF TO REVIEW ---\n{Cap(diff, GitTools.MaxOutputChars, "diff")}"),
+            };
+
+            IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+
             await foreach (var streamEvent in client.StreamChatAsync(
-                reviewHistory, SelectedModel, tools: null, SelectedEffort, _streamCancellation.Token))
+                reviewHistory, SelectedModel, tools: null, SelectedEffort, turn.Token))
             {
                 _dispatcher.Invoke(() =>
                 {
                     switch (streamEvent)
                     {
                         case TextDelta delta:
-                            reviewMessage.Append(delta.Text);
+                            review.Append(delta.Text);
                             break;
                         case StreamError error:
-                            reviewMessage.Append($"\n\n[error: {error.Message}]");
+                            review.Append($"\n\n[error: {error.Message}]");
                             break;
                         case FinishReasonReceived { Reason: "length" }:
-                            reviewMessage.Append(
+                            review.Append(
                                 "\n\n[response was cut off - it hit the model's output length limit before finishing]");
                             break;
                         case UsageReceived usage:
@@ -2146,42 +2515,79 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
         catch (OperationCanceledException)
         {
-            _dispatcher.Invoke(() => reviewMessage.Append("\n\n[cancelled]"));
+            _dispatcher.Invoke(() => reviewMessage?.Append("\n\n[cancelled]"));
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Adversarial review failed unexpectedly");
-            _dispatcher.Invoke(() => reviewMessage.Append($"\n\n[error: the review stopped unexpectedly - {ex.Message}]"));
+            _dispatcher.Invoke(() =>
+            {
+                if (reviewMessage is not null)
+                {
+                    reviewMessage.Append($"\n\n[error: the review stopped unexpectedly - {ex.Message}]");
+                }
+                else if (IsLive(turn))
+                {
+                    StatusMessage = $"The review stopped unexpectedly - {ex.Message}";
+                }
+            });
         }
         finally
         {
-            reviewMessage.IsComplete = true;
-            IsStreaming = false;
-            CurrentActivity = null;
-            _streamCancellation = null;
+            if (reviewMessage is not null)
+            {
+                reviewMessage.IsComplete = true;
+            }
+
+            EndTurn(turn);
         }
     }
 
     private bool CanIndexCodebase() => _solutionDirectory is not null && !IsIndexing && _indexableFiles.Count > 0;
 
+    /// <summary>
+    /// Indexes the solution's files. Cancelled if the solution changes before it finishes: a run left
+    /// going used to keep filling the next solution's index with this one's code, and then save the
+    /// mixture as this solution's embeddings.json. A cancelled run publishes and saves nothing (see
+    /// CodebaseIndexService), and leaves IsIndexing and IndexStatus to the solution now open.
+    /// </summary>
     [RelayCommand(CanExecute = nameof(CanIndexCodebase))]
     private async Task IndexCodebaseAsync()
     {
         var solutionDirectory = _solutionDirectory!;
+        var cancellation = new CancellationTokenSource();
+        _indexCancellation = cancellation;
         IsIndexing = true;
         IndexStatus = "Indexing...";
         try
         {
             await _codebaseIndexService.IndexFilesAsync(
                 _indexableFiles,
-                progress => _dispatcher.Invoke(() => IndexStatus = progress),
-                CancellationToken.None);
+                progress => _dispatcher.Invoke(() =>
+                {
+                    if (ReferenceEquals(_indexCancellation, cancellation))
+                    {
+                        IndexStatus = progress;
+                    }
+                }),
+                cancellation.Token);
 
             _codebaseIndexService.SaveToDisk(ProjectMemoryStore.IndexFilePath(solutionDirectory));
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // Only a solution switch cancels this, and it has already set up the new solution's own
+            // index and status - there is nothing to report here.
+        }
         finally
         {
-            IsIndexing = false;
+            if (ReferenceEquals(_indexCancellation, cancellation))
+            {
+                _indexCancellation = null;
+                IsIndexing = false;
+            }
+
+            cancellation.Dispose();
         }
     }
 
@@ -2290,6 +2696,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         SendCommand.NotifyCanExecuteChanged();
         SaveMemoryCommand.NotifyCanExecuteChanged();
         ReviewLastChangeCommand.NotifyCanExecuteChanged();
+        NewConversationCommand.NotifyCanExecuteChanged();
+
+        foreach (var plan in Messages.OfType<PlanProposalViewModel>())
+        {
+            plan.RefreshCanApprove();
+        }
     }
 
     partial void OnIsIndexingChanged(bool value) => IndexCodebaseCommand.NotifyCanExecuteChanged();
