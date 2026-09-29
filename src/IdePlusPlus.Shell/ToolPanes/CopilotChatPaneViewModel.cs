@@ -224,6 +224,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// <summary>The Index Codebase run in progress, cancelled if the solution changes under it.</summary>
     private CancellationTokenSource? _indexCancellation;
 
+    /// <summary>A solution whose saved conversation could not be read when it was opened. Nothing is
+    /// saved for it this session: writing the pane's conversation over a file that couldn't be read
+    /// would lose whatever is in it.</summary>
+    private string? _unreadableHistoryDirectory;
+
     /// <summary>The request that produced whatever is currently uncommitted, for
     /// ReviewLastChangeAsync to hand to the reviewer as context. Tracked separately from Messages
     /// rather than scanned for the last User-role entry, since synthetic markers this class itself
@@ -439,12 +444,24 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return;
         }
 
+        // Nothing below may throw out of here: the shell has already moved to the new solution, and
+        // a switch abandoned half-way would leave the copilot on the previous one. File errors are
+        // reported and the switch carries on.
         CancelIndexing();
-        PersistChatHistory();
+        try
+        {
+            PersistChatHistory();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warning(ex, "Couldn't save the conversation before switching solution");
+        }
+
         ResetConversation("Discarded - a different solution was opened.", solutionChanged: true);
 
         _solutionPath = solutionPath;
         _solutionDirectory = directory;
+        _unreadableHistoryDirectory = null;
 
         // Cleared rather than just reloaded: a solution with no index file of its own must end up
         // with no index, not the previous solution's.
@@ -453,27 +470,44 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         if (directory is not null)
         {
-            _codebaseIndexService.LoadFromDisk(ProjectMemoryStore.IndexFilePath(directory));
-            IndexStatus = _codebaseIndexService.IsIndexed
-                ? $"Loaded index: {_codebaseIndexService.IndexedChunkCount} chunks."
-                : null;
-
-            foreach (var stored in _chatHistoryStore.Load(directory))
+            try
             {
-                // Tool-call/tool-result entries (see BuildChatHistory/PersistChatHistory) are stored
-                // for the model's benefit, not the UI's - there is no proposal card to reconstruct
-                // them into, so showing their raw text as a chat bubble would just be visual noise.
-                // Restoring these into the model's context too, not just plain prose, is tracked as a
-                // deliberately separate follow-up (see BuildChatHistory's doc comment).
-                if (stored.ToolCallId is not null || stored.ToolCalls is not null)
-                {
-                    continue;
-                }
+                _codebaseIndexService.LoadFromDisk(ProjectMemoryStore.IndexFilePath(directory));
+                IndexStatus = _codebaseIndexService.IsIndexed
+                    ? $"Loaded index: {_codebaseIndexService.IndexedChunkCount} chunks."
+                    : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                IndexStatus = $"Couldn't load this solution's saved index: {ex.Message}";
+            }
 
-                if (Enum.TryParse<ChatRole>(stored.Role, out var role))
+            try
+            {
+                foreach (var stored in _chatHistoryStore.Load(directory))
                 {
-                    Messages.Add(new ChatMessageViewModel(role) { Text = stored.Text });
+                    // Tool-call/tool-result entries (see BuildChatHistory/PersistChatHistory) are
+                    // stored for the model's benefit, not the UI's - there is no proposal card to
+                    // reconstruct them into, so showing their raw text as a chat bubble would just be
+                    // visual noise. Restoring these into the model's context too, not just plain
+                    // prose, is tracked as a deliberately separate follow-up (see BuildChatHistory's
+                    // doc comment).
+                    if (stored.ToolCallId is not null || stored.ToolCalls is not null)
+                    {
+                        continue;
+                    }
+
+                    if (Enum.TryParse<ChatRole>(stored.Role, out var role))
+                    {
+                        Messages.Add(new ChatMessageViewModel(role) { Text = stored.Text });
+                    }
                 }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _unreadableHistoryDirectory = directory;
+                StatusMessage = "Couldn't read this solution's saved conversation, so nothing will be saved over it " +
+                                $"until it is reopened: {ex.Message}";
             }
         }
 
@@ -487,16 +521,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     /// <summary>
-    /// Asks whatever is running against the current solution - a turn, a review, an index run - to
-    /// stop, and waits (bounded by <see cref="StopTimeout"/>) for the turn to finish. The shell awaits
-    /// this before switching solution, while the previous solution is still the current one, so the
-    /// turn's own wind-down (its "[cancelled]" note, saving its history) lands where it belongs.
+    /// Asks the running turn (a response, a review) to stop, and waits for it - bounded by
+    /// <see cref="StopTimeout"/>. The shell awaits this before switching solution, while the previous
+    /// solution is still the current one, so the turn's own wind-down (its "[cancelled]" note, saving
+    /// its history) lands where it belongs. An Index Codebase run is left alone until the switch is
+    /// certain (SetSolutionContext cancels it): the user can still call the switch off at the
+    /// unsaved-documents prompt that follows this.
     /// </summary>
-    public async Task PrepareForSolutionChangeAsync()
-    {
-        CancelIndexing();
-        await StopActiveTurnAsync();
-    }
+    public async Task PrepareForSolutionChangeAsync() => await StopActiveTurnAsync();
 
     private static bool IsSameSolution(string? current, string? next) =>
         current is not null && next is not null
@@ -645,7 +677,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// </summary>
     public void PersistChatHistory()
     {
-        if (_solutionDirectory is null)
+        if (_solutionDirectory is null
+            || string.Equals(_unreadableHistoryDirectory, _solutionDirectory, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -732,7 +765,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private bool CanSend() => !IsStreaming && !string.IsNullOrWhiteSpace(InputText);
 
-    [RelayCommand(CanExecute = nameof(CanSend))]
+    // AllowConcurrentExecutions, here and on Save Memory and Review: IsStreaming is what keeps a second
+    // turn from starting, not whether the last command's Task has finished. A turn cut loose by New
+    // Chat or a solution switch can still be unwinding - stuck in a tool that ignores cancellation -
+    // and must not leave these disabled until it does.
+    [RelayCommand(CanExecute = nameof(CanSend), AllowConcurrentExecutions = true)]
     private async Task SendAsync()
     {
         var userText = InputText.Trim();
@@ -788,6 +825,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     [RelayCommand(CanExecute = nameof(CanStartNewConversation))]
     private async Task NewConversationAsync()
     {
+        var epoch = _conversationEpoch;
+
         if (DescribeWhatNewConversationDiscards() is { } warning
             && NewConversationConfirmation is { } confirm
             && !confirm(warning))
@@ -796,6 +835,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         await StopActiveTurnAsync();
+
+        // Both of the above let the dispatcher run, and a solution switch finishing in the meantime has
+        // already saved and replaced the conversation the user meant to clear - going on would archive
+        // and empty the next solution's instead.
+        if (epoch != _conversationEpoch)
+        {
+            return;
+        }
 
         string? archivePath = null;
         if (_solutionDirectory is { } solutionDirectory
@@ -832,7 +879,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             losses.Add("stop the response that is still running");
         }
 
-        var undecidedEdits = Messages.OfType<EditProposalViewModel>().Count(p => p.IsComplete && !p.IsDecided);
+        // An edit already being accepted (a PreToolUse hook still deciding) is left to finish by
+        // Discard, so it isn't one this would discard.
+        var undecidedEdits = Messages.OfType<EditProposalViewModel>()
+            .Count(p => p.IsComplete && !p.IsDecided && !p.AcceptCommand.IsRunning);
         if (undecidedEdits > 0)
         {
             losses.Add(undecidedEdits == 1
@@ -1102,6 +1152,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// </summary>
     private async Task<(bool IsError, string Text)> ExecuteToolAsync(PendingMcpCall call, CancellationToken cancellationToken)
     {
+        var epoch = _conversationEpoch;
         var hooksBefore = _hookService.MayHaveHooks(HookEvents.PreToolUse);
         var hooksAfter = _hookService.MayHaveHooks(HookEvents.PostToolUse);
         if (!hooksBefore && !hooksAfter)
@@ -1117,7 +1168,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             var before = await _hookService.RunAsync(
                 HookEvents.PreToolUse, call.Name!, toolInput, null, false, cancellationToken);
-            ReportHookNotice(before);
+            ReportHookNotice(before, epoch);
             if (before.Block)
             {
                 return (true,
@@ -1131,7 +1182,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             var after = await _hookService.RunAsync(
                 HookEvents.PostToolUse, call.Name!, toolInput, result.Text, result.IsError, cancellationToken);
-            ReportHookNotice(after);
+            ReportHookNotice(after, epoch);
             if (after.Feedback is not null)
             {
                 result = (result.IsError,
@@ -1142,11 +1193,19 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         return result;
     }
 
-    private void ReportHookNotice(HookDecision decision)
+    /// <summary>Dropped when the conversation the hook ran for has since been replaced - the notice
+    /// is about the previous one.</summary>
+    private void ReportHookNotice(HookDecision decision, int epoch)
     {
         if (decision.Notice is { } notice)
         {
-            _dispatcher.Invoke(() => StatusMessage = notice);
+            _dispatcher.Invoke(() =>
+            {
+                if (epoch == _conversationEpoch)
+                {
+                    StatusMessage = notice;
+                }
+            });
         }
     }
 
@@ -2176,6 +2235,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private void AttachEditHooks(EditProposalViewModel proposal)
     {
         var epoch = _conversationEpoch;
+        var solutionDirectory = _solutionDirectory;
 
         if (_hookService.MayHaveHooks(HookEvents.PreToolUse))
         {
@@ -2184,7 +2244,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 var decision = await _hookService.RunAsync(
                     HookEvents.PreToolUse, ProposeEditTool.ToolName, EditInput(operation),
                     null, false, _activeTurn?.Token ?? CancellationToken.None);
-                ReportHookNotice(decision);
+                ReportHookNotice(decision, epoch);
                 return decision.Block ? decision.Feedback : null;
             };
         }
@@ -2193,12 +2253,20 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             proposal.PostApplyHook = async (operation, fullPath) =>
             {
+                // Accepted after another solution was opened (a PreToolUse hook was still deciding
+                // when it switched): that solution's hooks and unsaved documents have nothing to do
+                // with this file.
+                if (!string.Equals(solutionDirectory, _solutionDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
                 _editApplicationService.SaveDirtyDocuments();
 
                 var decision = await _hookService.RunAsync(
                     HookEvents.PostToolUse, ProposeEditTool.ToolName, EditInput(operation),
                     $"Applied to {operation.FilePath}.", false, _activeTurn?.Token ?? CancellationToken.None);
-                ReportHookNotice(decision);
+                ReportHookNotice(decision, epoch);
 
                 // In manual mode the accept comes after the turn has ended, so nothing would carry the
                 // feedback to the model. Recording it as a message means it is in the history the next
@@ -2399,7 +2467,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private bool CanSaveMemory() => _solutionDirectory is not null && !IsStreaming;
 
-    [RelayCommand(CanExecute = nameof(CanSaveMemory))]
+    [RelayCommand(CanExecute = nameof(CanSaveMemory), AllowConcurrentExecutions = true)]
     private async Task SaveMemoryAsync()
     {
         var solutionDirectory = _solutionDirectory!;
@@ -2448,7 +2516,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// conversation that produced the change. No tools are offered: a blind read of the diff is what
     /// makes this v1, cheap to run on demand rather than after every edit.
     /// </summary>
-    [RelayCommand(CanExecute = nameof(CanReviewLastChange))]
+    [RelayCommand(CanExecute = nameof(CanReviewLastChange), AllowConcurrentExecutions = true)]
     private async Task ReviewLastChangeAsync()
     {
         // A turn from the start, so fetching the diff is already stoppable and covered by a solution
@@ -2572,6 +2640,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 }),
                 cancellation.Token);
 
+            // Checked again here: this continuation is posted, and a switch that ran in between has
+            // already put the next solution's index in place - saving now would write that into this
+            // solution's embeddings.json.
+            cancellation.Token.ThrowIfCancellationRequested();
             _codebaseIndexService.SaveToDisk(ProjectMemoryStore.IndexFilePath(solutionDirectory));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)

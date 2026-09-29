@@ -69,6 +69,11 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
 
         try
         {
+            foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
             Directory.Delete(_root, recursive: true);
         }
         catch (IOException)
@@ -178,6 +183,11 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         viewModel.IsStreaming.ShouldBeFalse();
         viewModel.Messages.ShouldBeEmpty();
 
+        // Usable straight away - not only once the stuck turn finally returns, which may be never.
+        viewModel.InputText = "A question for solution B";
+        viewModel.SendCommand.CanExecute(null).ShouldBeTrue();
+        viewModel.InputText = "";
+
         _http.Release.SetResult();
         await send;
 
@@ -203,6 +213,58 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         viewModel.Messages.OfType<ChatMessageViewModel>().ShouldHaveSingleItem().Text.ShouldBe("Something asked in B");
         HistoryText(_directoryA).ShouldContain("Something asked in A");
         HistoryText(_directoryB).ShouldNotContain("Something asked in A");
+        return Task.CompletedTask;
+    });
+
+    /// <summary>The shell has already moved to the new solution by the time the chat hears of it, so
+    /// failing to save the previous conversation must not stop the chat moving too - it used to be
+    /// left half on each.</summary>
+    [Fact]
+    public void SwitchingSolution_WhenThePreviousConversationCantBeSaved_StillSwitches() => RunOnUiThread(() =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        viewModel.Messages.Add(new ChatMessageViewModel(ChatRole.User) { Text = "Something asked in A" });
+        viewModel.PersistChatHistory();
+        var historyA = Path.Combine(ProjectMemoryStore.MemoryDirectory(_directoryA), "chat-history.json");
+        File.SetAttributes(historyA, FileAttributes.ReadOnly);
+        try
+        {
+            viewModel.Messages.Add(new ChatMessageViewModel(ChatRole.User) { Text = "Not saved" });
+
+            viewModel.SetSolutionContext(_solutionB, _directoryB, () => "Debug");
+
+            viewModel.Messages.ShouldBeEmpty();
+        }
+        finally
+        {
+            File.SetAttributes(historyA, FileAttributes.Normal);
+        }
+
+        HistoryText(_directoryA).ShouldContain("Something asked in A");
+        return Task.CompletedTask;
+    });
+
+    /// <summary>A saved conversation that can't be read (another process has it locked) isn't
+    /// overwritten by the next save - that would lose it for good.</summary>
+    [Fact]
+    public void SwitchingToASolutionWhoseHistoryCantBeRead_SavesNothingOverIt() => RunOnUiThread(() =>
+    {
+        new ChatHistoryStore().Save(_directoryB, [new StoredChatMessage("User", "Something asked in B")]);
+        var historyB = Path.Combine(ProjectMemoryStore.MemoryDirectory(_directoryB), "chat-history.json");
+        var viewModel = CreateViewModel();
+
+        using (new FileStream(historyB, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            viewModel.SetSolutionContext(_solutionB, _directoryB, () => "Debug");
+        }
+
+        viewModel.StatusMessage.ShouldNotBeNull().ShouldContain("Couldn't read");
+        viewModel.Messages.Add(new ChatMessageViewModel(ChatRole.User) { Text = "Asked while it was unreadable" });
+        viewModel.PersistChatHistory();
+
+        HistoryText(_directoryB).ShouldContain("Something asked in B");
+        HistoryText(_directoryB).ShouldNotContain("Asked while it was unreadable");
         return Task.CompletedTask;
     });
 
@@ -330,6 +392,29 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         viewModel.Messages.ShouldContain(proposal);
         proposal.IsDecided.ShouldBeFalse();
         SessionLogs(_directoryA).ShouldBeEmpty();
+    });
+
+    /// <summary>The confirmation is modal, and a solution switch already under way can finish while it
+    /// is open. By then the conversation the user meant to clear has been saved and replaced; New Chat
+    /// must not go on to clear the next solution's instead.</summary>
+    [Fact]
+    public void NewConversation_WhenASwitchFinishesDuringTheConfirmation_LeavesTheNextSolutionsConversationAlone() => RunOnUiThread(async () =>
+    {
+        new ChatHistoryStore().Save(_directoryB, [new StoredChatMessage("User", "Something asked in B")]);
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        UndecidedProposal(viewModel);
+        viewModel.NewConversationConfirmation = _ =>
+        {
+            viewModel.SetSolutionContext(_solutionB, _directoryB, () => "Debug");
+            return true;
+        };
+
+        await viewModel.NewConversationCommand.ExecuteAsync(null);
+
+        viewModel.Messages.OfType<ChatMessageViewModel>().ShouldHaveSingleItem().Text.ShouldBe("Something asked in B");
+        HistoryText(_directoryB).ShouldContain("Something asked in B");
+        SessionLogs(_directoryB).ShouldBeEmpty();
     });
 
     [Fact]
