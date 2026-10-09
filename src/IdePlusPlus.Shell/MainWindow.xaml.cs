@@ -42,20 +42,10 @@ public partial class MainWindow : Window
     private readonly DeepSeekFimClient _deepSeekFimClient;
     private readonly PluginHost _pluginHost;
 
-    // Registering a LayoutAnchorable for a plugin's tool window has to wait until after
-    // RestoreLayout() has run (see AttachPendingPluginToolWindows' doc comment) - plugins register
-    // during LoadPlugins(), which App.xaml.cs calls after this constructor returns but before
-    // Show(), i.e. always before RestoreLayout's Loaded handler fires. Buffered here in the
-    // meantime rather than touching DockManager.Layout immediately.
-    private readonly List<(string ContentId, string Title, object Content)> _pendingPluginToolWindows = [];
-    private bool _layoutRestored;
-
-    // Snapshot of every pane MainWindow.xaml declares (ContentId/Title/the ContentIds of its original
-    // pane-mates), captured right after InitializeComponent - before RestoreLayout's Deserialize can
-    // replace DockManager.Layout with an older saved tree that predates one of these panes. Used by
-    // AttachMissingCoreToolWindows to add back whichever of them Deserialize dropped, the same way
-    // AttachPendingPluginToolWindows already does for plugin panes.
-    private readonly List<(string ContentId, string Title, string[] SiblingContentIds)> _coreToolWindows;
+    // Plugins register tool windows during LoadPlugins(), which App.xaml.cs calls after this
+    // constructor returns but before Show(), i.e. always before the Loaded-time layout restore -
+    // DockLayoutService holds them until that has run.
+    private readonly DockLayoutService _layout;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -113,43 +103,22 @@ public partial class MainWindow : Window
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
-        // Every LayoutAnchorable that exists right after InitializeComponent is, by construction,
-        // one MainWindow.xaml declared directly (nothing else - plugins included - has registered
-        // anything yet at this point in the constructor), so this is the complete set of "core"
-        // panes without needing to filter on CanClose. CanClose can't be used for that filter anyway:
-        // DockingManager.LayoutItemContainerStyle (below) sets CanClose="True" on every LayoutItem
-        // wrapper and writes it back into the underlying model, so by the time anything reads
-        // a.CanClose here it's already true for every anchorable regardless of what XAML declared.
-        _coreToolWindows = DockManager.Layout.Descendents().OfType<LayoutAnchorable>().ToList()
-            .Select(a => (
-                a.ContentId,
-                a.Title,
-                SiblingContentIds: ((LayoutAnchorablePane)a.Parent).Children.OfType<LayoutAnchorable>()
-                    .Where(sibling => sibling != a)
-                    .Select(sibling => sibling.ContentId)
-                    .ToArray()))
-            .ToList();
+        // Must happen now, while DockManager.Layout is still the tree InitializeComponent built -
+        // that tree is what the service snapshots as the default layout.
+        _layout = new DockLayoutService(DockManager, _contentById, LayoutFilePath);
 
         ApplyDockingTheme(themeService.IsDark);
         themeService.Changed += () => ApplyDockingTheme(themeService.IsDark);
 
         // The Git pane is easy to miss tabbed behind Solution Explorer - bring it to the front
         // automatically when a newly opened solution's repo actually has something to show. Looked
-        // up fresh by ContentId, not via the SourceControlAnchorable field: RestoreLayout can replace
-        // DockManager.Layout with an entirely different tree (see its doc comment), which would leave
-        // that XAML x:Name field pointing at a stale, detached object.
-        viewModel.SourceControl.PendingChangesDetected += () =>
-        {
-            if (DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
-                .FirstOrDefault(a => a.ContentId == SourceControlPaneViewModel.PaneContentId) is { } anchorable)
-            {
-                anchorable.IsActive = true;
-            }
-        };
+        // up fresh by ContentId, not via the SourceControlAnchorable field: restoring or resetting the
+        // layout replaces DockManager.Layout with a different tree, which would leave that XAML
+        // x:Name field pointing at a stale, detached object. A Git pane the user hid stays hidden.
+        viewModel.SourceControl.PendingChangesDetected += () => _layout.Activate(SourceControlPaneViewModel.PaneContentId);
 
-        // Attaches every tool window a plugin has registered by the time this runs, plus (via the
-        // event) any registered afterward - see OnPluginToolWindowRegistered's doc comment for why
-        // this can't just add straight into the XAML-declared pane.
+        // Hands over every tool window a plugin has registered by the time this runs, plus (via the
+        // event) any registered afterward - see OnPluginToolWindowRegistered's doc comment.
         foreach (var toolWindow in pluginToolWindowRegistry.ToolWindows)
         {
             OnPluginToolWindowRegistered(toolWindow);
@@ -166,11 +135,9 @@ public partial class MainWindow : Window
 
         pluginKeyBindingRegistry.Registered += AddPluginKeyBinding;
 
-        Loaded += (_, _) => RestoreLayout();
-        Loaded += (_, _) => AttachMissingCoreToolWindows();
-        Loaded += (_, _) => AttachPendingPluginToolWindows();
+        Loaded += (_, _) => _layout.Restore();
         Loaded += (_, _) => RestoreWindowBounds();
-        Closing += (_, _) => SaveLayout();
+        Closing += (_, _) => _layout.Save();
         Closing += (_, _) => SaveWindowBounds();
         // Closing mid-stream abandons RunAssistantTurnsAsync before its finally runs, so capture
         // whatever the conversation has reached rather than losing it.
@@ -229,139 +196,16 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Records a plugin tool window's content (calling its factory exactly once, per
-    /// IPluginHost.RegisterToolWindow's contract) and either attaches it immediately or defers it -
-    /// see <see cref="AttachPendingPluginToolWindows"/> for why deferring matters. Also makes the
-    /// content resolvable by ContentId for RestoreLayout's LayoutSerializationCallback, so a saved
-    /// layout that already had this exact pane (same plugin, same title, from a previous session)
-    /// restores it in whatever position/floating state the user last left it in.
+    /// IPluginHost.RegisterToolWindow's contract) and hands it to the layout service, which makes it
+    /// resolvable by ContentId - so a saved layout that already had this exact pane (same plugin, same
+    /// title, from a previous session) restores it in whatever position/floating/hidden state the user
+    /// last left it - and attaches it once the saved layout has been restored.
     /// </summary>
-    private void OnPluginToolWindowRegistered(PluginToolWindow toolWindow)
-    {
-        var contentId = $"Plugin_{toolWindow.PluginName}_{toolWindow.Title}";
-        var content = toolWindow.Factory();
-        _contentById[contentId] = content;
-
-        if (_layoutRestored)
-        {
-            AttachPluginToolWindowIfNotAlreadyPresent(contentId, toolWindow.Title, content);
-        }
-        else
-        {
-            _pendingPluginToolWindows.Add((contentId, toolWindow.Title, content));
-        }
-    }
-
-    /// <summary>
-    /// Attaches every tool window buffered since construction, now that RestoreLayout has run (with
-    /// or without an actual saved-layout file - either way DockManager.Layout now holds whatever the
-    /// window's real, final layout tree is). This can't happen earlier: when a saved layout.xml
-    /// exists, XmlLayoutSerializer.Deserialize replaces DockManager.Layout with an entirely new tree
-    /// built from that file, which would silently discard a LayoutAnchorable added to the
-    /// XAML-declared tree beforehand.
-    /// </summary>
-    private void AttachPendingPluginToolWindows()
-    {
-        _layoutRestored = true;
-
-        foreach (var (contentId, title, content) in _pendingPluginToolWindows)
-        {
-            AttachPluginToolWindowIfNotAlreadyPresent(contentId, title, content);
-        }
-
-        _pendingPluginToolWindows.Clear();
-    }
-
-    private void AttachPluginToolWindowIfNotAlreadyPresent(string contentId, string title, object content)
-    {
-        // A saved layout that already mentioned this exact ContentId was already reconstructed by
-        // RestoreLayout's callback above (which resolved it via _contentById, populated by
-        // OnPluginToolWindowRegistered before this runs) - adding a second LayoutAnchorable with the
-        // same ContentId would duplicate the pane.
-        if (DockManager.Layout.Descendents().OfType<LayoutAnchorable>().Any(a => a.ContentId == contentId))
-        {
-            return;
-        }
-
-        if (FindSolutionExplorerPane() is not { } homePane)
-        {
-            return; // Defensive only - the Solution Explorer pane this anchors to always exists.
-        }
-
-        homePane.Children.Add(new LayoutAnchorable
-        {
-            Title = title,
-            ContentId = contentId,
-            // Unlike every core IDE pane (all CanClose="False" in MainWindow.xaml), a plugin's tool
-            // window is the user's to close - there's no "reopen" command for it yet (that's the
-            // same deferred scope as reloading a plugin at runtime), but closing it is harmless:
-            // ContentId/content stay tracked in _contentById for as long as the app runs, and a
-            // fresh launch re-registers it from scratch anyway.
-            CanClose = true,
-            Content = content,
-        });
-    }
-
-    /// <summary>
-    /// Re-adds whichever XAML-declared, CanClose="False" panes (Git, NuGet, Error List, ...)
-    /// RestoreLayout's Deserialize dropped because a saved layout.xml from before that pane existed
-    /// doesn't mention its ContentId - the same silent-discard RestoreLayout's own doc comment
-    /// describes, which AttachPendingPluginToolWindows already works around for plugin panes but
-    /// which nothing previously did for the app's own core panes. Without this, a pane added to
-    /// MainWindow.xaml after a user's first run stays permanently invisible - not closed, just never
-    /// reconstructed - with no in-app way to bring it back short of deleting layout.xml by hand.
-    /// </summary>
-    private void AttachMissingCoreToolWindows()
-    {
-        var present = DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
-            .Select(a => a.ContentId)
-            .ToHashSet();
-
-        foreach (var (contentId, title, siblingContentIds) in _coreToolWindows)
-        {
-            if (present.Contains(contentId))
-            {
-                continue;
-            }
-
-            // Prefer re-docking next to whichever of its original pane-mates survived the restore
-            // (e.g. Git/NuGet back next to Solution Explorer), falling back to Solution Explorer's
-            // pane if every one of them was also dropped.
-            var homePane = siblingContentIds
-                .Select(sibling => DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
-                    .FirstOrDefault(a => a.ContentId == sibling)?.Parent as LayoutAnchorablePane)
-                .FirstOrDefault(pane => pane is not null)
-                ?? FindSolutionExplorerPane();
-
-            if (homePane is null)
-            {
-                continue; // Defensive only - the Solution Explorer pane this anchors to always exists.
-            }
-
-            homePane.Children.Add(new LayoutAnchorable
-            {
-                Title = title,
-                ContentId = contentId,
-                CanClose = false,
-                Content = _contentById[contentId],
-            });
-
-            present.Add(contentId);
-        }
-    }
-
-    /// <summary>
-    /// Finds the pane currently hosting Solution Explorer - a core pane that always exists - and
-    /// uses it as the attachment point for a newly-registered plugin tool window or a dropped core
-    /// pane with no surviving pane-mate, rather than reaching for the XAML-declared pane element
-    /// directly: after RestoreLayout runs, DockingManager.Layout may be an entirely different tree
-    /// than the one InitializeComponent built (see AttachPendingPluginToolWindows), which would leave
-    /// a XAML x:Name field pointing at a detached, invisible pane. Looking it up fresh by Solution
-    /// Explorer's ContentId works correctly either way, and also respects the user having moved
-    /// Solution Explorer elsewhere.
-    /// </summary>
-    private LayoutAnchorablePane? FindSolutionExplorerPane() =>
-        DockManager.Layout.Descendents().OfType<LayoutAnchorable>()
-            .FirstOrDefault(a => a.ContentId == SolutionExplorerPaneViewModel.PaneContentId)?.Parent as LayoutAnchorablePane;
+    private void OnPluginToolWindowRegistered(PluginToolWindow toolWindow) =>
+        _layout.RegisterPluginToolWindow(
+            $"Plugin_{toolWindow.PluginName}_{toolWindow.Title}",
+            toolWindow.Title,
+            toolWindow.Factory());
 
     private void AddPluginKeyBinding(PluginKeyBinding binding)
     {
@@ -380,46 +224,32 @@ public partial class MainWindow : Window
         InputBindings.Add(new KeyBinding(new RelayCommand(binding.Execute), gesture));
     }
 
-    private void RestoreLayout()
+    // Rebuilt on every open rather than bound: the set changes as plugins register, and the check
+    // state comes from the live dock layout, which has no change notification to bind to.
+    private void ToolWindowsMenuItem_OnSubmenuOpened(object sender, RoutedEventArgs e)
     {
-        if (!File.Exists(LayoutFilePath))
+        if (e.OriginalSource != ToolWindowsMenuItem)
         {
-            return;
+            return; // A nested submenu opening bubbles up here too.
         }
 
-        var serializer = new XmlLayoutSerializer(DockManager);
-        serializer.LayoutSerializationCallback += (_, args) =>
+        ToolWindowsMenuItem.Items.Clear();
+        foreach (var toolWindow in _layout.ToolWindows)
         {
-            if (args.Model.ContentId is { } contentId && _contentById.TryGetValue(contentId, out var content))
+            var menuItem = new MenuItem
             {
-                args.Content = content;
-            }
-            else
-            {
-                // Unknown content (e.g. a document pane from a previous session, or a stale
-                // ContentId from an older build) — drop it rather than restoring a broken pane.
-                args.Cancel = true;
-            }
-        };
-
-        try
-        {
-            serializer.Deserialize(LayoutFilePath);
-        }
-        catch (Exception)
-        {
-            // Corrupt/incompatible layout file from a previous version — keep the default XAML layout.
+                // Doubled so a plugin title containing '_' isn't read as an access-key marker.
+                Header = toolWindow.Title.Replace("_", "__"),
+                IsCheckable = true,
+                IsChecked = toolWindow.IsVisible,
+            };
+            var contentId = toolWindow.ContentId;
+            menuItem.Click += (_, _) => _layout.Toggle(contentId);
+            ToolWindowsMenuItem.Items.Add(menuItem);
         }
     }
 
-    private void SaveLayout()
-    {
-        var directory = Path.GetDirectoryName(LayoutFilePath)!;
-        Directory.CreateDirectory(directory);
-
-        var serializer = new XmlLayoutSerializer(DockManager);
-        serializer.Serialize(LayoutFilePath);
-    }
+    private void ResetLayoutMenuItem_OnClick(object sender, RoutedEventArgs e) => _layout.Reset();
 
     private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();
 

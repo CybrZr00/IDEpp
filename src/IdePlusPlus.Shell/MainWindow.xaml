@@ -570,6 +570,13 @@
                 </MenuItem>
                 <MenuItem Header="_Word Wrap" IsCheckable="True" IsChecked="{Binding IsWordWrapEnabled, Mode=OneWay}" Command="{Binding ToggleWordWrapCommand}" />
                 <Separator />
+                <!-- Items are rebuilt on open - see ToolWindowsMenuItem_OnSubmenuOpened. The placeholder
+                     keeps the header an expandable parent until then. -->
+                <MenuItem x:Name="ToolWindowsMenuItem" Header="Tool _Windows" SubmenuOpened="ToolWindowsMenuItem_OnSubmenuOpened">
+                    <MenuItem Header="(loading)" IsEnabled="False" />
+                </MenuItem>
+                <MenuItem Header="Reset _Layout" Click="ResetLayoutMenuItem_OnClick" />
+                <Separator />
                 <MenuItem Header="Zoom _In" InputGestureText="Ctrl+=" Command="{Binding ZoomInCommand}" />
                 <MenuItem Header="Zoom _Out" InputGestureText="Ctrl+-" Command="{Binding ZoomOutCommand}" />
                 <MenuItem Header="_Reset Zoom" InputGestureText="Ctrl+0" Command="{Binding ResetZoomCommand}" />
