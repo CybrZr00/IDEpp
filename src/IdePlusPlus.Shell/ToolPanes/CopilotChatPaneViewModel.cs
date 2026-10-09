@@ -1118,8 +1118,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                 var action = AssistantTurnPolicy.Decide(
                     toolCallCount: result.Calls.Count,
-                    editProposalCount: result.EditProposals.Count,
-                    allEditProposalsApplied: result.EditProposals.Count > 0 && result.EditProposals.All(p => p.WasApplied),
+                    editOutcomes: result.EditProposals.Select(p => p.Outcome).ToList(),
                     producedPlanProposal: result.ProducedPlanProposal,
                     isAutoMode: IsAutoMode);
 

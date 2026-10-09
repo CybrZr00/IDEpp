@@ -153,6 +153,41 @@ public sealed class CopilotChatTurnEndingTests : IDisposable
         Transcript(viewModel).ShouldContain("timed out");
     });
 
+    /// <summary>One propose_edit call, its arguments sent in a single chunk.</summary>
+    private static string ProposeEdit(string file, string newText) =>
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"edit_1\",\"type\":\"function\","
+        + "\"function\":{\"name\":\"propose_edit\",\"arguments\":"
+        + System.Text.Json.JsonSerializer.Serialize(
+            System.Text.Json.JsonSerializer.Serialize(new { file, mode = "whole_file", new_text = newText }))
+        + "}}]}}]}\n\n"
+        + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" + Done;
+
+    [Fact]
+    public void AnEditTheIdeRefuses_IsHandedBackToTheModel_SoItCanCorrectItself() => RunOnUiThread(async () =>
+    {
+        // First the model aims outside the solution; once told, it answers properly.
+        _http.Script = n => n == 1 ? ProposeEdit("../outside.txt", "x") : Text("Understood, I will keep it inside the solution") + Stop;
+        var viewModel = CreateViewModel();
+
+        await Ask(viewModel);
+
+        _http.ChatRequests.ShouldBe(2, "the refusal must go back to the model rather than end the turn");
+        _http.LastRequestBody.ShouldContain("outside the open solution");
+        Transcript(viewModel).ShouldContain("Understood, I will keep it inside the solution");
+    });
+
+    [Fact]
+    public void AnEditWaitingForTheUser_StillEndsTheTurn() => RunOnUiThread(async () =>
+    {
+        _http.Script = n => ProposeEdit("Notes.txt", "hello");
+        var viewModel = CreateViewModel();
+
+        await Ask(viewModel);
+
+        _http.ChatRequests.ShouldBe(1, "a proposal with Accept/Reject on it is the user's to answer");
+        viewModel.Messages.OfType<EditProposalViewModel>().Single().Outcome.ShouldBe(EditOutcome.AwaitingDecision);
+    });
+
     private async Task Ask(CopilotChatPaneViewModel viewModel)
     {
         viewModel.SetSolutionContext(_solution, _directory, () => "Debug");
@@ -255,11 +290,15 @@ public sealed class CopilotChatTurnEndingTests : IDisposable
 
         public int ChatRequests => _chatRequests;
 
+        /// <summary>The body of the most recent chat request - what the model was actually sent.</summary>
+        public string LastRequestBody { get; private set; } = "";
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.RequestUri!.AbsolutePath.EndsWith("/chat/completions", StringComparison.Ordinal))
             {
                 var n = Interlocked.Increment(ref _chatRequests);
+                LastRequestBody = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
                 if (TimeOutRequests)
                 {
                     // What HttpClient.Timeout looks like from the caller's side.

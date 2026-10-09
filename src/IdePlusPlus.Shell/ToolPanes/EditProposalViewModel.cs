@@ -87,6 +87,17 @@ public sealed partial class EditProposalViewModel : ObservableObject
     /// decide whether it's safe to let the model keep going past this proposal.</summary>
     public bool WasApplied { get; private set; }
 
+    /// <summary>True only when the user pressed Reject - not for a proposal the IDE refused or that
+    /// could not be applied, which nobody decided on.</summary>
+    public bool WasRejectedByUser { get; private set; }
+
+    /// <summary>Where this proposal stands, for the turn loop's decision about whether to carry on.</summary>
+    public EditOutcome Outcome =>
+        !IsDecided ? EditOutcome.AwaitingDecision
+        : WasApplied ? EditOutcome.Applied
+        : WasRejectedByUser ? EditOutcome.RejectedByUser
+        : EditOutcome.NotApplied;
+
     /// <summary>The resolved on-disk target once Complete() has run - null before that, and null
     /// (permanently) for a proposal refused on arrival for having no valid target (outside the
     /// workspace, no solution open). CopilotChatPaneViewModel uses this to decide whether there's a
@@ -454,6 +465,7 @@ public sealed partial class EditProposalViewModel : ObservableObject
             return;
         }
 
+        WasRejectedByUser = true;
         IsDecided = true;
         DecisionText = "Rejected";
         ToolResultText =
