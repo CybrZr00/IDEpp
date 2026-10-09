@@ -109,8 +109,8 @@ public sealed class CopilotChatTurnEndingTests : IDisposable
 
         await Ask(viewModel);
 
-        _http.ChatRequests.ShouldBe(20, "the manual-mode step limit");
-        Transcript(viewModel).ShouldContain("paused after 20 steps");
+        _http.ChatRequests.ShouldBe(40, "the manual-mode step limit");
+        Transcript(viewModel).ShouldContain("paused after 40 steps");
         Transcript(viewModel).ShouldContain("continue");
         viewModel.IsStreaming.ShouldBeFalse();
     });

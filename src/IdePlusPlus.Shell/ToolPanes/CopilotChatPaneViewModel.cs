@@ -145,11 +145,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private const int CodebaseSearchTopK = 5;
 
-    // Raised from 8 once iterations started doing verification work. Eight was sized for a loop
+    // Raised from 8 to 20, then to 40 after turns kept pausing mid-task. Eight was sized for a loop
     // whose only tools read files; a single "build, read the errors, fix, build again" cycle spends
     // four or five on its own, and running out mid-fix leaves the code worse than not having tried.
     // An edit proposal still ends the turn in manual mode, so this only bounds read/build/git calls.
-    private const int MaxToolLoopIterations = 20;
+    private const int MaxToolLoopIterations = 40;
 
     // A rough, tokenizer-free heuristic (not an exact token count) purely to warn before a request
     // is likely to hit a provider's context limit - 4 chars/token is the commonly-cited rule of
@@ -160,7 +160,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     // human click to proceed - Auto Mode removes that checkpoint, so a purely tool-call-driven
     // agentic task (e.g. against MCP tools) needs more room to run before hitting the ceiling.
     // CancelStreaming is always available as the actual safety valve.
-    private const int AutoModeMaxToolLoopIterations = 30;
+    private const int AutoModeMaxToolLoopIterations = 60;
 
     /// <summary>How long New Chat or a solution switch waits for a cancelled turn to finish before
     /// cutting it loose. Cancellation is cooperative, and an MCP server or plugin tool that ignores it
