@@ -25,6 +25,7 @@ using IdePlusPlus.NuGet;
 using IdePlusPlus.PluginContracts;
 using IdePlusPlus.Shell;
 using IdePlusPlus.Shell.ToolPanes;
+using IdePlusPlus.Shell.Views;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.Tasks;
 using IdePlusPlus.Templates;
@@ -177,28 +178,17 @@ public partial class App : Application
     {
         var commands = string.Join(
             Environment.NewLine,
-            request.Servers.Select(s => $"    {s.Name}:  {s.Command} {string.Join(' ', s.Args)}".TrimEnd()));
+            request.Servers.Select(s => $"{s.Name}:  {s.Command} {string.Join(' ', s.Args)}".TrimEnd()));
 
-        var result = MessageBox.Show(
+        return ApprovalDialog.Ask(
             owner,
-            $"""
-             This solution ships its own MCP server configuration:
-
-             {request.ConfigPath}
-
-             Opening it would run these commands on your machine:
-
-             {commands}
-
-             Only allow this if you trust the source of this solution. You will be asked again if
-             the file changes.
-             """,
             "IDE++ - run this solution's MCP servers?",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning,
-            MessageBoxResult.No);
-
-        return result == MessageBoxResult.Yes;
+            $"This solution ships its own MCP server configuration:{Environment.NewLine}{Environment.NewLine}"
+            + $"{request.ConfigPath}{Environment.NewLine}{Environment.NewLine}"
+            + "Opening it would run these commands on your machine:",
+            commands,
+            warning: "Only allow this if you trust the source of this solution. You will be asked again if "
+                     + "the file changes.");
     }
 
     /// <summary>
@@ -208,28 +198,15 @@ public partial class App : Application
     /// </summary>
     private static bool ConfirmProjectHooks(Window owner, HookTrustRequest request)
     {
-        var commands = string.Join(Environment.NewLine, request.CommandLines.Select(c => $"    {c}"));
-
-        var result = MessageBox.Show(
+        return ApprovalDialog.Ask(
             owner,
-            $"""
-             This solution ships its own hooks:
-
-             {request.ConfigPath}
-
-             These commands would run on your machine as the AI assistant edits files and calls tools:
-
-             {commands}
-
-             Only allow this if you trust the source of this solution. You will be asked again if
-             the file changes.
-             """,
             "IDE++ - run this solution's hooks?",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning,
-            MessageBoxResult.No);
-
-        return result == MessageBoxResult.Yes;
+            $"This solution ships its own hooks:{Environment.NewLine}{Environment.NewLine}"
+            + $"{request.ConfigPath}{Environment.NewLine}{Environment.NewLine}"
+            + "These commands would run on your machine as the AI assistant edits files and calls tools:",
+            string.Join(Environment.NewLine, request.CommandLines),
+            warning: "Only allow this if you trust the source of this solution. You will be asked again if "
+                     + "the file changes.");
     }
 
     /// <summary>
@@ -241,24 +218,13 @@ public partial class App : Application
     /// </summary>
     private static bool ConfirmJavaScriptTaskDiscovery(Window owner, JavaScriptTaskTrustRequest request)
     {
-        var files = string.Join(Environment.NewLine, request.ManifestPaths.Select(path => $"    {path}"));
-
-        var result = MessageBox.Show(
+        return ApprovalDialog.Ask(
             owner,
-            $"""
-             Listing this solution's gulp/grunt tasks means running these files:
-
-             {files}
-
-             That executes whatever they do when loaded, as you, with your permissions. Only allow
-             this if you trust the source of this solution. You will be asked again if they change.
-             """,
             "IDE++ - run this solution's task files?",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning,
-            MessageBoxResult.No);
-
-        return result == MessageBoxResult.Yes;
+            "Listing this solution's gulp/grunt tasks means running these files:",
+            string.Join(Environment.NewLine, request.ManifestPaths),
+            warning: "That executes whatever they do when loaded, as you, with your permissions. Only allow "
+                     + "this if you trust the source of this solution. You will be asked again if they change.");
     }
 
     /// <summary>
@@ -268,24 +234,14 @@ public partial class App : Application
     /// </summary>
     private static bool ConfirmShellCommand(Window owner, string command, string reason)
     {
-        var result = MessageBox.Show(
+        return ApprovalDialog.Ask(
             owner,
-            $"""
-             The AI assistant wants to run a command on your machine:
-
-             {command}
-
-             Its reason: {reason}
-
-             It runs as you, in the solution directory, with your permissions. Only allow it if the
-             command above is something you would be willing to run yourself.
-             """,
             "IDE++ - run this command?",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning,
-            MessageBoxResult.No);
-
-        return result == MessageBoxResult.Yes;
+            "The AI assistant wants to run a command on your machine:",
+            command,
+            note: $"Its reason: {reason}",
+            warning: "It runs as you, in the solution directory, with your permissions. Only allow it if the "
+                     + "command above is something you would be willing to run yourself.");
     }
 
     /// <summary>
@@ -295,25 +251,15 @@ public partial class App : Application
     /// </summary>
     private static bool ConfirmWebFetch(Window owner, string url, string reason)
     {
-        var result = MessageBox.Show(
+        return ApprovalDialog.Ask(
             owner,
-            $"""
-             The AI assistant wants to fetch a webpage:
-
-             {url}
-
-             Its reason: {reason}
-
-             Local, private-network, and cloud-metadata addresses are always refused regardless of this
-             prompt. Only allow it if you're comfortable with the assistant reading this page - remember
-             that whatever it says becomes part of the conversation.
-             """,
             "IDE++ - fetch this page?",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning,
-            MessageBoxResult.No);
-
-        return result == MessageBoxResult.Yes;
+            "The AI assistant wants to fetch a webpage:",
+            url,
+            note: $"Its reason: {reason}",
+            warning: "Local, private-network, and cloud-metadata addresses are always refused regardless of this "
+                     + "prompt. Only allow it if you're comfortable with the assistant reading this page - "
+                     + "remember that whatever it says becomes part of the conversation.");
     }
 
     protected override void OnExit(ExitEventArgs e)
