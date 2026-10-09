@@ -42,6 +42,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
         lmStudioBaseUrl = _appSettingsStore.Get(LmStudioEmbeddingClient.BaseUrlSettingName) ?? LmStudioEmbeddingClient.DefaultBaseUrl;
         lmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
+        useLmStudioEmbeddings = _appSettingsStore.Get(EmbeddingClientSelector.ProviderSettingName) == EmbeddingClientSelector.LmStudioProvider;
         systemPrompt = _appSettingsStore.Get(CopilotChatPaneViewModel.SystemPromptSettingKey) ?? "";
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
 
@@ -76,6 +77,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string lmStudioModel;
+
+    /// <summary>Off by default: codebase search embeds with the built-in ONNX model. Saved as soon as
+    /// it changes, like <see cref="RestoreNuGetOnSolutionLoad"/>. An index built by the other model is
+    /// ignored until the codebase is re-indexed.</summary>
+    [ObservableProperty]
+    private bool useLmStudioEmbeddings;
 
     [ObservableProperty]
     private string systemPrompt;
@@ -146,6 +153,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _appSettingsStore.Set(CopilotChatPaneViewModel.SystemPromptSettingKey, SystemPrompt);
         StatusMessage = "System prompt saved.";
+    }
+
+    partial void OnUseLmStudioEmbeddingsChanged(bool value)
+    {
+        _appSettingsStore.Set(EmbeddingClientSelector.ProviderSettingName, value ? EmbeddingClientSelector.LmStudioProvider : "Local");
+        StatusMessage = "Embedding source changed - re-index the codebase for search to use it.";
     }
 
     partial void OnRestoreNuGetOnSolutionLoadChanged(bool value) =>

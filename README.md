@@ -111,6 +111,13 @@ The Copilot Chat pane needs a model provider before it can do anything, configur
 - **LM Studio** (local, free, private) — run a model in [LM Studio](https://lmstudio.ai/) with its
   local server enabled, then point IDE++ at it. No API key needed.
 
+Codebase search needs neither. It embeds your code in-process with ONNX Runtime and the open
+[bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) model (MIT licence, 384
+dimensions). The first time you index a solution IDE++ downloads the quantised model (about 34 MB,
+checked against a pinned SHA-256) to `%LOCALAPPDATA%\IdePlusPlus\models`; after that it works offline.
+Prefer LM Studio's embeddings? Tick the box under **Settings → LM Studio**. Switching models means
+re-indexing, and IDE++ ignores an index built by the other one.
+
 The Web/Shell tool toggles, custom system prompt, and scheduled automations are all configured from
 the Copilot Chat pane and its Scheduled Automations tab directly.
 

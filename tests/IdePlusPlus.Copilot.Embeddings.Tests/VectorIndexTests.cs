@@ -98,4 +98,58 @@ public class VectorIndexTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void LoadFromDisk_DropsAnIndexBuiltByAnotherModel()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vector-index-model-{Guid.NewGuid()}.json");
+        try
+        {
+            var original = new VectorIndex { ModelId = "lmstudio:nomic" };
+            original.Add(new CodeChunk("A.cs", 1, 1, "a") { Embedding = [1, 0] });
+            original.SaveToDisk(path);
+
+            var sameModel = new VectorIndex();
+            sameModel.LoadFromDisk(path, "lmstudio:nomic");
+            var otherModel = new VectorIndex();
+            otherModel.LoadFromDisk(path, "onnx:bge-small-en-v1.5-int8");
+
+            sameModel.Count.ShouldBe(1);
+            sameModel.ModelId.ShouldBe("lmstudio:nomic");
+            otherModel.Count.ShouldBe(0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFromDisk_TheOldBareArrayFormat_LeavesTheIndexEmpty()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vector-index-old-{Guid.NewGuid()}.json");
+        try
+        {
+            File.WriteAllText(path, """[{"FilePath":"A.cs","StartLine":1,"EndLine":1,"Text":"a","Embedding":[1.0]}]""");
+
+            var index = new VectorIndex();
+            index.LoadFromDisk(path, "onnx:bge-small-en-v1.5-int8");
+
+            index.Count.ShouldBe(0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Search_SkipsChunksWhoseVectorsHaveADifferentLength()
+    {
+        var index = new VectorIndex();
+        index.Add(new CodeChunk("Short.cs", 1, 1, "s") { Embedding = [1, 0] });
+        index.Add(new CodeChunk("Match.cs", 1, 1, "m") { Embedding = [0, 1, 0] });
+
+        index.Search([0, 1, 0], topK: 5).ShouldHaveSingleItem().FilePath.ShouldBe("Match.cs");
+    }
 }

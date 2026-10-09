@@ -51,4 +51,20 @@ public class CodeChunkerTests
             chunks[i].StartLine.ShouldBeLessThanOrEqualTo(chunks[i - 1].EndLine + 1);
         }
     }
+
+    [Fact]
+    public void ChunkFile_WithASmallerChunkSize_UsesIt_AndStillCoversEveryLine()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, 100).Select(i => $"line {i}"));
+
+        var chunks = CodeChunker.ChunkFile("Foo.cs", content, maxLinesPerChunk: 40).ToList();
+
+        chunks[0].EndLine.ShouldBe(40);
+        chunks.ShouldAllBe(c => c.EndLine - c.StartLine < 40);
+        chunks[^1].EndLine.ShouldBe(100);
+        for (var i = 1; i < chunks.Count; i++)
+        {
+            chunks[i].StartLine.ShouldBeLessThanOrEqualTo(chunks[i - 1].EndLine);
+        }
+    }
 }

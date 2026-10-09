@@ -473,9 +473,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             try
             {
                 _codebaseIndexService.LoadFromDisk(ProjectMemoryStore.IndexFilePath(directory));
+                // A saved index that did not load was built by a different embedding model (or an older
+                // file format): say so, or the user is left wondering why search finds nothing.
                 IndexStatus = _codebaseIndexService.IsIndexed
                     ? $"Loaded index: {_codebaseIndexService.IndexedChunkCount} chunks."
-                    : null;
+                    : File.Exists(ProjectMemoryStore.IndexFilePath(directory))
+                        ? "The saved index was built with a different embedding model - re-index to use codebase search."
+                        : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

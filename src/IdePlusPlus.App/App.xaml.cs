@@ -369,6 +369,12 @@ public partial class App : Application
         services.AddSingleton<ScheduledAutomationsPaneViewModel>();
         services.AddSingleton<ChatHistoryStore>();
         services.AddSingleton(sp => new LmStudioEmbeddingClient(modelHttpClient, sp.GetRequiredService<AppSettingsStore>()));
+        services.AddSingleton(new LocalEmbeddingModelStore());
+        services.AddSingleton(sp => new OnnxEmbeddingClient(sp.GetRequiredService<LocalEmbeddingModelStore>(), modelHttpClient));
+        services.AddSingleton<IEmbeddingClient>(sp => new EmbeddingClientSelector(
+            sp.GetRequiredService<AppSettingsStore>(),
+            sp.GetRequiredService<OnnxEmbeddingClient>(),
+            sp.GetRequiredService<LmStudioEmbeddingClient>()));
         services.AddSingleton<CodebaseIndexService>();
         services.AddSingleton<GitService>();
         services.AddSingleton<SourceControlPaneViewModel>();

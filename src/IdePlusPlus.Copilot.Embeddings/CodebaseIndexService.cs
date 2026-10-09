@@ -17,10 +17,10 @@ public sealed class CodebaseIndexService
         ".cs", ".xaml", ".xml", ".json", ".md", ".csproj",
     };
 
-    private readonly LmStudioEmbeddingClient _embeddingClient;
+    private readonly IEmbeddingClient _embeddingClient;
     private volatile VectorIndex _index = new();
 
-    public CodebaseIndexService(LmStudioEmbeddingClient embeddingClient)
+    public CodebaseIndexService(IEmbeddingClient embeddingClient)
     {
         _embeddingClient = embeddingClient;
     }
@@ -31,7 +31,16 @@ public sealed class CodebaseIndexService
 
     public async Task IndexFilesAsync(IReadOnlyList<string> filePaths, Action<string> onProgress, CancellationToken cancellationToken)
     {
-        var index = new VectorIndex();
+        // Before the index is built, so a download that fails leaves the existing index alone.
+        var notReady = await _embeddingClient.PrepareAsync(onProgress, cancellationToken);
+        if (notReady is not null)
+        {
+            onProgress($"Stopped: {notReady}");
+            return;
+        }
+
+        var index = new VectorIndex { ModelId = _embeddingClient.ModelId };
+        var maxChunkLines = _embeddingClient.MaxChunkLines;
 
         var indexableFiles = filePaths.Where(f => IndexableExtensions.Contains(Path.GetExtension(f))).ToList();
         var processedFiles = 0;
@@ -51,7 +60,7 @@ public sealed class CodebaseIndexService
                 continue;
             }
 
-            foreach (var chunk in CodeChunker.ChunkFile(filePath, content))
+            foreach (var chunk in CodeChunker.ChunkFile(filePath, content, maxChunkLines))
             {
                 var embedding = await _embeddingClient.GetEmbeddingAsync(chunk.Text, cancellationToken);
                 if (embedding is null)
@@ -79,10 +88,10 @@ public sealed class CodebaseIndexService
         cancellationToken.ThrowIfCancellationRequested();
         _index = index;
 
-        // First failure almost always means LM Studio isn't reachable or misconfigured - stopping
+        // First failure almost always means the model isn't reachable or misconfigured - stopping
         // rather than burning through every remaining file on doomed requests.
         onProgress(stoppedEarly
-            ? $"Stopped: couldn't get an embedding (is LM Studio running with a model loaded?). Indexed {index.Count} chunks from {processedFiles} files before stopping."
+            ? $"Stopped: couldn't get an embedding ({_embeddingClient.UnavailableHint}). Indexed {index.Count} chunks from {processedFiles} files before stopping."
             : $"Indexing complete: {index.Count} chunks from {processedFiles} files.");
     }
 
@@ -91,9 +100,16 @@ public sealed class CodebaseIndexService
     public async Task<IReadOnlyList<CodeChunk>> SearchAsync(string query, int topK, CancellationToken cancellationToken)
     {
         var index = _index;
+        // An index built by another model (the provider was switched in Settings since) is in a
+        // different vector space: comparing against it would rank by noise, so it finds nothing.
+        if (index.Count > 0 && index.ModelId != _embeddingClient.ModelId)
+        {
+            return [];
+        }
+
         // Short, because a user is waiting on this before the model is even asked: slow context is not
         // worth a stalled turn, and no context just means the model searches for itself.
-        var queryEmbedding = await _embeddingClient.GetEmbeddingAsync(query, cancellationToken, QueryTimeout);
+        var queryEmbedding = await _embeddingClient.GetEmbeddingAsync(query, cancellationToken, QueryTimeout, isQuery: true);
         return queryEmbedding is null ? [] : index.Search(queryEmbedding, topK);
     }
 
@@ -105,7 +121,7 @@ public sealed class CodebaseIndexService
     public void LoadFromDisk(string path)
     {
         var index = new VectorIndex();
-        index.LoadFromDisk(path);
+        index.LoadFromDisk(path, _embeddingClient.ModelId);
         _index = index;
     }
 

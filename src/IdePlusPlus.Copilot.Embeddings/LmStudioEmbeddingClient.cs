@@ -9,7 +9,7 @@ namespace IdePlusPlus.Copilot.Embeddings;
 /// LM Studio's local server doesn't require auth. Failures return null; a missing embedding
 /// just means that chunk/query doesn't participate in search, not a crash.
 /// </summary>
-public sealed class LmStudioEmbeddingClient
+public sealed class LmStudioEmbeddingClient : IEmbeddingClient
 {
     public const string BaseUrlSettingName = "LmStudioBaseUrl";
     public const string ModelSettingName = "LmStudioEmbeddingModel";
@@ -26,6 +26,17 @@ public sealed class LmStudioEmbeddingClient
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_settingsStore.Get(ModelSettingName));
 
+    public string ModelId => $"lmstudio:{_settingsStore.Get(ModelSettingName)?.Trim()}";
+
+    // Embedding models served by LM Studio (nomic and similar) take thousands of tokens.
+    public int MaxChunkLines => 120;
+
+    public string UnavailableHint => "is LM Studio running with an embedding model loaded?";
+
+    // Nothing to get ready: the server loads its model itself on the first request.
+    public Task<string?> PrepareAsync(Action<string> onProgress, CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(null);
+
     /// <summary>For bulk indexing, where the very first request can include LM Studio loading the
     /// embedding model.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
@@ -37,7 +48,7 @@ public sealed class LmStudioEmbeddingClient
     /// the turn nothing. <paramref name="timeout"/> bounds the wait for the same reason - the caller's own
     /// token is the user pressing Stop, which is not a failure and still propagates.
     /// </summary>
-    public async Task<float[]?> GetEmbeddingAsync(string text, CancellationToken cancellationToken, TimeSpan? timeout = null)
+    public async Task<float[]?> GetEmbeddingAsync(string text, CancellationToken cancellationToken, TimeSpan? timeout = null, bool isQuery = false)
     {
         var model = _settingsStore.Get(ModelSettingName);
         if (string.IsNullOrWhiteSpace(model))

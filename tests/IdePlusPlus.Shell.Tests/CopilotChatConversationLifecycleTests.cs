@@ -288,7 +288,9 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
     [Fact]
     public void SwitchingToASolutionWithNoIndex_LeavesNoIndexRatherThanThePreviousOne() => RunOnUiThread(() =>
     {
-        var indexA = new VectorIndex();
+        // The model id the LM Studio client reports with no embedding model set up: an index saved by
+        // any other model is deliberately not loaded.
+        var indexA = new VectorIndex { ModelId = "lmstudio:" };
         indexA.Add(new CodeChunk(Path.Combine(_directoryA, "Foo.cs"), 1, 1, "class Foo { }") { Embedding = [1f] });
         indexA.SaveToDisk(ProjectMemoryStore.IndexFilePath(_directoryA));
 

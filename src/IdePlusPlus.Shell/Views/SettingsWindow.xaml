@@ -51,11 +51,15 @@
             <Button Content="Save System Prompt" Command="{Binding SaveSystemPromptCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
             <TextBlock Text="LM Studio" FontWeight="Bold" Margin="0,0,0,8" />
-            <TextBlock Text="Used for codebase search embeddings, and as a chat provider alternative to OpenRouter (pick it from the provider dropdown in Copilot Chat)."
+            <TextBlock Text="A chat provider alternative to OpenRouter (pick it from the provider dropdown in Copilot Chat). Codebase search embeds with a built-in model (bge-small, downloaded once on first index) unless you tick the box below."
                        FontSize="11"
                        Foreground="{DynamicResource MutedForegroundBrush}"
                        TextWrapping="Wrap"
                        Margin="0,0,0,8" />
+
+            <CheckBox Content="Use LM Studio for codebase search embeddings instead of the built-in model"
+                      IsChecked="{Binding UseLmStudioEmbeddings}"
+                      Margin="0,0,0,8" />
 
             <TextBlock Text="LM Studio base URL:" Margin="0,0,0,2" />
             <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />

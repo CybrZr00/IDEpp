@@ -90,6 +90,63 @@ public sealed class CodebaseIndexServiceTests : IDisposable
         hits.ShouldHaveSingleItem().FilePath.ShouldEndWith("Second.cs");
     }
 
+    [Fact]
+    public async Task IndexFilesAsync_WhenTheClientCannotGetReady_KeepsTheExistingIndex_AndSaysWhy()
+    {
+        await _service.IndexFilesAsync([WriteFile("Kept.cs", "class Kept { }")], _ => { }, CancellationToken.None);
+        var fake = new FakeEmbeddingClient { NotReadyReason = "couldn't download the embedding model" };
+        var service = new CodebaseIndexService(fake);
+        var messages = new List<string>();
+
+        await service.IndexFilesAsync([WriteFile("New.cs", "class New { }")], messages.Add, CancellationToken.None);
+
+        service.IsIndexed.ShouldBeFalse();
+        messages.ShouldContain(m => m.Contains("couldn't download the embedding model"));
+        (await _service.SearchAsync("anything", 5, CancellationToken.None)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task SearchAsync_AfterTheEmbeddingModelChanges_FindsNothingRatherThanRankingByNoise()
+    {
+        var fake = new FakeEmbeddingClient { ModelId = "onnx:a" };
+        var service = new CodebaseIndexService(fake);
+        await service.IndexFilesAsync([WriteFile("A.cs", "class A { }")], _ => { }, CancellationToken.None);
+        (await service.SearchAsync("q", 5, CancellationToken.None)).ShouldHaveSingleItem();
+
+        fake.ModelId = "lmstudio:b";
+
+        (await service.SearchAsync("q", 5, CancellationToken.None)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task IndexFilesAsync_ChunksToTheSizeTheClientCanEmbed()
+    {
+        var fake = new FakeEmbeddingClient { MaxChunkLines = 20 };
+        var service = new CodebaseIndexService(fake);
+        var path = WriteFile("Long.cs", string.Join(Environment.NewLine, Enumerable.Range(1, 100).Select(i => $"// line {i}")));
+
+        await service.IndexFilesAsync([path], _ => { }, CancellationToken.None);
+
+        service.IndexedChunkCount.ShouldBeGreaterThan(5);
+    }
+
+    private sealed class FakeEmbeddingClient : IEmbeddingClient
+    {
+        public string ModelId { get; set; } = "fake:1";
+
+        public int MaxChunkLines { get; set; } = 120;
+
+        public string UnavailableHint => "fake";
+
+        public string? NotReadyReason { get; set; }
+
+        public Task<string?> PrepareAsync(Action<string> onProgress, CancellationToken cancellationToken) =>
+            Task.FromResult(NotReadyReason);
+
+        public Task<float[]?> GetEmbeddingAsync(string text, CancellationToken cancellationToken, TimeSpan? timeout = null, bool isQuery = false) =>
+            Task.FromResult<float[]?>([1f, 0f]);
+    }
+
     /// <summary>Answers every /embeddings request with the same one-dimensional vector - enough for
     /// every chunk to be indexed and found, which is all these tests look at.</summary>
     private sealed class StubEmbeddingHandler : HttpMessageHandler

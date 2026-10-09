@@ -11,6 +11,10 @@ public sealed class VectorIndex
 {
     private readonly List<CodeChunk> _chunks = [];
 
+    /// <summary>The <see cref="IEmbeddingClient.ModelId"/> that produced these vectors. Vectors from
+    /// different models are not comparable, so this travels with the index on disk.</summary>
+    public string ModelId { get; set; } = "";
+
     public int Count => _chunks.Count;
 
     public void Clear() => _chunks.Clear();
@@ -19,7 +23,7 @@ public sealed class VectorIndex
 
     public IReadOnlyList<CodeChunk> Search(float[] queryEmbedding, int topK) =>
         _chunks
-            .Where(c => c.Embedding is not null)
+            .Where(c => c.Embedding is not null && c.Embedding.Length == queryEmbedding.Length)
             .Select(c => (Chunk: c, Score: CosineSimilarity(queryEmbedding, c.Embedding!)))
             .OrderByDescending(x => x.Score)
             .Take(topK)
@@ -34,15 +38,17 @@ public sealed class VectorIndex
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(path, JsonSerializer.Serialize(_chunks));
+        File.WriteAllText(path, JsonSerializer.Serialize(new IndexFile(ModelId, _chunks)));
     }
 
     /// <summary>Replaces the contents with what is on disk. Cleared first, so a missing or corrupt
     /// file leaves the index empty rather than still holding whatever was loaded before - which, on a
-    /// solution switch, was the previous solution's code.</summary>
-    public void LoadFromDisk(string path)
+    /// solution switch, was the previous solution's code. An index built by a model other than
+    /// <paramref name="expectedModelId"/> is dropped the same way (null accepts any).</summary>
+    public void LoadFromDisk(string path, string? expectedModelId = null)
     {
         _chunks.Clear();
+        ModelId = "";
         if (!File.Exists(path))
         {
             return;
@@ -50,10 +56,11 @@ public sealed class VectorIndex
 
         try
         {
-            var loaded = JsonSerializer.Deserialize<List<CodeChunk>>(File.ReadAllText(path));
-            if (loaded is not null)
+            var loaded = JsonSerializer.Deserialize<IndexFile>(File.ReadAllText(path));
+            if (loaded?.Chunks is not null && (expectedModelId is null || loaded.ModelId == expectedModelId))
             {
-                _chunks.AddRange(loaded);
+                ModelId = loaded.ModelId;
+                _chunks.AddRange(loaded.Chunks);
             }
         }
         catch (JsonException)
@@ -61,6 +68,8 @@ public sealed class VectorIndex
             // Corrupt or incompatible index from a previous version - leave empty, re-index will rebuild it.
         }
     }
+
+    private sealed record IndexFile(string ModelId, List<CodeChunk> Chunks);
 
     private static float CosineSimilarity(float[] a, float[] b)
     {
