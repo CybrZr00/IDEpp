@@ -123,7 +123,7 @@ public sealed class EditorWorkspace
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(document.FilePath, document.TextDocument.Text);
+        AtomicFile.WriteAllText(document.FilePath, document.TextDocument.Text);
         document.IsDirty = false;
         TouchRecentFile(document.FilePath);
     }

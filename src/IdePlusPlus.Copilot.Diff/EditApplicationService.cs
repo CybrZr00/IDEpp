@@ -441,7 +441,7 @@ public sealed class EditApplicationService
                 File.Copy(fullPath, fullPath + ".bak", overwrite: true);
             }
 
-            File.WriteAllText(fullPath, newContent);
+            AtomicFile.WriteAllText(fullPath, newContent);
         }
 
         return ApplyResult.Applied;
