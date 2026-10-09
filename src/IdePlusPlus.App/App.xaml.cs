@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -336,8 +337,19 @@ public partial class App : Application
         services.AddSingleton<IPluginHost>(sp => sp.GetRequiredService<PluginHost>());
         services.AddSingleton<PluginLoader>();
         services.AddSingleton<HttpClient>();
-        services.AddSingleton<OpenRouterChatClient>();
-        services.AddSingleton<LmStudioChatClient>();
+
+        // Chat and embedding requests get their own client with no overall timeout. The shared one above
+        // keeps HttpClient's default of 100 seconds, which is far too short for them: a local model that
+        // has to load, or work through a long conversation, before its first token routinely takes
+        // longer, and the timeout then killed the turn and showed it as "[cancelled]". The connect
+        // timeout still fails fast on a server that isn't there, and a stream that goes quiet is
+        // given up on by OpenAiCompatibleChat's idle timeout, so nothing can hang forever.
+        var modelHttpClient = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(15) })
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        services.AddSingleton(sp => new OpenRouterChatClient(modelHttpClient, sp.GetRequiredService<SecureSettingsStore>()));
+        services.AddSingleton(sp => new LmStudioChatClient(modelHttpClient, sp.GetRequiredService<AppSettingsStore>()));
         services.AddSingleton<McpServerConfigStore>();
         services.AddSingleton<McpProjectTrustStore>();
         services.AddSingleton<HookService>();
@@ -356,7 +368,7 @@ public partial class App : Application
         services.AddSingleton<ScheduledAutomationService>();
         services.AddSingleton<ScheduledAutomationsPaneViewModel>();
         services.AddSingleton<ChatHistoryStore>();
-        services.AddSingleton<LmStudioEmbeddingClient>();
+        services.AddSingleton(sp => new LmStudioEmbeddingClient(modelHttpClient, sp.GetRequiredService<AppSettingsStore>()));
         services.AddSingleton<CodebaseIndexService>();
         services.AddSingleton<GitService>();
         services.AddSingleton<SourceControlPaneViewModel>();

@@ -86,10 +86,14 @@ public sealed class CodebaseIndexService
             : $"Indexing complete: {index.Count} chunks from {processedFiles} files.");
     }
 
+    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(10);
+
     public async Task<IReadOnlyList<CodeChunk>> SearchAsync(string query, int topK, CancellationToken cancellationToken)
     {
         var index = _index;
-        var queryEmbedding = await _embeddingClient.GetEmbeddingAsync(query, cancellationToken);
+        // Short, because a user is waiting on this before the model is even asked: slow context is not
+        // worth a stalled turn, and no context just means the model searches for itself.
+        var queryEmbedding = await _embeddingClient.GetEmbeddingAsync(query, cancellationToken, QueryTimeout);
         return queryEmbedding is null ? [] : index.Search(queryEmbedding, topK);
     }
 

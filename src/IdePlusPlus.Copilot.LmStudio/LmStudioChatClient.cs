@@ -17,6 +17,8 @@ public sealed class LmStudioChatClient : IChatClient
     public const string BaseUrlSettingName = "LmStudioBaseUrl";
     public const string DefaultBaseUrl = "http://localhost:1234/v1";
 
+    private static readonly TimeSpan ModelListTimeout = TimeSpan.FromSeconds(15);
+
     private readonly HttpClient _httpClient;
     private readonly AppSettingsStore _settingsStore;
 
@@ -33,7 +35,14 @@ public sealed class LmStudioChatClient : IChatClient
         ChatEffort effort = ChatEffort.None,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var baseUrl = (_settingsStore.Get(BaseUrlSettingName) ?? DefaultBaseUrl).TrimEnd('/');
+        var configuredUrl = _settingsStore.Get(BaseUrlSettingName);
+        var baseUrl = (string.IsNullOrWhiteSpace(configuredUrl) ? DefaultBaseUrl : configuredUrl).Trim().TrimEnd('/');
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) || baseUri.Scheme is not ("http" or "https"))
+        {
+            yield return new StreamError(
+                $"The LM Studio base URL \"{baseUrl}\" is not a valid address. Set it under Tools > Settings (for example {DefaultBaseUrl}).");
+            yield break;
+        }
 
         var (response, connectError) = await TryConnectAsync(baseUrl, messages, model, tools, effort, cancellationToken);
         if (connectError is not null)
@@ -61,17 +70,20 @@ public sealed class LmStudioChatClient : IChatClient
     /// </summary>
     public async Task<IReadOnlyList<string>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
     {
-        var baseUrl = (_settingsStore.Get(BaseUrlSettingName) ?? DefaultBaseUrl).TrimEnd('/');
+        var configuredUrl = _settingsStore.Get(BaseUrlSettingName);
+        var baseUrl = (string.IsNullOrWhiteSpace(configuredUrl) ? DefaultBaseUrl : configuredUrl).Trim().TrimEnd('/');
 
         try
         {
-            using var response = await _httpClient.GetAsync($"{baseUrl}/models", cancellationToken);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(ModelListTimeout);
+            using var response = await _httpClient.GetAsync($"{baseUrl}/models", timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return [];
             }
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(timeout.Token);
             var data = JsonNode.Parse(json)?["data"]?.AsArray() ?? [];
             return data
                 .Select(m => m?["id"]?.GetValue<string>())
@@ -116,6 +128,13 @@ public sealed class LmStudioChatClient : IChatClient
             }
 
             return (response, null);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Not the user's Stop. Chat requests carry no overall timeout (see App.xaml.cs), so this is
+            // only reachable through a client built with one - say so rather than let it surface as a
+            // silent "[cancelled]".
+            return (null, "The request to LM Studio timed out before it started answering.");
         }
         catch (HttpRequestException ex)
         {

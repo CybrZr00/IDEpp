@@ -82,38 +82,72 @@ public static class OpenAiCompatibleChat
         _ => "user",
     };
 
+    /// <summary>How long the stream may go without a single line (keepalive comments count) before the
+    /// reply is given up on. Generous on purpose: a local model can think for a long time between
+    /// tokens - this is only here so a connection that has silently died ends the turn with a message
+    /// instead of leaving it on "Thinking..." until the user notices and presses Stop.</summary>
+    public static readonly TimeSpan DefaultStreamIdleTimeout = TimeSpan.FromMinutes(5);
+
+    /// <inheritdoc cref="ReadSseStreamAsync(Stream, TimeSpan, CancellationToken)"/>
+    public static IAsyncEnumerable<ChatStreamEvent> ReadSseStreamAsync(Stream stream, CancellationToken cancellationToken) =>
+        ReadSseStreamAsync(stream, DefaultStreamIdleTimeout, cancellationToken);
+
     /// <summary>
     /// Reads an OpenAI-compatible SSE response body, yielding parsed stream events. Validated
     /// against a real OpenRouter/Claude streaming response during M4/M5 - see those milestones'
     /// notes: tool-call arguments arrive as true incremental fragments (must be concatenated), and
     /// id/name are only present on a tool call's first delta for a given index.
+    ///
+    /// Every way the stream can end badly yields a <see cref="StreamError"/> rather than just stopping:
+    /// a provider's in-band error, a connection that closes before the model said it was finished, and
+    /// a stream that goes quiet. Ending silently is indistinguishable from a reply that completed, and
+    /// the agent loop treats a finished reply as the end of the turn - so each of those used to look
+    /// like the assistant giving up for no reason.
     /// </summary>
     public static async IAsyncEnumerable<ChatStreamEvent> ReadSseStreamAsync(
-        Stream stream, [EnumeratorCancellation] CancellationToken cancellationToken)
+        Stream stream, TimeSpan idleTimeout, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         using var reader = new StreamReader(stream);
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        // Set once the model has said it is done (finish_reason) or the provider has reported why it
+        // cannot be - after either, the connection simply closing is expected, not a dropped reply.
+        var concluded = false;
 
         while (true)
         {
             string? line = null;
             string? readError = null;
+            idle.CancelAfter(idleTimeout);
             try
             {
-                line = await reader.ReadLineAsync(cancellationToken);
+                line = await reader.ReadLineAsync(idle.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                readError = $"No data was received for {idleTimeout.TotalMinutes:0.#} minute(s), so the reply was abandoned. "
+                            + "The model server may have stalled or crashed.";
             }
             catch (IOException ex)
             {
-                readError = ex.Message;
+                readError = $"Stream error: {ex.Message}";
             }
 
             if (readError is not null)
             {
-                yield return new StreamError($"Stream error: {readError}");
+                yield return new StreamError(readError);
                 yield break;
             }
 
             if (line is null)
             {
+                if (!concluded)
+                {
+                    yield return new StreamError(
+                        "The connection closed before the model finished its reply, so it may be incomplete. "
+                        + "The model server may have crashed or unloaded the model.");
+                }
+
                 yield break;
             }
 
@@ -132,9 +166,31 @@ public static class OpenAiCompatibleChat
 
             foreach (var chunkEvent in ParseChunkEvents(data))
             {
+                if (chunkEvent is FinishReasonReceived or StreamError)
+                {
+                    concluded = true;
+                }
+
                 yield return chunkEvent;
             }
         }
+    }
+
+    private static string DescribeProviderError(JsonNode error)
+    {
+        if (error is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return $"The provider reported an error: {text}";
+        }
+
+        var message = error["message"]?.ToString();
+        var code = error["code"]?.ToString();
+        return (message, code) switch
+        {
+            ({ Length: > 0 }, { Length: > 0 }) => $"The provider reported an error ({code}): {message}",
+            ({ Length: > 0 }, _) => $"The provider reported an error: {message}",
+            _ => $"The provider reported an error: {error.ToJsonString()}",
+        };
     }
 
     private static IEnumerable<ChatStreamEvent> ParseChunkEvents(string json)
@@ -148,6 +204,15 @@ public static class OpenAiCompatibleChat
         {
             // Malformed or unexpected chunk shape - skip it rather than aborting the whole stream.
             yield break;
+        }
+
+        // A provider that fails after it has started streaming (OpenRouter does this when the upstream
+        // model errors) cannot change the HTTP status any more, so it sends the error in-band as an
+        // event with a top-level "error" and finish_reason "error". Skipped as an unrecognised chunk,
+        // it left an empty reply that looked like the model choosing to say nothing.
+        if (root?["error"] is { } error)
+        {
+            yield return new StreamError(DescribeProviderError(error));
         }
 
         // The usage-bearing chunk (when stream_options.include_usage is set) typically carries an
@@ -172,6 +237,12 @@ public static class OpenAiCompatibleChat
         if (choice?["finish_reason"]?.GetValue<string>() is { Length: > 0 } finishReason)
         {
             yield return new FinishReasonReceived(finishReason);
+
+            // Said once: when an "error" object came with it, that already explained the failure.
+            if (finishReason == "error" && root?["error"] is null)
+            {
+                yield return new StreamError("The provider reported an error while generating the reply.");
+            }
         }
 
         var delta = choice?["delta"];

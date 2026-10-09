@@ -15,6 +15,8 @@ public sealed class OpenRouterChatClient : IChatClient
     private const string ChatCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions";
     private const string ModelsUrl = "https://openrouter.ai/api/v1/models";
 
+    private static readonly TimeSpan ModelListTimeout = TimeSpan.FromSeconds(15);
+
     private readonly HttpClient _httpClient;
     private readonly SecureSettingsStore _settingsStore;
 
@@ -76,13 +78,15 @@ public sealed class OpenRouterChatClient : IChatClient
     {
         try
         {
-            using var response = await _httpClient.GetAsync(ModelsUrl, cancellationToken);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(ModelListTimeout);
+            using var response = await _httpClient.GetAsync(ModelsUrl, timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return [];
             }
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(timeout.Token);
             return ParseModelIds(json, toolCapableOnly);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
@@ -150,6 +154,10 @@ public sealed class OpenRouterChatClient : IChatClient
             }
 
             return (response, null);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return (null, "The request to OpenRouter timed out before it started answering.");
         }
         catch (HttpRequestException ex)
         {

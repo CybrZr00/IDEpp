@@ -1027,10 +1027,37 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             }
 
             var maxIterations = IsAutoMode ? AutoModeMaxToolLoopIterations : MaxToolLoopIterations;
+            var finished = false;
             for (var iteration = 0; iteration < maxIterations; iteration++)
             {
                 var result = await StreamOneTurnAsync(turn, history, assistantMessage);
                 ThrowIfDetached(turn);
+
+                // A reply with no text, no tool call and no error is not a finished reply, it is the model
+                // (local ones especially, right after a long tool result) returning nothing. The loop would
+                // read it as "nothing pending" and end the turn on an empty bubble - the most common way a
+                // turn "just stops". Asking again costs one request and usually gets an answer; if it is
+                // still empty, say so rather than leave a blank message.
+                if (IsEmptyReply(result, assistantMessage))
+                {
+                    Log.Warning("The model returned an empty reply (iteration {Iteration}) - retrying once", iteration);
+                    result = await StreamOneTurnAsync(turn, history, assistantMessage);
+                    ThrowIfDetached(turn);
+
+                    if (IsEmptyReply(result, assistantMessage))
+                    {
+                        Log.Warning("The model returned an empty reply twice (iteration {Iteration}) - giving up", iteration);
+                        _dispatcher.Invoke(() =>
+                        {
+                            assistantMessage.Append(
+                                "[the model sent back an empty reply, twice. Send a message such as \"continue\" to prompt it again.]");
+                            if (IsLive(turn))
+                            {
+                                StatusMessage = "The model returned an empty reply.";
+                            }
+                        });
+                    }
+                }
 
                 // A model without tool calling can only show code. When a reply made no call at all
                 // but contains code that can be placed exactly, offer it as a normal reviewable edit.
@@ -1098,6 +1125,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                 if (action == AssistantTurnAction.Stop)
                 {
+                    finished = true;
                     break;
                 }
 
@@ -1108,8 +1136,28 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
                 _dispatcher.Invoke(() => Messages.Add(assistantMessage));
             }
+
+            // Running out of iterations used to end the turn with nothing said: the last tool result sat
+            // unanswered and the conversation just stopped, which is indistinguishable from a hang.
+            if (!finished)
+            {
+                Log.Warning("The assistant turn stopped at its limit of {Limit} consecutive tool-call steps", maxIterations);
+                _dispatcher.Invoke(() =>
+                {
+                    assistantMessage.Append(
+                        $"[paused after {maxIterations} steps in a row - that is the limit per message, not an error. "
+                        + "Send \"continue\" and it will carry on from here.]");
+                    if (IsLive(turn))
+                    {
+                        StatusMessage = $"Paused after {maxIterations} steps. Send \"continue\" to let the assistant carry on.";
+                    }
+                });
+            }
         }
-        catch (OperationCanceledException)
+        // Only the user's Stop (or being cut loose by New Chat / a solution switch) is a cancellation.
+        // Anything else that surfaces as one - an HTTP timeout is a TaskCanceledException - is a failure
+        // and falls through to the handler below, so it is reported instead of passing for "[cancelled]".
+        catch (OperationCanceledException) when (turn.Token.IsCancellationRequested || !IsLive(turn))
         {
             _dispatcher.Invoke(() => assistantMessage.Append("\n\n[cancelled]"));
         }
@@ -2037,7 +2085,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
-    private sealed record TurnResult(List<PendingMcpCall> Calls, List<EditProposalViewModel> EditProposals, bool ProducedPlanProposal);
+    private sealed record TurnResult(
+        List<PendingMcpCall> Calls, List<EditProposalViewModel> EditProposals, bool ProducedPlanProposal, bool ReportedError);
+
+    private static bool IsEmptyReply(TurnResult result, ChatMessageViewModel assistantMessage) =>
+        result.Calls.Count == 0
+        && result.EditProposals.Count == 0
+        && !result.ProducedPlanProposal
+        && !result.ReportedError
+        && string.IsNullOrWhiteSpace(assistantMessage.Text);
 
     private async Task<TurnResult> StreamOneTurnAsync(
         TurnScope turn, List<ChatMessage> history, ChatMessageViewModel assistantMessage)
@@ -2048,6 +2104,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var planProposalsByToolCallId = new Dictionary<string, PlanProposalViewModel>();
         var mcpCallsByIndex = new Dictionary<int, PendingMcpCall>();
         var routeByIndex = new Dictionary<int, ToolCallRoute>();
+        var reportedError = false;
 
         var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
         tools.AddRange(BuiltInTools.All);
@@ -2120,7 +2177,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                         break;
 
                     case StreamError error:
+                        reportedError = true;
+                        Log.Warning("The chat stream reported an error: {Message}", error.Message);
                         assistantMessage.Append($"\n\n[error: {error.Message}]");
+                        break;
+
+                    // The provider declined to answer; nothing else in the stream says so.
+                    case FinishReasonReceived { Reason: "content_filter" }:
+                        reportedError = true;
+                        assistantMessage.Append("\n\n[the provider blocked this reply with its content filter]");
                         break;
 
                     // "length" means the model was cut off by the output-token cap, not that it
@@ -2143,7 +2208,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         return new TurnResult(
             mcpCallsByIndex.Values.Where(c => c.Name is not null).ToList(),
             proposalsByToolCallId.Values.Where(p => p.IsComplete).ToList(),
-            planProposalsByToolCallId.Count > 0);
+            planProposalsByToolCallId.Count > 0,
+            reportedError);
     }
 
     private static void AccumulateMcpCall(ToolCallDelta delta, Dictionary<int, PendingMcpCall> calls)
