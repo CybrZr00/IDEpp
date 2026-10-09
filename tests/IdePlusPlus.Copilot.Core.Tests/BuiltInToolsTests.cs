@@ -30,6 +30,7 @@ public class BuiltInToolsTests
         names.ShouldContain(WorkspaceTools.SearchCodebaseToolName);
         names.ShouldContain(GitTools.DiffToolName);
         names.ShouldContain(GitTools.StatusToolName);
+        names.ShouldContain(SaveTools.SaveFilesToolName);
         names.ShouldContain(BuildTools.BuildToolName);
         names.ShouldContain(PublishTools.PublishToolName);
         names.ShouldContain(TestTools.RunTestsToolName);

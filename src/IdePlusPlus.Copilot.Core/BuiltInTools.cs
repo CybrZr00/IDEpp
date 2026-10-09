@@ -16,6 +16,7 @@ public static class BuiltInTools
     [
         .. WorkspaceTools.All,
         .. GitTools.All,
+        .. SaveTools.All,
         .. BuildTools.All,
         .. PublishTools.All,
         .. TemplateTools.All,

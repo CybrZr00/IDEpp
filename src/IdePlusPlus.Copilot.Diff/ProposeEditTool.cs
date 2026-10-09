@@ -14,7 +14,9 @@ public static class ProposeEditTool
                      "Prefer mode 'replace_text': you quote the exact snippet you want gone and its replacement, so " +
                      "it cannot be thrown off by line numbers that moved. Use 'replace_range' when you have line " +
                      "numbers you know are current. Reserve 'whole_file' for creating a new file. " +
-                     "Call it once per file; several files means several calls, which you can make in the same turn.",
+                     "Call it once per file; several files means several calls, which you can make in the same turn. " +
+                     "If the file is open in the user's editor the edit changes the editor's copy only - call " +
+                     "save_files if something outside the editor needs it on disk.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",

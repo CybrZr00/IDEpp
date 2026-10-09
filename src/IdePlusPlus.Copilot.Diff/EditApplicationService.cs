@@ -17,6 +17,21 @@ public enum ApplyResult
     InvalidRange,
 }
 
+/// <summary>What <see cref="EditApplicationService.SaveWithinWorkspace"/> did with each file it was
+/// asked about. Paths are full paths, except <see cref="Refused"/>, which echoes the request as given
+/// (it never resolved to anything).</summary>
+/// <param name="Saved">Written to disk.</param>
+/// <param name="AlreadySaved">Open, but the editor's text already matched disk.</param>
+/// <param name="NotOpen">Not open in the editor, so there is no unsaved change to write.</param>
+/// <param name="Refused">Outside the open solution.</param>
+/// <param name="Failed">The write threw; the document is still dirty.</param>
+public sealed record SaveReport(
+    IReadOnlyList<string> Saved,
+    IReadOnlyList<string> AlreadySaved,
+    IReadOnlyList<string> NotOpen,
+    IReadOnlyList<string> Refused,
+    IReadOnlyList<(string Path, string Error)> Failed);
+
 /// <summary>
 /// Resolves an EditOperation's target file and applies it - to the open document's buffer if
 /// the file is open, otherwise directly to disk.
@@ -97,6 +112,71 @@ public sealed class EditApplicationService
         }
 
         return saved;
+    }
+
+    /// <summary>
+    /// The model-facing save: writes open documents with unsaved changes to disk, but only ones that
+    /// resolve inside the open solution, and reports every file's outcome instead of throwing.
+    ///
+    /// Narrower than <see cref="SaveDirtyDocuments"/> on purpose. That one exists to feed a build and
+    /// saves anything the user has open; this one is callable at the model's discretion, so it
+    /// inherits the same containment as the write path (a dirty file outside the solution is left
+    /// alone and reported), never creates a file that is not already open, and survives a locked or
+    /// read-only target - a failed write leaves that document dirty, so nothing is lost and the next
+    /// attempt (or the user's own Save) still has the change.
+    ///
+    /// <paramref name="paths"/> null means every dirty open document; otherwise exactly those files.
+    /// </summary>
+    public SaveReport SaveWithinWorkspace(IReadOnlyList<string>? paths, string workspaceDirectory)
+    {
+        var saved = new List<string>();
+        var alreadySaved = new List<string>();
+        var notOpen = new List<string>();
+        var refused = new List<string>();
+        var failed = new List<(string Path, string Error)>();
+
+        var targets = paths is null
+            ? _editorWorkspace.OpenDocuments.Where(d => d is { IsDirty: true, FilePath: not null })
+                .Select(d => d.FilePath!).ToList()
+            : paths.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+
+        var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var target in targets)
+        {
+            if (ResolveWithinWorkspace(target, workspaceDirectory) is not { } fullPath)
+            {
+                refused.Add(target);
+                continue;
+            }
+
+            if (!done.Add(fullPath))
+            {
+                continue; // The same file named twice, or once relative and once absolute.
+            }
+
+            if (FindOpenDocument(fullPath) is not { } document)
+            {
+                notOpen.Add(fullPath);
+            }
+            else if (!document.IsDirty)
+            {
+                alreadySaved.Add(fullPath);
+            }
+            else
+            {
+                try
+                {
+                    _editorWorkspace.Save(document);
+                    saved.Add(fullPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    failed.Add((fullPath, ex.Message));
+                }
+            }
+        }
+
+        return new SaveReport(saved, alreadySaved, notOpen, refused, failed);
     }
 
     public string GetCurrentContent(string fullPath)

@@ -1260,6 +1260,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case GitTools.StatusToolName:
                 return await RunGitStatusAsync(cancellationToken);
 
+            case SaveTools.SaveFilesToolName:
+                return RunSaveFiles(arguments?["paths"] as JsonArray);
+
             case BuildTools.BuildToolName:
                 return await RunBuildAsync(arguments?["project"]?.GetValue<string>(), cancellationToken);
 
@@ -1388,6 +1391,51 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// buffer, and the compiler reads disk - so without saving, the build describes source the
     /// agent has already changed. That is worse than no build at all, because it looks authoritative.
     /// </summary>
+    private (bool IsError, string Text) RunSaveFiles(JsonArray? pathArguments)
+    {
+        if (_solutionDirectory is null)
+        {
+            return (true, "No solution is open, so there is nothing to save.");
+        }
+
+        var paths = pathArguments?.Select(n => n?.GetValue<string>()).OfType<string>().ToList();
+        var report = _dispatcher.Invoke(() => _editApplicationService.SaveWithinWorkspace(paths, _solutionDirectory));
+
+        string Rel(string path) => Path.IsPathRooted(path) ? Path.GetRelativePath(_solutionDirectory, path) : path;
+        var lines = new List<string>();
+        if (report.Saved.Count > 0)
+        {
+            lines.Add($"Saved {report.Saved.Count} file(s): {string.Join(", ", report.Saved.Select(Rel))}.");
+        }
+
+        if (report.AlreadySaved.Count > 0)
+        {
+            lines.Add($"Already up to date on disk: {string.Join(", ", report.AlreadySaved.Select(Rel))}.");
+        }
+
+        if (report.NotOpen.Count > 0)
+        {
+            lines.Add($"Not open in the editor, so there was nothing unsaved to write (edits to a closed file go to disk when applied): {string.Join(", ", report.NotOpen.Select(Rel))}.");
+        }
+
+        if (report.Refused.Count > 0)
+        {
+            lines.Add($"Refused, outside the open solution directory: {string.Join(", ", report.Refused)}.");
+        }
+
+        foreach (var (path, error) in report.Failed)
+        {
+            lines.Add($"FAILED to save {Rel(path)}: {error} The editor still holds the unsaved change.");
+        }
+
+        if (lines.Count == 0)
+        {
+            lines.Add("No open files have unsaved changes.");
+        }
+
+        return (report.Failed.Count > 0 || (report.Refused.Count > 0 && report.Saved.Count == 0), string.Join("\n", lines));
+    }
+
     private async Task<(bool IsError, string Text)> RunBuildAsync(
         string? project, CancellationToken cancellationToken)
     {

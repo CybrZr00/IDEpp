@@ -35,6 +35,7 @@ public class SubAgentToolsTests
     [InlineData("propose_plan")]
     [InlineData(ShellTools.RunCommandToolName)]
     [InlineData(WebTools.FetchUrlToolName)]
+    [InlineData(SaveTools.SaveFilesToolName)]
     [InlineData(BuildTools.BuildToolName)]
     [InlineData(TestTools.RunTestsToolName)]
     [InlineData(GitTools.DiffToolName)]
