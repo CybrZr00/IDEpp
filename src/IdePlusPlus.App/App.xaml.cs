@@ -349,7 +349,8 @@ public partial class App : Application
             Timeout = Timeout.InfiniteTimeSpan,
         };
         services.AddSingleton(sp => new OpenRouterChatClient(modelHttpClient, sp.GetRequiredService<SecureSettingsStore>()));
-        services.AddSingleton(sp => new LmStudioChatClient(modelHttpClient, sp.GetRequiredService<AppSettingsStore>()));
+        services.AddSingleton(sp => new LmStudioChatClient(
+            modelHttpClient, sp.GetRequiredService<AppSettingsStore>(), sp.GetRequiredService<SecureSettingsStore>()));
         services.AddSingleton<McpServerConfigStore>();
         services.AddSingleton<McpProjectTrustStore>();
         services.AddSingleton<HookService>();
@@ -368,7 +369,8 @@ public partial class App : Application
         services.AddSingleton<ScheduledAutomationService>();
         services.AddSingleton<ScheduledAutomationsPaneViewModel>();
         services.AddSingleton<ChatHistoryStore>();
-        services.AddSingleton(sp => new LmStudioEmbeddingClient(modelHttpClient, sp.GetRequiredService<AppSettingsStore>()));
+        services.AddSingleton(sp => new LmStudioEmbeddingClient(
+            modelHttpClient, sp.GetRequiredService<AppSettingsStore>(), sp.GetRequiredService<SecureSettingsStore>()));
         services.AddSingleton(new LocalEmbeddingModelStore());
         services.AddSingleton(sp => new OnnxEmbeddingClient(sp.GetRequiredService<LocalEmbeddingModelStore>(), modelHttpClient));
         services.AddSingleton<IEmbeddingClient>(sp => new EmbeddingClientSelector(

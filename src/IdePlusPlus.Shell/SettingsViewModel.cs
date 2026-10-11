@@ -40,6 +40,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         hasApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName));
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
+        hasLmStudioApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(LmStudioEmbeddingClient.ApiKeySettingName));
         lmStudioBaseUrl = _appSettingsStore.Get(LmStudioEmbeddingClient.BaseUrlSettingName) ?? LmStudioEmbeddingClient.DefaultBaseUrl;
         lmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
         useLmStudioEmbeddings = _appSettingsStore.Get(EmbeddingClientSelector.ProviderSettingName) == EmbeddingClientSelector.LmStudioProvider;
@@ -71,6 +72,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string ApiKeyStatusText => HasApiKey ? "Key configured." : "No key set.";
 
     public string DeepSeekApiKeyStatusText => HasDeepSeekApiKey ? "Key configured." : "No key set.";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LmStudioApiKeyStatusText))]
+    private bool hasLmStudioApiKey;
+
+    public string LmStudioApiKeyStatusText => HasLmStudioApiKey ? "Key configured." : "No key set (not needed for a local LM Studio server).";
 
     [ObservableProperty]
     private string lmStudioBaseUrl;
@@ -121,6 +128,28 @@ public sealed partial class SettingsViewModel : ObservableObject
         _secureSettingsStore.SetSecret(DeepSeekFimClient.ApiKeySettingName, plaintextKey.Trim());
         HasDeepSeekApiKey = true;
         StatusMessage = "DeepSeek API key saved.";
+    }
+
+    public void SaveLmStudioApiKey(string plaintextKey)
+    {
+        if (string.IsNullOrWhiteSpace(plaintextKey))
+        {
+            return;
+        }
+
+        _secureSettingsStore.SetSecret(LmStudioEmbeddingClient.ApiKeySettingName, plaintextKey.Trim());
+        HasLmStudioApiKey = true;
+        StatusMessage = "LM Studio API key saved.";
+    }
+
+    /// <summary>The secret store has no delete, so clearing stores an empty value - which the LM Studio
+    /// clients treat the same as no key at all (nothing is sent).</summary>
+    [RelayCommand]
+    private void ClearLmStudioApiKey()
+    {
+        _secureSettingsStore.SetSecret(LmStudioEmbeddingClient.ApiKeySettingName, "");
+        HasLmStudioApiKey = false;
+        StatusMessage = "LM Studio API key cleared.";
     }
 
     /// <summary>Tests whatever key is currently typed in the box, or the already-saved key if the

@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using IdePlusPlus.Infrastructure;
@@ -5,23 +6,27 @@ using IdePlusPlus.Infrastructure;
 namespace IdePlusPlus.Copilot.Embeddings;
 
 /// <summary>
-/// Calls a local LM Studio server's OpenAI-compatible /v1/embeddings endpoint. No API key -
-/// LM Studio's local server doesn't require auth. Failures return null; a missing embedding
-/// just means that chunk/query doesn't participate in search, not a crash.
+/// Calls an OpenAI-compatible /v1/embeddings endpoint - normally a local LM Studio server, whose
+/// local server doesn't require auth, so a key is only sent (as a Bearer token) when one is set under
+/// the same LM Studio settings as the chat client, which shares this base URL. Failures return null;
+/// a missing embedding just means that chunk/query doesn't participate in search, not a crash.
 /// </summary>
 public sealed class LmStudioEmbeddingClient : IEmbeddingClient
 {
     public const string BaseUrlSettingName = "LmStudioBaseUrl";
+    public const string ApiKeySettingName = "LmStudioApiKey";
     public const string ModelSettingName = "LmStudioEmbeddingModel";
     public const string DefaultBaseUrl = "http://localhost:1234/v1";
 
     private readonly HttpClient _httpClient;
     private readonly AppSettingsStore _settingsStore;
+    private readonly SecureSettingsStore _secureSettingsStore;
 
-    public LmStudioEmbeddingClient(HttpClient httpClient, AppSettingsStore settingsStore)
+    public LmStudioEmbeddingClient(HttpClient httpClient, AppSettingsStore settingsStore, SecureSettingsStore secureSettingsStore)
     {
         _httpClient = httpClient;
         _settingsStore = settingsStore;
+        _secureSettingsStore = secureSettingsStore;
     }
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_settingsStore.Get(ModelSettingName));
@@ -70,6 +75,12 @@ public sealed class LmStudioEmbeddingClient : IEmbeddingClient
         {
             Content = JsonContent.Create(new { input = text, model }),
         };
+
+        var apiKey = _secureSettingsStore.GetSecret(ApiKeySettingName);
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
+        }
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout ?? DefaultTimeout);

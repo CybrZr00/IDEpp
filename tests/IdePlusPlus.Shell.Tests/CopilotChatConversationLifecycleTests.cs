@@ -98,11 +98,11 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var roslyn = new RoslynWorkspaceService();
         _disposables.Add(roslyn);
         var fileReader = new WorkspaceFileReader();
-        _index = new CodebaseIndexService(new LmStudioEmbeddingClient(httpClient, appSettings));
+        _index = new CodebaseIndexService(new LmStudioEmbeddingClient(httpClient, appSettings, secrets));
 
         return new CopilotChatPaneViewModel(
             new OpenRouterChatClient(httpClient, secrets),
-            new LmStudioChatClient(httpClient, appSettings),
+            new LmStudioChatClient(httpClient, appSettings, secrets),
             appSettings,
             editService,
             new ProjectMemoryStore(),

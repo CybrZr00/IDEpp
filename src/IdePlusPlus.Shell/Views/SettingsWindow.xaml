@@ -51,7 +51,7 @@
             <Button Content="Save System Prompt" Command="{Binding SaveSystemPromptCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
             <TextBlock Text="LM Studio" FontWeight="Bold" Margin="0,0,0,8" />
-            <TextBlock Text="A chat provider alternative to OpenRouter (pick it from the provider dropdown in Copilot Chat). Codebase search embeds with a built-in model (bge-small, downloaded once on first index) unless you tick the box below."
+            <TextBlock Text="A chat provider alternative to OpenRouter (pick it from the provider dropdown in Copilot Chat). Works with any OpenAI-compatible server, not just LM Studio. Codebase search embeds with a built-in model (bge-small, downloaded once on first index) unless you tick the box below."
                        FontSize="11"
                        Foreground="{DynamicResource MutedForegroundBrush}"
                        TextWrapping="Wrap"
@@ -62,7 +62,20 @@
                       Margin="0,0,0,8" />
 
             <TextBlock Text="LM Studio base URL:" Margin="0,0,0,2" />
-            <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
+            <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}"
+                     Margin="0,0,0,8"
+                     ToolTip="Any OpenAI-compatible server works, e.g. http://192.168.50.3:8080/v1" />
+
+            <TextBlock Text="API key (only if the server requires one):" Margin="0,0,0,2" />
+            <DockPanel Margin="0,0,0,4">
+                <Button DockPanel.Dock="Right" Content="Clear" Command="{Binding ClearLmStudioApiKeyCommand}" Padding="10,2" Margin="6,0,0,0" />
+                <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveLmStudioApiKeyButton_OnClick" />
+                <PasswordBox x:Name="LmStudioApiKeyBox" />
+            </DockPanel>
+            <TextBlock Text="{Binding LmStudioApiKeyStatusText}"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       FontSize="11"
+                       Margin="0,0,0,8" />
 
             <TextBlock Text="Embedding model name (as loaded in LM Studio):" Margin="0,0,0,2" />
             <TextBox Text="{Binding LmStudioModel, UpdateSourceTrigger=PropertyChanged}"

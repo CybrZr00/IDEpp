@@ -13,18 +13,20 @@ public sealed class LmStudioEmbeddingClientResilienceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "IdePlusPlusEmbeddingResilience", Guid.NewGuid().ToString("N"));
     private readonly AppSettingsStore _settings;
+    private readonly SecureSettingsStore _secrets;
 
     public LmStudioEmbeddingClientResilienceTests()
     {
         Directory.CreateDirectory(_root);
         _settings = new AppSettingsStore(Path.Combine(_root, "settings.json"));
+        _secrets = new SecureSettingsStore(Path.Combine(_root, "secrets.json"));
         _settings.Set(LmStudioEmbeddingClient.ModelSettingName, "embed-model");
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
     private LmStudioEmbeddingClient ClientFor(HttpMessageHandler handler) =>
-        new(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, _settings);
+        new(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, _settings, _secrets);
 
     [Theory]
     [InlineData("")]
@@ -38,6 +40,36 @@ public sealed class LmStudioEmbeddingClientResilienceTests : IDisposable
 
         embedding.ShouldBe([0.5f, 0.25f]);
         handler.LastUri.ShouldBe(new Uri($"{LmStudioEmbeddingClient.DefaultBaseUrl}/embeddings"));
+    }
+
+    [Fact]
+    public async Task WithAnApiKey_SendsItAsABearerToken()
+    {
+        _secrets.SetSecret(LmStudioEmbeddingClient.ApiKeySettingName, " sk-test ");
+        var handler = new RecordingHandler();
+
+        await ClientFor(handler).GetEmbeddingAsync("q", CancellationToken.None);
+
+        handler.LastAuthorization.ShouldNotBeNull();
+        handler.LastAuthorization.Scheme.ShouldBe("Bearer");
+        handler.LastAuthorization.Parameter.ShouldBe("sk-test");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task WithoutAnApiKey_SendsNoAuthorizationHeader(string? key)
+    {
+        if (key is not null)
+        {
+            _secrets.SetSecret(LmStudioEmbeddingClient.ApiKeySettingName, key);
+        }
+
+        var handler = new RecordingHandler();
+
+        await ClientFor(handler).GetEmbeddingAsync("q", CancellationToken.None);
+
+        handler.LastAuthorization.ShouldBeNull();
     }
 
     [Fact]
@@ -75,9 +107,12 @@ public sealed class LmStudioEmbeddingClientResilienceTests : IDisposable
     {
         public Uri? LastUri { get; private set; }
 
+        public System.Net.Http.Headers.AuthenticationHeaderValue? LastAuthorization { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastUri = request.RequestUri;
+            LastAuthorization = request.Headers.Authorization;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("""{"data":[{"embedding":[0.5,0.25]}]}"""),

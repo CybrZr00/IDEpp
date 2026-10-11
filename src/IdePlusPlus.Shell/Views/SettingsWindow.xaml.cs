@@ -26,6 +26,12 @@ public partial class SettingsWindow : Window
         DeepSeekApiKeyBox.Clear();
     }
 
+    private void SaveLmStudioApiKeyButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SaveLmStudioApiKey(LmStudioApiKeyBox.Password);
+        LmStudioApiKeyBox.Clear();
+    }
+
     private async void TestDeepSeekConnectionButton_OnClick(object sender, RoutedEventArgs e) =>
         await _viewModel.TestDeepSeekConnectionAsync(DeepSeekApiKeyBox.Password);
 

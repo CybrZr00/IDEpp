@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -7,25 +9,30 @@ using IdePlusPlus.Infrastructure;
 namespace IdePlusPlus.Copilot.LmStudio;
 
 /// <summary>
-/// Chats against a local LM Studio server's OpenAI-compatible /v1/chat/completions endpoint - the
-/// same wire format as OpenRouter (see OpenAiCompatibleChat), just no API key and a local base URL.
-/// An alternative to OpenRouter for when the user doesn't have (or doesn't want to spend) an
-/// OpenRouter key, at the cost of needing LM Studio running locally with a model loaded.
+/// Chats against an OpenAI-compatible /v1/chat/completions endpoint - the same wire format as
+/// OpenRouter (see OpenAiCompatibleChat), at a configurable base URL. Normally a local LM Studio
+/// server, which needs no key; any other OpenAI-compatible server (e.g. one on another machine that
+/// requires auth) works too, with its key sent as a Bearer token when one is set. An alternative to
+/// OpenRouter for when the user doesn't have (or doesn't want to spend) an OpenRouter key, at the cost
+/// of needing that server running with a model loaded.
 /// </summary>
 public sealed class LmStudioChatClient : IChatClient
 {
     public const string BaseUrlSettingName = "LmStudioBaseUrl";
+    public const string ApiKeySettingName = "LmStudioApiKey";
     public const string DefaultBaseUrl = "http://localhost:1234/v1";
 
     private static readonly TimeSpan ModelListTimeout = TimeSpan.FromSeconds(15);
 
     private readonly HttpClient _httpClient;
     private readonly AppSettingsStore _settingsStore;
+    private readonly SecureSettingsStore _secureSettingsStore;
 
-    public LmStudioChatClient(HttpClient httpClient, AppSettingsStore settingsStore)
+    public LmStudioChatClient(HttpClient httpClient, AppSettingsStore settingsStore, SecureSettingsStore secureSettingsStore)
     {
         _httpClient = httpClient;
         _settingsStore = settingsStore;
+        _secureSettingsStore = secureSettingsStore;
     }
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
@@ -77,7 +84,9 @@ public sealed class LmStudioChatClient : IChatClient
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(ModelListTimeout);
-            using var response = await _httpClient.GetAsync($"{baseUrl}/models", timeout.Token);
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/models");
+            ApplyApiKey(request);
+            using var response = await _httpClient.SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return [];
@@ -97,6 +106,19 @@ public sealed class LmStudioChatClient : IChatClient
         }
     }
 
+    /// <summary>
+    /// Read per request, like the base URL, so a key saved in Settings applies to the very next call.
+    /// Nothing is sent when none is set - LM Studio's own local server doesn't want one.
+    /// </summary>
+    private void ApplyApiKey(HttpRequestMessage request)
+    {
+        var apiKey = _secureSettingsStore.GetSecret(ApiKeySettingName);
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
+        }
+    }
+
     private async Task<(HttpResponseMessage? Response, string? Error)> TryConnectAsync(
         string baseUrl,
         IReadOnlyList<ChatMessage> messages,
@@ -106,6 +128,7 @@ public sealed class LmStudioChatClient : IChatClient
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/chat/completions");
+        ApplyApiKey(request);
         request.Content = JsonContent.Create(new
         {
             model,
@@ -123,8 +146,12 @@ public sealed class LmStudioChatClient : IChatClient
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var status = response.StatusCode;
                 response.Dispose();
-                return (null, $"LM Studio returned {(int)response.StatusCode}: {body}");
+                var hint = status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    ? " Check the API key under Tools > Settings > LM Studio."
+                    : "";
+                return (null, $"LM Studio returned {(int)status}: {body}{hint}");
             }
 
             return (response, null);

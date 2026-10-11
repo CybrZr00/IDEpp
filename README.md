@@ -109,7 +109,9 @@ The Copilot Chat pane needs a model provider before it can do anything, configur
 **Tools → Settings**:
 - **OpenRouter** (cloud, any hosted model) — get an API key from [openrouter.ai](https://openrouter.ai/).
 - **LM Studio** (local, free, private) — run a model in [LM Studio](https://lmstudio.ai/) with its
-  local server enabled, then point IDE++ at it. No API key needed.
+  local server enabled, then point IDE++ at it. No API key needed. The base URL can be any
+  OpenAI-compatible server (for example a model on another machine); if it requires a key, add it
+  under **Settings → LM Studio** and IDE++ sends it as a Bearer token.
 
 Codebase search needs neither. It embeds your code in-process with ONNX Runtime and the open
 [bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) model (MIT licence, 384

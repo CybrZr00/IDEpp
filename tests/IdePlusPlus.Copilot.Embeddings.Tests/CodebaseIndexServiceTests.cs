@@ -23,7 +23,7 @@ public sealed class CodebaseIndexServiceTests : IDisposable
         Directory.CreateDirectory(_root);
         var settings = new AppSettingsStore(Path.Combine(_root, "settings.json"));
         settings.Set(LmStudioEmbeddingClient.ModelSettingName, "test-embedding-model");
-        _service = new CodebaseIndexService(new LmStudioEmbeddingClient(new HttpClient(_handler), settings));
+        _service = new CodebaseIndexService(new LmStudioEmbeddingClient(new HttpClient(_handler), settings, new SecureSettingsStore(Path.Combine(_root, "secrets.json"))));
     }
 
     public void Dispose()
