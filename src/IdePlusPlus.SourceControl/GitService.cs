@@ -1,6 +1,3 @@
-using System.ComponentModel;
-using System.Diagnostics;
-
 namespace IdePlusPlus.SourceControl;
 
 /// <summary>
@@ -129,50 +126,14 @@ public sealed class GitService
     private static async Task<GitCommandResult> RunAsync(
         string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
-        var (success, stdOut, stdErr) = await RunRawAsync(workingDirectory, arguments, cancellationToken);
-        var combined = string.Join("\n", new[] { stdOut, stdErr }.Where(s => !string.IsNullOrWhiteSpace(s)));
-        return new GitCommandResult(success, combined);
+        var result = await GitProcess.RunAsync(workingDirectory, arguments, cancellationToken);
+        return new GitCommandResult(result.Success, result.Output);
     }
 
     private static async Task<(bool Success, string StdOut, string StdErr)> RunRawAsync(
         string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo("git")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        // A GUI-launched process has no terminal for git to prompt against, so without this a push/
-        // pull/fetch against a remote needing credentials (or an SSH host-key confirmation) just
-        // hangs forever waiting for input nobody can type - IsBusy stays true and the pane looks
-        // completely dead. Disabling prompts makes git fail fast instead, with a message ("could not
-        // read Username...") that actually reaches StatusMessage.
-        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        startInfo.Environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes";
-
-        using var process = new Process { StartInfo = startInfo };
-
-        try
-        {
-            process.Start();
-        }
-        catch (Win32Exception ex)
-        {
-            return (false, "", $"Could not run git - is it installed and on PATH? ({ex.Message})");
-        }
-
-        var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-
-        return (process.ExitCode == 0, await stdOutTask, await stdErrTask);
+        var result = await GitProcess.RunAsync(workingDirectory, arguments, cancellationToken);
+        return (result.Success, result.StdOut, result.StdErr);
     }
 }
