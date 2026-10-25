@@ -245,21 +245,33 @@ public sealed class TeamToolDispatcher
     }
 
     /// <summary>
-    /// Writes a worker may not make, even inside its own worktree, because each would let it run or
-    /// redirect something no one reviewed:
+    /// Writes a worker may not make, even inside its own worktree:
+    /// - a path Windows would read differently from how it is checked here - an 8.3 short name
+    ///   ("GIT~1"), a trailing dot or space (".git."), or an NTFS stream suffix ("x.csproj::$DATA") -
+    ///   any of which would carry a write past the two name checks below;
     /// - anything under a .git segment - including the worktree's own .git file, which names the
     ///   repository git uses, and so could point every later git call at a config with hooks;
     /// - anything reached through a symlink or junction, which ResolveWithinRoot cannot see past;
-    /// - build-defining files (project files, props/targets, solution files, global.json,
-    ///   nuget.config) unless the run allows shell commands. An MSBuild Exec target runs on the next
-    ///   build_solution with no prompt, so editing one is running a command - and with Shell off the
-    ///   user has said no to that.
+    /// - build-defining files, unless the run allows shell commands, so the most direct way to turn
+    ///   an edit into a command (an MSBuild Exec target, run by the next build_solution) needs the
+    ///   same opt-in a command does.
+    ///
+    /// The last one is defence in depth, not a security boundary. Workers write code and build and
+    /// test it without review - as Auto Mode does - so code a worker wrote runs on this machine with
+    /// Shell on or off. What contains a run is that it works in its own worktree, that the user is
+    /// told this before choosing Ultra, and that nothing reaches their checkout unreviewed.
     /// </summary>
     private string? RefuseWrite(string fullPath, string file)
     {
         var relative = Path.GetRelativePath(_context.WorktreeRoot, fullPath);
-        if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase)))
+        var segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (relative.Contains(':') || relative.Contains('~') || segments.Any(s => s.EndsWith('.') || s.EndsWith(' ')))
+        {
+            return $"Refused: '{file}' uses a form of path Windows can read as a different file (a '~' short name, "
+                   + "a ':' stream, or a name ending in a dot or space). Use the file's ordinary name.";
+        }
+
+        if (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase)))
         {
             return $"Refused: '{file}' is inside git's own metadata, which a worker never edits.";
         }
@@ -296,6 +308,8 @@ public sealed class TeamToolDispatcher
                || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase)
                || extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
                || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".user", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".rsp", StringComparison.OrdinalIgnoreCase)
                || name.Equals("global.json", StringComparison.OrdinalIgnoreCase)
                || name.Equals("nuget.config", StringComparison.OrdinalIgnoreCase);
     }

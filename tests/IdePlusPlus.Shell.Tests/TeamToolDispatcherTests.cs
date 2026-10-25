@@ -76,6 +76,30 @@ public sealed class TeamToolDispatcherTests : IDisposable
         File.ReadAllText(Path.Combine(context.WorktreeRoot, ".git")).ShouldBe(gitFileBefore);
     }
 
+    /// <summary>Each of these names a different file to Windows than to a plain string check - GIT~1
+    /// is the .git file's 8.3 name, a trailing dot is dropped, ::$DATA is the file itself.</summary>
+    [Theory]
+    [InlineData("GIT~1")]
+    [InlineData(".git.")]
+    [InlineData("Lib/Lib.csproj::$DATA")]
+    [InlineData("Lib /Class1.cs")]
+    public async Task EditFile_ThroughAWindowsPathAlias_IsRefused(string path)
+    {
+        var (dispatcher, context, _) = await _repo.CreateWorkerAsync(1);
+        var gitFileBefore = File.ReadAllText(Path.Combine(context.WorktreeRoot, ".git"));
+
+        var (isError, text) = await dispatcher.ExecuteAsync(TeamTools.EditFileToolName, Args(new
+        {
+            file = path,
+            mode = "whole_file",
+            new_text = "gitdir: C:/somewhere/else",
+        }), CancellationToken.None);
+
+        isError.ShouldBeTrue();
+        text.ShouldContain("Refused");
+        File.ReadAllText(Path.Combine(context.WorktreeRoot, ".git")).ShouldBe(gitFileBefore);
+    }
+
     /// <summary>An MSBuild Exec target in a project file runs on the next build, with no prompt - so
     /// with shell commands off, build files are off limits too.</summary>
     [Fact]
@@ -106,6 +130,8 @@ public sealed class TeamToolDispatcherTests : IDisposable
     [InlineData("Scratch.slnx", true)]
     [InlineData("NuGet.Config", true)]
     [InlineData("global.json", true)]
+    [InlineData("Lib/Lib.csproj.user", true)]
+    [InlineData("Directory.Build.rsp", true)]
     [InlineData("Lib/Class1.cs", false)]
     [InlineData("appsettings.json", false)]
     public void IsBuildDefiningFile_CoversProjectSolutionAndSdkFiles(string path, bool expected)
