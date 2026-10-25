@@ -53,6 +53,66 @@ public sealed class TeamToolDispatcherTests : IDisposable
         File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
     }
 
+    /// <summary>The worktree's .git file names the repository git uses; rewriting it would point
+    /// every later git call somewhere else, hooks and all.</summary>
+    [Theory]
+    [InlineData(".git")]
+    [InlineData(".GIT/config")]
+    [InlineData("Lib/.git/hooks/pre-commit")]
+    public async Task EditFile_IntoGitMetadata_IsRefused(string path)
+    {
+        var (dispatcher, context, _) = await _repo.CreateWorkerAsync(1);
+        var gitFileBefore = File.ReadAllText(Path.Combine(context.WorktreeRoot, ".git"));
+
+        var (isError, text) = await dispatcher.ExecuteAsync(TeamTools.EditFileToolName, Args(new
+        {
+            file = path,
+            mode = "whole_file",
+            new_text = "gitdir: C:/somewhere/else",
+        }), CancellationToken.None);
+
+        isError.ShouldBeTrue();
+        text.ShouldContain("git's own metadata");
+        File.ReadAllText(Path.Combine(context.WorktreeRoot, ".git")).ShouldBe(gitFileBefore);
+    }
+
+    /// <summary>An MSBuild Exec target in a project file runs on the next build, with no prompt - so
+    /// with shell commands off, build files are off limits too.</summary>
+    [Fact]
+    public async Task EditFile_OfABuildFile_IsRefusedWithShellOff_AndAllowedWithShellOn()
+    {
+        var edit = Args(new
+        {
+            file = "Lib/Lib.csproj",
+            mode = "replace_text",
+            old_text = "<Nullable>enable</Nullable>",
+            new_text = "<Nullable>disable</Nullable>",
+        });
+        var (withoutShell, _, _) = await _repo.CreateWorkerAsync(1);
+        var (withShell, _, _) = await _repo.CreateWorkerAsync(2, (_, _, _, _) => Task.FromResult((false, "ok")));
+
+        var (refusedError, refused) = await withoutShell.ExecuteAsync(TeamTools.EditFileToolName, edit, CancellationToken.None);
+        var (allowedError, allowed) = await withShell.ExecuteAsync(TeamTools.EditFileToolName, edit, CancellationToken.None);
+
+        refusedError.ShouldBeTrue();
+        refused.ShouldContain("defines how the solution builds");
+        allowedError.ShouldBeFalse(allowed);
+    }
+
+    [Theory]
+    [InlineData("A/B.csproj", true)]
+    [InlineData("Directory.Build.props", true)]
+    [InlineData("build/Custom.targets", true)]
+    [InlineData("Scratch.slnx", true)]
+    [InlineData("NuGet.Config", true)]
+    [InlineData("global.json", true)]
+    [InlineData("Lib/Class1.cs", false)]
+    [InlineData("appsettings.json", false)]
+    public void IsBuildDefiningFile_CoversProjectSolutionAndSdkFiles(string path, bool expected)
+    {
+        TeamToolDispatcher.IsBuildDefiningFile(path).ShouldBe(expected);
+    }
+
     [Fact]
     public async Task Merge_WithUncommittedChanges_IsRefused()
     {

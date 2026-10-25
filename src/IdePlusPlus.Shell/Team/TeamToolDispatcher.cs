@@ -140,7 +140,8 @@ public sealed class TeamToolDispatcher
                 }
 
                 _changedSinceBuild = true;
-                return await _runCommand(command, Arg("reason") ?? "(no reason given)", _context.SolutionDirectory, cancellationToken);
+                return await _runCommand(
+                    command, $"[Ultra {_context.Name}] {Arg("reason") ?? "(no reason given)"}", _context.SolutionDirectory, cancellationToken);
 
             case TeamTools.BoardReadToolName:
                 return (false, _board.Read());
@@ -200,6 +201,11 @@ public sealed class TeamToolDispatcher
             return (true, $"Refused: '{file}' resolves outside your worktree's solution directory.");
         }
 
+        if (RefuseWrite(fullPath, file) is { } refusal)
+        {
+            return (true, refusal);
+        }
+
         var operation = new EditOperation(
             fullPath,
             mode,
@@ -236,6 +242,62 @@ public sealed class TeamToolDispatcher
         return (false, exists
             ? $"Edited {file} in your worktree ({linesBefore} -> {linesAfter} lines)."
             : $"Created {file} in your worktree ({linesAfter} lines).");
+    }
+
+    /// <summary>
+    /// Writes a worker may not make, even inside its own worktree, because each would let it run or
+    /// redirect something no one reviewed:
+    /// - anything under a .git segment - including the worktree's own .git file, which names the
+    ///   repository git uses, and so could point every later git call at a config with hooks;
+    /// - anything reached through a symlink or junction, which ResolveWithinRoot cannot see past;
+    /// - build-defining files (project files, props/targets, solution files, global.json,
+    ///   nuget.config) unless the run allows shell commands. An MSBuild Exec target runs on the next
+    ///   build_solution with no prompt, so editing one is running a command - and with Shell off the
+    ///   user has said no to that.
+    /// </summary>
+    private string? RefuseWrite(string fullPath, string file)
+    {
+        var relative = Path.GetRelativePath(_context.WorktreeRoot, fullPath);
+        if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase)))
+        {
+            return $"Refused: '{file}' is inside git's own metadata, which a worker never edits.";
+        }
+
+        for (var path = fullPath; path.Length > _context.WorktreeRoot.Length; path = Path.GetDirectoryName(path)!)
+        {
+            if ((File.Exists(path) || Directory.Exists(path))
+                && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
+            {
+                return $"Refused: '{file}' is reached through a symbolic link or junction, so where the write "
+                       + "would really land cannot be checked.";
+            }
+        }
+
+        if (_runCommand is null && IsBuildDefiningFile(fullPath))
+        {
+            return $"Refused: '{file}' defines how the solution builds, and an edit to it can make the next build "
+                   + "run a command. Shell commands are off for this run, so build files cannot be changed. If the goal "
+                   + "needs this, post a FAIL saying so - the user can rerun with Shell on.";
+        }
+
+        return null;
+    }
+
+    internal static bool IsBuildDefiningFile(string path)
+    {
+        var name = Path.GetFileName(path);
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".proj", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("global.json", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("nuget.config", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<(bool IsError, string Text)> GitDiffAsync(string? path, bool staged, CancellationToken cancellationToken)
