@@ -8,10 +8,14 @@ internal class FakeHttpMessageHandler(HttpStatusCode statusCode, string body) : 
     /// actually sent (e.g. that tool_choice is present) without a real HTTP call.</summary>
     public string? LastRequestBody { get; private set; }
 
+    /// <summary>Where the most recent SendAsync call went, query string included.</summary>
+    public Uri? LastRequestUri { get; private set; }
+
     public static FakeHttpMessageHandler ThatShouldNeverBeCalled() => new ThrowingHandler();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        LastRequestUri = request.RequestUri;
         LastRequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
         return new HttpResponseMessage(statusCode) { Content = new StringContent(body) };
     }

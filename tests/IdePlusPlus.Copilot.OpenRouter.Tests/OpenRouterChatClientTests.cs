@@ -270,6 +270,8 @@ public class OpenRouterChatClientTests
         (await client.GetAvailableModelsAsync()).ShouldBeEmpty();
     }
 
+    /// <summary>ModelsJson includes tool-less models, so this is also the backstop: a server that
+    /// ignored supported_parameters=tools still could not put one of them in the picker.</summary>
     [Fact]
     public async Task GetAvailableModelsAsync_ParsesIdsFromASuccessfulResponse()
     {
@@ -278,6 +280,32 @@ public class OpenRouterChatClientTests
             NewSettingsStoreWithApiKey());
 
         (await client.GetAvailableModelsAsync()).ShouldBe(["anthropic/claude-sonnet-4.5", "zzz/last-alphabetically"]);
+    }
+
+    /// <summary>The unfiltered list has been seen to stall part-way through its body, so the picker
+    /// timed out and came up empty; the filtered one comes back whole.</summary>
+    [Fact]
+    public async Task GetAvailableModelsAsync_ToolCapableOnly_AsksOpenRouterToFilter()
+    {
+        var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, ModelsJson);
+        var client = new OpenRouterChatClient(new HttpClient(handler), NewSettingsStoreWithApiKey());
+
+        await client.GetAvailableModelsAsync();
+
+        handler.LastRequestUri.ShouldNotBeNull();
+        handler.LastRequestUri.AbsolutePath.ShouldBe("/api/v1/models");
+        handler.LastRequestUri.Query.ShouldBe("?supported_parameters=tools");
+    }
+
+    [Fact]
+    public async Task GetAvailableModelsAsync_WithoutFiltering_AsksForTheFullList()
+    {
+        var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, ModelsJson);
+        var client = new OpenRouterChatClient(new HttpClient(handler), NewSettingsStoreWithApiKey());
+
+        (await client.GetAvailableModelsAsync(toolCapableOnly: false)).Count.ShouldBe(4);
+
+        handler.LastRequestUri!.Query.ShouldBeEmpty();
     }
 
     private static async Task<List<ChatStreamEvent>> CollectAsync(OpenRouterChatClient client)

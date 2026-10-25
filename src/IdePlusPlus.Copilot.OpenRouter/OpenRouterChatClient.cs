@@ -15,6 +15,12 @@ public sealed class OpenRouterChatClient : IChatClient
     private const string ChatCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions";
     private const string ModelsUrl = "https://openrouter.ai/api/v1/models";
 
+    /// <summary>OpenRouter filters the list itself when asked, which matters for more than size: the
+    /// unfiltered response has been seen to stall part-way through its body (about 650 KB in, then
+    /// nothing), so the picker timed out and came up empty, while this one returned whole in under a
+    /// second.</summary>
+    private const string ToolCapableModelsUrl = ModelsUrl + "?supported_parameters=tools";
+
     private static readonly TimeSpan ModelListTimeout = TimeSpan.FromSeconds(15);
 
     private readonly HttpClient _httpClient;
@@ -67,7 +73,9 @@ public sealed class OpenRouterChatClient : IChatClient
     /// <paramref name="toolCapableOnly"/> keeps only models whose supported_parameters advertise
     /// "tools". Every edit this IDE makes goes through a tool call, so a model without tool support
     /// cannot edit anything no matter how the request is phrased - offering those in the picker
-    /// would just produce failures that look like IDE bugs rather than model limitations.
+    /// would just produce failures that look like IDE bugs rather than model limitations. It is
+    /// asked of OpenRouter (see <see cref="ToolCapableModelsUrl"/>) and checked again here, so a
+    /// server that ever ignores the parameter still cannot put a tool-less model in the picker.
     ///
     /// Returns an empty list rather than throwing if the network call or response shape disappoints,
     /// matching LmStudioChatClient.GetAvailableModelsAsync - callers treat "no models" and
@@ -80,7 +88,7 @@ public sealed class OpenRouterChatClient : IChatClient
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(ModelListTimeout);
-            using var response = await _httpClient.GetAsync(ModelsUrl, timeout.Token);
+            using var response = await _httpClient.GetAsync(toolCapableOnly ? ToolCapableModelsUrl : ModelsUrl, timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return [];
