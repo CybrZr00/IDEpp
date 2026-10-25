@@ -1,0 +1,411 @@
+using System.IO;
+using System.Runtime.CompilerServices;
+using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.SourceControl;
+
+namespace IdePlusPlus.Shell.Team;
+
+public sealed record UltraTeamOptions(
+    int WorkerCount,
+    TimeSpan TimeBudget,
+    bool ShellCommandsEnabled,
+    string Configuration,
+    ChatEffort Effort)
+{
+    /// <summary>How long after one worker starts the next does. Agensh staggers starts so the first
+    /// workers can put claims on the board before everyone picks at once.</summary>
+    public TimeSpan StaggerDelay { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long workers get to finish their current step once time is up, before they are
+    /// cancelled outright.</summary>
+    public TimeSpan HardStopGrace { get; init; } = TimeSpan.FromMinutes(2);
+
+    public TimeSpan ClaimLifetime { get; init; } = TimeSpan.FromMinutes(10);
+
+    public int MaxIterationsPerCycle { get; init; } = 40;
+
+    /// <summary>A cycle whose history grows past this many characters (about 75k tokens) is ended
+    /// so the next starts fresh from the board - there is no compaction to fall back on.</summary>
+    public int MaxCycleHistoryChars { get; init; } = 300_000;
+
+    public int MaxConcurrentBuilds { get; init; } = 2;
+}
+
+public enum UltraTeamEndReason
+{
+    AllDone,
+    TimeUp,
+    Cancelled,
+
+    /// <summary>Every worker stopped without calling team_done - failing requests, or a model that
+    /// stopped calling tools.</summary>
+    WorkersStopped,
+}
+
+/// <summary>What a finished run leaves behind. The team branch is kept (when anything was merged)
+/// until the result is applied or discarded; worker worktrees and branches are already gone.</summary>
+public sealed record UltraTeamResult(
+    string RunId,
+    string RepositoryRoot,
+    string SnapshotCommit,
+    string TeamBranch,
+    bool TeamBranchKept,
+    IReadOnlyList<TeamFileChange> Changes,
+    UltraTeamEndReason EndReason,
+    IReadOnlyList<TeamWorkerState> Workers,
+    IReadOnlyList<TeamBoardEntry> Board,
+    int PromptTokens,
+    int CompletionTokens);
+
+/// <summary>
+/// Runs one Ultra team: snapshots the user's working tree, gives each worker its own worktree and
+/// branch off it, runs every worker's cycles in parallel until the goal is met or time is up, then
+/// removes the worktrees and reports what reached the team branch.
+///
+/// This is the "runner" from Agensh, not an orchestrator: it never decides who does what. It opens
+/// the run, keeps each worker cycling, says when time is short, and closes the run - the same four
+/// jobs as the paper's runner (kickoff, idle nudges, the two deadline reminders, export).
+///
+/// Each cycle is a fresh conversation - system prompt plus a user message carrying the goal, the
+/// time left, new channel posts and the board. A worker's knowledge crosses cycles only via the
+/// board and the code it merged, which is the paper's design and also means a worker's context
+/// never grows past one cycle's worth.
+/// </summary>
+public sealed class UltraTeamRun
+{
+    private const int MaxConsecutiveIdleCycles = 3;
+
+    private readonly IChatClient _client;
+    private readonly string _model;
+    private readonly UltraTeamOptions _options;
+    private readonly ReadOnlyToolDispatcher _readOnlyTools;
+    private readonly GitService _gitService;
+    private readonly TeamGitWorkspace _teamGit;
+    private readonly TimeProvider _time;
+    private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
+    private readonly string _runDirectory;
+    private int _promptTokens;
+    private int _completionTokens;
+    private DateTimeOffset _startedAt;
+
+    /// <param name="ultraRootDirectory">Where run folders go - outside any repository, so worktrees
+    /// never show up in the user's status, file list or index.</param>
+    /// <param name="runCommand">run_command for workers, or null. Only used when the options allow
+    /// shell commands.</param>
+    public UltraTeamRun(
+        IChatClient client,
+        string model,
+        UltraTeamOptions options,
+        ReadOnlyToolDispatcher readOnlyTools,
+        GitService gitService,
+        TeamGitWorkspace teamGit,
+        TimeProvider time,
+        string ultraRootDirectory,
+        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand)
+    {
+        _client = new UsageCountingChatClient(client, this);
+        _model = model;
+        _options = options;
+        _readOnlyTools = readOnlyTools;
+        _gitService = gitService;
+        _teamGit = teamGit;
+        _time = time;
+        _runCommand = options.ShellCommandsEnabled ? runCommand : null;
+
+        RunId = $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..4]}";
+        _runDirectory = Path.Combine(ultraRootDirectory, RunId);
+        Directory.CreateDirectory(_runDirectory);
+
+        var names = Enumerable.Range(1, Math.Max(1, options.WorkerCount)).Select(n => $"w{n}").ToList();
+        Workers = names.Select(n => new TeamWorkerState(n)).ToList();
+        Board = new TeamBoard(time, options.ClaimLifetime, Path.Combine(_runDirectory, "board.jsonl"));
+        Bus = new TeamMessageBus(time, names);
+        Board.EntryAdded += _ => OnChanged();
+        Bus.MessageSent += _ => OnChanged();
+    }
+
+    public string RunId { get; }
+
+    public TeamBoard Board { get; }
+
+    public TeamMessageBus Bus { get; }
+
+    public IReadOnlyList<TeamWorkerState> Workers { get; }
+
+    public TimeSpan TimeBudget => _options.TimeBudget;
+
+    public TimeSpan Elapsed => _startedAt == default ? TimeSpan.Zero : _time.GetUtcNow() - _startedAt;
+
+    public int PromptTokens => Volatile.Read(ref _promptTokens);
+
+    public int CompletionTokens => Volatile.Read(ref _completionTokens);
+
+    /// <summary>Something a status display would show has changed. Raised on worker threads, often -
+    /// a subscriber that touches UI should marshal and throttle.</summary>
+    public event Action? Changed;
+
+    /// <summary>The two reminders' offsets from the start: "stop starting new work" at 80% of the
+    /// budget, then "merge now" two minutes before the end - or at 90% when the budget is short
+    /// enough that two minutes would come first.</summary>
+    internal static (TimeSpan Deadline, TimeSpan Final) ReminderSchedule(TimeSpan budget) =>
+        (budget * 0.8, budget - TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(2).Ticks, (budget * 0.1).Ticks)));
+
+    public async Task<UltraTeamResult> RunAsync(
+        string goal,
+        string repositoryRoot,
+        string solutionPath,
+        IReadOnlyList<string> testProjectPaths,
+        CancellationToken cancellationToken)
+    {
+        _startedAt = _time.GetUtcNow();
+        var teamBranch = TeamGitWorkspace.GetTeamBranchName(RunId);
+        var snapshot = await _teamGit.CreateSnapshotCommitAsync(repositoryRoot, cancellationToken);
+        EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, snapshot, cancellationToken), "create the team branch");
+
+        var created = new List<(string Worktree, string Branch)>();
+        UltraTeamEndReason endReason;
+        try
+        {
+            var solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
+            var dispatchers = new List<TeamToolDispatcher>();
+            using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
+
+            for (var i = 0; i < Workers.Count; i++)
+            {
+                var state = Workers[i];
+                var worktree = Path.Combine(_runDirectory, state.Name);
+                var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, i + 1);
+                EnsureSucceeded(
+                    await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, snapshot, cancellationToken),
+                    $"create {state.Name}'s worktree");
+                created.Add((worktree, branch));
+
+                var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, solutionRelativeDirectory));
+                var context = new TeamWorkerContext(
+                    state.Name,
+                    repositoryRoot,
+                    worktree,
+                    solutionDirectory,
+                    Path.Combine(solutionDirectory, Path.GetFileName(solutionPath)),
+                    testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
+                    teamBranch,
+                    $"IDE++ Ultra {state.Name}");
+                dispatchers.Add(new TeamToolDispatcher(
+                    context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, buildSlots,
+                    _options.Configuration, _runCommand));
+            }
+
+            endReason = await RunWorkersAsync(goal, dispatchers, cancellationToken);
+        }
+        finally
+        {
+            // Not the run's token: a cancelled run is exactly the one whose worktrees most need
+            // removing, and a stray worktree keeps its branch checked out until someone prunes it.
+            foreach (var (worktree, branch) in created)
+            {
+                await _teamGit.RemoveWorktreeAsync(repositoryRoot, worktree, CancellationToken.None);
+                await _teamGit.DeleteBranchAsync(repositoryRoot, branch, CancellationToken.None);
+            }
+
+            foreach (var worker in Workers.Where(w => w.Phase == TeamWorkerPhase.Working || w.Phase == TeamWorkerPhase.Waiting))
+            {
+                worker.Phase = TeamWorkerPhase.Stopped;
+            }
+
+            OnChanged();
+        }
+
+        var changes = await _teamGit.GetChangedFilesAsync(repositoryRoot, snapshot, teamBranch, CancellationToken.None);
+        var keepBranch = changes.Count > 0;
+        if (!keepBranch)
+        {
+            await _teamGit.DeleteBranchAsync(repositoryRoot, teamBranch, CancellationToken.None);
+        }
+
+        return new UltraTeamResult(
+            RunId, repositoryRoot, snapshot, teamBranch, keepBranch, changes, endReason,
+            Workers, Board.Snapshot(), PromptTokens, CompletionTokens);
+    }
+
+    private async Task<UltraTeamEndReason> RunWorkersAsync(
+        string goal, IReadOnlyList<TeamToolDispatcher> dispatchers, CancellationToken cancellationToken)
+    {
+        using var hardStop = new CancellationTokenSource(_options.TimeBudget + _options.HardStopGrace, _time);
+        using var runToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardStop.Token);
+        using var stopReminders = CancellationTokenSource.CreateLinkedTokenSource(runToken.Token);
+
+        var reminders = SendRemindersAsync(stopReminders.Token);
+        var workers = dispatchers.Select((dispatcher, i) => RunWorkerAsync(goal, Workers[i], dispatcher, i, runToken.Token)).ToList();
+
+        try
+        {
+            await Task.WhenAll(workers);
+        }
+        catch (OperationCanceledException)
+        {
+            // Reported through the end reason below.
+        }
+        finally
+        {
+            await stopReminders.CancelAsync();
+            try
+            {
+                await reminders;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        return cancellationToken.IsCancellationRequested ? UltraTeamEndReason.Cancelled
+            : Workers.All(w => w.IsDone) ? UltraTeamEndReason.AllDone
+            : TimeLeft <= TimeSpan.Zero ? UltraTeamEndReason.TimeUp
+            : UltraTeamEndReason.WorkersStopped;
+    }
+
+    private TimeSpan TimeLeft => _options.TimeBudget - Elapsed;
+
+    private async Task RunWorkerAsync(
+        string goal, TeamWorkerState state, TeamToolDispatcher dispatcher, int index, CancellationToken cancellationToken)
+    {
+        await Task.Delay(_options.StaggerDelay * index, _time, cancellationToken);
+        state.Phase = TeamWorkerPhase.Working;
+        OnChanged();
+
+        var systemPrompt = TeamPrompts.WorkerSystemPrompt(
+            state.Name, Workers.Select(w => w.Name).ToList(), _options.ClaimLifetime, dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName));
+        var loop = new HeadlessAgentLoop(
+            _client,
+            _model,
+            _options.Effort,
+            dispatcher.Tools,
+            async (tool, arguments, ct) =>
+            {
+                var result = await dispatcher.ExecuteAsync(tool, arguments, ct);
+                OnChanged();
+                return result;
+            },
+            dispatcher.DrainNotices);
+
+        string? previousEnding = null;
+        var nudge = (string?)null;
+        var idleCycles = 0;
+
+        try
+        {
+            while (!state.IsDone && TimeLeft > TimeSpan.Zero)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var cycle = state.StartCycle();
+                var opening = TeamPrompts.CycleStart(
+                    goal, cycle, TimeLeft, _options.TimeBudget, previousEnding, Bus.TakeChannel(state.Name), Board.Read());
+                if (nudge is not null)
+                {
+                    opening = $"{nudge}\n\n{opening}";
+                }
+
+                var history = new List<ChatMessage> { new(ChatRole.System, systemPrompt), new(ChatRole.User, opening) };
+                var result = await loop.RunAsync(
+                    history,
+                    _options.MaxIterationsPerCycle,
+                    cancellationToken,
+                    stopBeforeNextIteration: () =>
+                        state.IsDone || TimeLeft <= TimeSpan.Zero || HistoryChars(history) > _options.MaxCycleHistoryChars);
+
+                if (result.StoppedEarly && !state.IsDone && TimeLeft > TimeSpan.Zero)
+                {
+                    // Ended for context size: one short wrap-up so what the worker learned this cycle
+                    // reaches the board instead of vanishing with the history.
+                    history.Add(new ChatMessage(ChatRole.User, TeamPrompts.ContextFullNotice));
+                    result = await loop.RunAsync(history, 3, cancellationToken);
+                }
+
+                previousEnding = result.FinalText;
+                idleCycles = result.ToolCallCount == 0 ? idleCycles + 1 : 0;
+                if (idleCycles >= MaxConsecutiveIdleCycles)
+                {
+                    // A model that answers in prose and never calls a tool would otherwise cycle until
+                    // the deadline, spending tokens on nothing.
+                    Bus.Post(state.Name, $"{state.Name} stopped: {MaxConsecutiveIdleCycles} cycles in a row without a tool call.");
+                    break;
+                }
+
+                nudge = !state.HadVisibleActivityThisCycle ? TeamPrompts.IdleNudge
+                    : !state.WroteToBoardThisCycle ? TeamPrompts.PublishReminder
+                    : null;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // One worker's failure (a provider error, a git process that would not start) must not
+            // take the team down with it; peers see why it went quiet.
+            state.LastTool = $"error: {ex.Message}";
+            Bus.Post(state.Name, $"{state.Name} stopped after an error: {ex.Message}");
+        }
+        finally
+        {
+            if (!state.IsDone)
+            {
+                state.Phase = TeamWorkerPhase.Stopped;
+                Board.ReleaseClaims(state.Name);
+            }
+
+            OnChanged();
+        }
+    }
+
+    private async Task SendRemindersAsync(CancellationToken cancellationToken)
+    {
+        var (deadline, final) = ReminderSchedule(_options.TimeBudget);
+
+        await Task.Delay(deadline, _time, cancellationToken);
+        Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.DeadlineReminder(TimeLeft));
+
+        var untilFinal = final - Elapsed;
+        if (untilFinal > TimeSpan.Zero)
+        {
+            await Task.Delay(untilFinal, _time, cancellationToken);
+        }
+
+        Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.FinalReminder(TimeLeft));
+    }
+
+    private static int HistoryChars(List<ChatMessage> history) =>
+        history.Sum(m => m.Content.Length + (m.ToolCalls?.Sum(c => c.ArgumentsJson.Length) ?? 0));
+
+    private static void EnsureSucceeded(GitCommandResult result, string what)
+    {
+        if (!result.Success)
+        {
+            throw new InvalidOperationException($"Could not {what}: {result.Output}");
+        }
+    }
+
+    private void OnChanged() => Changed?.Invoke();
+
+    /// <summary>Adds each response's usage to the run's totals as it arrives, so the status card's
+    /// token count moves during a cycle rather than only when one finishes.</summary>
+    private sealed class UsageCountingChatClient(IChatClient inner, UltraTeamRun run) : IChatClient
+    {
+        public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
+            IReadOnlyList<ChatMessage> messages,
+            string model,
+            IReadOnlyList<ToolDefinition>? tools = null,
+            ChatEffort effort = ChatEffort.None,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await foreach (var streamEvent in inner.StreamChatAsync(messages, model, tools, effort, cancellationToken))
+            {
+                if (streamEvent is UsageReceived usage)
+                {
+                    Interlocked.Add(ref run._promptTokens, usage.PromptTokens);
+                    Interlocked.Add(ref run._completionTokens, usage.CompletionTokens);
+                    run.OnChanged();
+                }
+
+                yield return streamEvent;
+            }
+        }
+    }
+}
