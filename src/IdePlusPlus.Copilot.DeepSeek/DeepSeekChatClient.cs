@@ -23,7 +23,9 @@ namespace IdePlusPlus.Copilot.DeepSeek;
 /// </summary>
 public sealed class DeepSeekChatClient : IChatClient
 {
-    public const string DefaultModel = "deepseek-v4-flash";
+    /// <summary>DeepSeek's current name for V4.1 Flash. deepseek-v4-flash, the name before it, is
+    /// only routed here for compatibility, and deepseek-chat/-reasoner are retired.</summary>
+    public const string DefaultModel = "deepseek-flash";
 
     private const string ChatCompletionsUrl = "https://api.deepseek.com/chat/completions";
     private const string ModelsUrl = "https://api.deepseek.com/models";

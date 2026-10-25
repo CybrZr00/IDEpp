@@ -43,7 +43,7 @@ public sealed class DeepSeekChatClientTests : IDisposable
         DeepSeekChatClient client, IReadOnlyList<ChatMessage> messages, ChatEffort effort, IReadOnlyList<ToolDefinition>? tools = null)
     {
         var events = new List<ChatStreamEvent>();
-        await foreach (var streamEvent in client.StreamChatAsync(messages, "deepseek-v4-flash", tools, effort))
+        await foreach (var streamEvent in client.StreamChatAsync(messages, DeepSeekChatClient.DefaultModel, tools, effort))
         {
             events.Add(streamEvent);
         }
@@ -173,13 +173,13 @@ public sealed class DeepSeekChatClientTests : IDisposable
         _http.Respond(HttpStatusCode.OK, """
             { "object": "list", "data": [
               { "id": "deepseek-v4-pro", "object": "model", "owned_by": "deepseek" },
-              { "id": "deepseek-v4-flash", "object": "model", "owned_by": "deepseek" }
+              { "id": "deepseek-flash", "object": "model", "owned_by": "deepseek" }
             ] }
             """);
 
         var models = await CreateClient().GetAvailableModelsAsync();
 
-        models.ShouldBe(["deepseek-v4-flash", "deepseek-v4-pro"]);
+        models.ShouldBe(["deepseek-flash", "deepseek-v4-pro"]);
         _http.Requests.ShouldHaveSingleItem().Uri.ShouldBe(new Uri("https://api.deepseek.com/models"));
         _http.Requests[0].Authorization.ShouldBe("Bearer test-key");
     }

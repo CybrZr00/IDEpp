@@ -19,7 +19,10 @@ public sealed class DeepSeekFimClient : IInlineCompletionProvider
     public const string ApiKeySettingName = "DeepSeekApiKey";
 
     private const string FimCompletionsUrl = "https://api.deepseek.com/beta/completions";
-    private const string Model = "deepseek-chat";
+    /// <summary>One of the two models DeepSeek's FIM endpoint accepts (deepseek-flash,
+    /// deepseek-v4-pro) - the fast, cheap one, which suits a suggestion fetched on every pause in
+    /// typing. This was deepseek-chat until DeepSeek retired that name on 2026-07-24.</summary>
+    private const string Model = "deepseek-flash";
     private const int MaxTokens = 256;
 
     private readonly HttpClient _httpClient;
