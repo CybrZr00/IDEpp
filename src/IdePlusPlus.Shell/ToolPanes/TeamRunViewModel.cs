@@ -107,7 +107,8 @@ public sealed partial class TeamRunViewModel : ObservableObject
         var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _continueAnswer = answer;
         var minutes = Math.Max(1, (int)Math.Round(round.TotalMinutes));
-        ContinuePrompt = $"Time is up. Keep the team going for another {minutes} minutes, or finish now and review what it merged?";
+        ContinuePrompt = $"{_run.PauseExplanation ?? "Time is up."}\n\nKeep the team going for another {minutes} minutes, "
+                         + "or finish now and review what it merged?";
         ContinueLabel = $"Keep going (+{minutes} min)";
         IsAwaitingContinue = true;
         cancellationToken.Register(() => answer.TrySetResult(false));
@@ -138,6 +139,7 @@ public sealed partial class TeamRunViewModel : ObservableObject
             UltraTeamEndReason.AllDone => "Finished - every worker reported done.",
             UltraTeamEndReason.TimeUp => "Stopped - the time budget ran out.",
             UltraTeamEndReason.Cancelled => "Stopped.",
+            UltraTeamEndReason.Stalled => "Paused and finished - the team had stalled: nothing could merge.",
             _ => "Stopped - no worker was still making progress.",
         };
         _keptBranches = [.. result.TeamBranchKept ? [result.TeamBranch] : Array.Empty<string>(), .. result.KeptWorkerBranches];
@@ -174,12 +176,17 @@ public sealed partial class TeamRunViewModel : ObservableObject
     private void Refresh()
     {
         var merges = _run.Workers.Sum(w => w.Merges);
-        var time = _run.IsAwaitingContinue
-            ? $"{Clock(_run.Elapsed)} elapsed, time is up"
+        var time = _run.IsCheckingBuild
+            ? "checking the solution builds before starting the team"
+            : _run.IsAwaitingContinue
+            ? $"{Clock(_run.Elapsed)} elapsed, waiting for you"
             : $"{Clock(_run.Elapsed)} elapsed, {Clock(_run.TimeLeft < TimeSpan.Zero ? TimeSpan.Zero : _run.TimeLeft)} left";
         ProgressText = (_run.Round > 1 ? $"Round {_run.Round}  ·  " : "")
                        + $"{time}  ·  {merges} merge{(merges == 1 ? "" : "s")}  ·  "
-                       + $"{_run.PromptTokens + _run.CompletionTokens:N0} tokens";
+                       + $"{_run.PromptTokens + _run.CompletionTokens:N0} tokens"
+                       + (_run.CachedPromptTokens > 0 && _run.PromptTokens > 0
+                           ? $" ({100.0 * _run.CachedPromptTokens / _run.PromptTokens:0}% of input cached)"
+                           : "");
 
         for (var i = 0; i < Workers.Count; i++)
         {

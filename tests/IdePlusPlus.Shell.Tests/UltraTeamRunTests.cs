@@ -17,13 +17,17 @@ public sealed class UltraTeamRunTests : IDisposable
 
     private string UltraRoot => Path.Combine(_repo.Root, "ultra");
 
-    private UltraTeamRun CreateRun(int workers, TimeSpan budget, Func<CancellationToken, Task<bool>>? askToContinue = null) => new(
+    /// <summary>Preflight is off unless a test is about it: most of these never build, and a real
+    /// dotnet build per test would only make them slow.</summary>
+    private UltraTeamRun CreateRun(
+        int workers, TimeSpan budget, Func<CancellationToken, Task<bool>>? askToContinue = null, bool preflight = false) => new(
         _client,
         "model-x",
         new UltraTeamOptions(workers, budget, ShellCommandsEnabled: false, "Debug", ChatEffort.Ultra)
         {
             StaggerDelay = TimeSpan.Zero,
             HardStopGrace = TimeSpan.FromSeconds(5),
+            PreflightBuild = preflight,
         },
         _repo.ReadOnlyTools,
         new GitService(),
@@ -171,6 +175,83 @@ public sealed class UltraTeamRunTests : IDisposable
         Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
     }
 
+    /// <summary>Three 16-worker runs spent ~109M tokens on a solution whose every build failed on
+    /// a broken .NET install; one build first would have told the user before any of it.</summary>
+    [Fact]
+    public async Task ASolutionThatDoesNotBuild_StopsTheRunBeforeAnyWorkerStarts()
+    {
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs"), "public class Class1 { public int Value => ; }");
+        var run = CreateRun(workers: 3, budget: TimeSpan.FromMinutes(10), preflight: true);
+
+        var error = await Should.ThrowAsync<UltraTeamPreflightException>(() => RunAsync(run));
+
+        error.Report.ShouldContain("Build FAILED");
+        _client.Requests.ShouldBeEmpty();
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "branch", "--list", "ideplusplus/ultra/*").ShouldBeEmpty();
+        Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
+    }
+
+    /// <summary>The pattern three FAM runs showed for their whole budget: every merge build
+    /// failing, nothing reaching the team branch. The run now pauses and asks instead.</summary>
+    [Fact]
+    public async Task ATeamWhoseMergesKeepFailing_StallsAndAsks_WithTheLatestFailure()
+    {
+        _client.Script("w1",
+            _client.Call(TeamTools.EditFileToolName, new
+            {
+                file = "Lib/Class1.cs", mode = "replace_text",
+                old_text = "public int Value => 1;", new_text = "public int Value => ;",
+            }),
+            _client.Call(TeamTools.CommitToolName, new { message = "broken" }),
+            _client.Call(TeamTools.MergeToolName));
+        _client.WhenScriptEmpty = _ => _client.Call(TeamTools.BoardReadToolName);
+        _client.DelayPerReply = TimeSpan.FromMilliseconds(50);
+        string? askedBecause = null;
+        UltraTeamRun? run = null;
+        run = new UltraTeamRun(
+            _client,
+            "model-x",
+            new UltraTeamOptions(1, TimeSpan.FromMinutes(10), ShellCommandsEnabled: false, "Debug", ChatEffort.Ultra)
+            {
+                StaggerDelay = TimeSpan.Zero,
+                HardStopGrace = TimeSpan.FromSeconds(5),
+                PreflightBuild = false,
+                StallWindow = TimeSpan.FromSeconds(2),
+                StallFailedMergeBuilds = 1,
+                StallCheckInterval = TimeSpan.FromMilliseconds(250),
+            },
+            _repo.ReadOnlyTools,
+            new GitService(),
+            _repo.TeamGit,
+            TimeProvider.System,
+            UltraRoot,
+            runCommand: null,
+            askToContinue: _ =>
+            {
+                askedBecause = run!.PauseExplanation;
+                return Task.FromResult(false);
+            });
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.Stalled);
+        askedBecause.ShouldNotBeNull();
+        askedBecause.ShouldContain("stalled");
+        askedBecause.ShouldContain("Build FAILED");
+        result.Workers[0].FailedMergeBuilds.ShouldBeGreaterThanOrEqualTo(1);
+    }
+
+    [Fact]
+    public async Task ASolutionThatBuilds_PassesPreflight_AndTheTeamStarts()
+    {
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+
+        var result = await RunAsync(CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), preflight: true));
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        _client.Requests.ShouldNotBeEmpty();
+    }
+
     [Fact]
     public async Task EachWorkerIsToldWhoItIs_AndSeesTheGoalAndTheBoard()
     {
@@ -312,9 +393,21 @@ public sealed class UltraTeamRunTests : IDisposable
     [Fact]
     public async Task Cancelling_EndsTheRunAsCancelled_AndStillRemovesTheWorktrees()
     {
-        _client.WhenScriptEmpty = _ => _client.Call(TeamTools.BoardReadToolName);
+        // Cancelled once a worker is really running - a fixed delay could land during worktree setup
+        // on a slow machine, which is a different path (it throws rather than returning a result).
+        // Scheduled once: CancelAfter restarts its timer on every call, and replies come every 50 ms.
+        using var cancel = new CancellationTokenSource();
+        var scheduled = 0;
+        _client.WhenScriptEmpty = _ =>
+        {
+            if (Interlocked.Exchange(ref scheduled, 1) == 0)
+            {
+                cancel.CancelAfter(TimeSpan.FromMilliseconds(500));
+            }
+
+            return _client.Call(TeamTools.BoardReadToolName);
+        };
         _client.DelayPerReply = TimeSpan.FromMilliseconds(50);
-        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(1));
         var run = CreateRun(workers: 2, budget: TimeSpan.FromMinutes(10));
 
         var result = await RunAsync(run, cancel.Token);

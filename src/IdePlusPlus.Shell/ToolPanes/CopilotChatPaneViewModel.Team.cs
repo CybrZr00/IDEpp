@@ -198,7 +198,7 @@ public sealed partial class CopilotChatPaneViewModel
                     (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct),
                     askToContinue: ct => _dispatcher.InvokeAsync(async () =>
                     {
-                        StatusMessage = "The Ultra team's time is up - keep it going, or finish and review? (on the team card)";
+                        StatusMessage = "The Ultra team is waiting for you - keep it going, or finish and review? (on the team card)";
                         try
                         {
                             return await runCard!.AskToContinueAsync(options.TimeBudget, ct);
@@ -241,6 +241,12 @@ public sealed partial class CopilotChatPaneViewModel
             }
 
             assistantMessage.Append("\n\n[cancelled]");
+        }
+        catch (UltraTeamPreflightException ex)
+        {
+            card?.Abandon("Didn't start - the solution doesn't build.");
+            assistantMessage.Text = $"**Ultra team** - didn't start. {ex.Message} No workers were started and "
+                                    + $"nothing was spent on them.\n\n```\n{ex.Report}\n```";
         }
         catch (Exception ex)
         {
@@ -382,6 +388,7 @@ public sealed partial class CopilotChatPaneViewModel
             UltraTeamEndReason.AllDone => "finished: every worker reported done.",
             UltraTeamEndReason.TimeUp => "stopped: the time budget ran out.",
             UltraTeamEndReason.Cancelled => "stopped.",
+            UltraTeamEndReason.Stalled => "stopped: the team had stalled - nothing could merge, and merge builds kept failing.",
             _ => "stopped: no worker was still making progress.",
         });
         text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min"

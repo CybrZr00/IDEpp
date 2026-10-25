@@ -80,6 +80,22 @@ public sealed class TeamWorkerState(string name)
 
     internal void RecordMerge() => Interlocked.Increment(ref _merges);
 
+    private int _failedMergeBuilds;
+    private volatile string? _lastMergeBuildFailure;
+
+    /// <summary>team_merge refusals because the commit did not build - what the runner's stall check
+    /// counts, since a gate that never passes is what keeps a whole team from merging.</summary>
+    public int FailedMergeBuilds => Volatile.Read(ref _failedMergeBuilds);
+
+    /// <summary>The start of the latest failed merge build's report.</summary>
+    public string? LastMergeBuildFailure => _lastMergeBuildFailure;
+
+    internal void RecordFailedMergeBuild(string report)
+    {
+        _lastMergeBuildFailure = report;
+        Interlocked.Increment(ref _failedMergeBuilds);
+    }
+
     internal int StartCycle()
     {
         HadVisibleActivityThisCycle = false;

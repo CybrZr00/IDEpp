@@ -93,6 +93,23 @@ public sealed class TeamToolDispatcher
 
     public string? DrainNotices() => TeamNotices.Compose(_context.Name, _board, _bus);
 
+    /// <summary>
+    /// One whole-solution build of the worktree as the run starts, before any worker has done
+    /// anything. A pass also records the starting commit as known to build, so this worker's first
+    /// team_merge of an unchanged base needs no second build.
+    /// </summary>
+    public async Task<(bool Succeeded, string Report)> PreflightBuildAsync(CancellationToken cancellationToken)
+    {
+        var (exitCode, report) = await RunBuildAsync(_context.SolutionPath, cancellationToken);
+        if (exitCode == 0)
+        {
+            _changedSinceBuild = false;
+            _state.LastGoodCommit = await _teamGit.GetHeadAsync(_context.WorktreeRoot, cancellationToken);
+        }
+
+        return (exitCode == 0, report);
+    }
+
     public async Task<(bool IsError, string Text)> ExecuteAsync(
         string toolName, JsonNode? arguments, CancellationToken cancellationToken)
     {
@@ -543,6 +560,7 @@ public sealed class TeamToolDispatcher
             var (exitCode, report) = await RunBuildAsync(_context.SolutionPath, cancellationToken);
             if (exitCode != 0)
             {
+                _state.RecordFailedMergeBuild(report);
                 return (true, "Not merged - your commit does not build, and the team branch must keep building.\n\n" + report);
             }
 

@@ -30,6 +30,31 @@ public sealed record UltraTeamOptions(
     public int MaxCycleHistoryChars { get; init; } = 300_000;
 
     public int MaxConcurrentBuilds { get; init; } = 2;
+
+    /// <summary>Build the solution once before any worker starts, and refuse to run if it fails -
+    /// every merge needs a passing build, so a solution that cannot build cannot take any of the
+    /// team's work. On by default; tests that never merge turn it off.</summary>
+    public bool PreflightBuild { get; init; } = true;
+
+    /// <summary>A round is stalled when nothing has reached the team branch for this long and at
+    /// least <see cref="StallFailedMergeBuilds"/> merge builds have failed meanwhile. It is then
+    /// paused and the user asked, rather than left to spend the rest of its budget on a gate that
+    /// will not pass.</summary>
+    public TimeSpan StallWindow { get; init; } = TimeSpan.FromMinutes(10);
+
+    public int StallFailedMergeBuilds { get; init; } = 3;
+
+    /// <summary>How often the stall check looks. Short only in tests.</summary>
+    public TimeSpan StallCheckInterval { get; init; } = TimeSpan.FromSeconds(30);
+}
+
+/// <summary>The run did not start: the solution as it stands does not build, so no worker could
+/// have merged anything. Report is the build's own report.</summary>
+public sealed class UltraTeamPreflightException(string report)
+    : InvalidOperationException("The solution doesn't build as it stands, so the team could not merge anything. "
+                                + "Fix the build, then send again.")
+{
+    public string Report { get; } = report;
 }
 
 public enum UltraTeamEndReason
@@ -41,6 +66,10 @@ public enum UltraTeamEndReason
     /// <summary>Every worker stopped without calling team_done - failing requests, or a model that
     /// stopped calling tools.</summary>
     WorkersStopped,
+
+    /// <summary>Paused because nothing could merge: no work reached the team branch for the stall
+    /// window while merge builds kept failing.</summary>
+    Stalled,
 }
 
 /// <summary>What a finished run leaves behind. The team branch is kept (when anything was merged)
@@ -93,6 +122,7 @@ public sealed class UltraTeamRun
     private readonly Func<CancellationToken, Task<bool>>? _askToContinue;
     private int _promptTokens;
     private int _completionTokens;
+    private int _cachedPromptTokens;
     private int _round = 1;
     private DateTimeOffset _startedAt;
     private DateTimeOffset _roundStartedAt;
@@ -159,8 +189,24 @@ public sealed class UltraTeamRun
     public TimeSpan TimeLeft =>
         _roundStartedAt == default ? _options.TimeBudget : _options.TimeBudget - (_time.GetUtcNow() - _roundStartedAt);
 
+    /// <summary>True while the run's preflight build is going, before any worker starts.</summary>
+    public bool IsCheckingBuild { get; private set; }
+
     /// <summary>True while the run waits for the user to say whether to continue.</summary>
     public bool IsAwaitingContinue { get; private set; }
+
+    /// <summary>Why the run is waiting to be told whether to continue - time ran out, or it stalled
+    /// - in a sentence or two for the user. Set before the question is asked.</summary>
+    public string? PauseExplanation { get; private set; }
+
+    /// <summary>Set by the stall check to end the round between steps, the way running out of time does.</summary>
+    private volatile string? _stalledBecause;
+
+    private string? _repositoryRoot;
+    private string? _teamBranch;
+
+    /// <summary>The round is over for its workers: out of time, or stalled.</summary>
+    private bool RoundOver => TimeLeft <= TimeSpan.Zero || _stalledBecause is not null;
 
     /// <summary>The branch this run carries on from, merged into the working-tree snapshot it starts
     /// at - null for a run that starts from the working tree alone.</summary>
@@ -169,6 +215,9 @@ public sealed class UltraTeamRun
     public int PromptTokens => Volatile.Read(ref _promptTokens);
 
     public int CompletionTokens => Volatile.Read(ref _completionTokens);
+
+    /// <summary>The part of <see cref="PromptTokens"/> providers served from their prompt cache.</summary>
+    public int CachedPromptTokens => Volatile.Read(ref _cachedPromptTokens);
 
     /// <summary>Something a status display would show has changed. Raised on worker threads, often -
     /// a subscriber that touches UI should marshal and throttle.</summary>
@@ -194,6 +243,8 @@ public sealed class UltraTeamRun
         _startedAt = _time.GetUtcNow();
         _roundStartedAt = _startedAt;
         var teamBranch = TeamGitWorkspace.GetTeamBranchName(RunId);
+        _repositoryRoot = repositoryRoot;
+        _teamBranch = teamBranch;
 
         // The snapshot stays what the result is compared against - the user's tree as it was - so a
         // run started from an earlier branch offers that branch's work for review too, not only what
@@ -224,62 +275,87 @@ public sealed class UltraTeamRun
         UltraTeamEndReason endReason;
         try
         {
-            var solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
-            var dispatchers = new List<TeamToolDispatcher>();
-            using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
-
-            for (var i = 0; i < Workers.Count; i++)
+            try
             {
-                var state = Workers[i];
-                var worktree = Path.Combine(_runDirectory, state.Name);
-                var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, i + 1);
-                EnsureSucceeded(
-                    await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, start, cancellationToken),
-                    $"create {state.Name}'s worktree");
-                var author = $"IDE++ Ultra {state.Name}";
-                created.Add((worktree, branch, author));
+                var solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
+                var dispatchers = new List<TeamToolDispatcher>();
+                using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
 
-                var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, solutionRelativeDirectory));
-                var context = new TeamWorkerContext(
-                    state.Name,
-                    repositoryRoot,
-                    worktree,
-                    solutionDirectory,
-                    Path.Combine(solutionDirectory, Path.GetFileName(solutionPath)),
-                    testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
-                    teamBranch,
-                    author);
-                dispatchers.Add(new TeamToolDispatcher(
-                    context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, buildSlots,
-                    _options.Configuration, _runCommand));
+                for (var i = 0; i < Workers.Count; i++)
+                {
+                    var state = Workers[i];
+                    var worktree = Path.Combine(_runDirectory, state.Name);
+                    var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, i + 1);
+                    EnsureSucceeded(
+                        await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, start, cancellationToken),
+                        $"create {state.Name}'s worktree");
+                    var author = $"IDE++ Ultra {state.Name}";
+                    created.Add((worktree, branch, author));
+
+                    var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, solutionRelativeDirectory));
+                    var context = new TeamWorkerContext(
+                        state.Name,
+                        repositoryRoot,
+                        worktree,
+                        solutionDirectory,
+                        Path.Combine(solutionDirectory, Path.GetFileName(solutionPath)),
+                        testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
+                        teamBranch,
+                        author);
+                    dispatchers.Add(new TeamToolDispatcher(
+                        context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, buildSlots,
+                        _options.Configuration, _runCommand));
+                }
+
+                // The one check that would have saved three whole 16-worker runs whose every merge-gate
+                // build failed on a broken .NET install: one build first, and no models called at all if it
+                // fails - the user gets the build's own report instead.
+                if (_options.PreflightBuild)
+                {
+                    IsCheckingBuild = true;
+                    OnChanged();
+                    var (built, report) = await dispatchers[0].PreflightBuildAsync(cancellationToken);
+                    IsCheckingBuild = false;
+                    if (!built)
+                    {
+                        throw new UltraTeamPreflightException(report);
+                    }
+                }
+
+                endReason = await RunWorkersAsync(goal, dispatchers, cancellationToken);
             }
+            finally
+            {
+                // Not the run's token: a cancelled run is exactly the one whose worktrees most need
+                // removing, and a stray worktree keeps its branch checked out until someone prunes it.
+                foreach (var (worktree, branch, author) in created)
+                {
+                    var keep = await PreserveUnmergedWorkAsync(repositoryRoot, worktree, author, teamBranch);
+                    await _teamGit.RemoveWorktreeAsync(repositoryRoot, worktree, CancellationToken.None);
+                    if (keep)
+                    {
+                        keptWorkerBranches.Add(branch);
+                    }
+                    else
+                    {
+                        await _teamGit.DeleteBranchAsync(repositoryRoot, branch, CancellationToken.None);
+                    }
+                }
 
-            endReason = await RunWorkersAsync(goal, dispatchers, cancellationToken);
+                foreach (var worker in Workers.Where(w => w.Phase == TeamWorkerPhase.Working || w.Phase == TeamWorkerPhase.Waiting))
+                {
+                    worker.Phase = TeamWorkerPhase.Stopped;
+                }
+
+                IsCheckingBuild = false;
+                OnChanged();
+            }
         }
-        finally
+        catch (UltraTeamPreflightException)
         {
-            // Not the run's token: a cancelled run is exactly the one whose worktrees most need
-            // removing, and a stray worktree keeps its branch checked out until someone prunes it.
-            foreach (var (worktree, branch, author) in created)
-            {
-                var keep = await PreserveUnmergedWorkAsync(repositoryRoot, worktree, author, teamBranch);
-                await _teamGit.RemoveWorktreeAsync(repositoryRoot, worktree, CancellationToken.None);
-                if (keep)
-                {
-                    keptWorkerBranches.Add(branch);
-                }
-                else
-                {
-                    await _teamGit.DeleteBranchAsync(repositoryRoot, branch, CancellationToken.None);
-                }
-            }
-
-            foreach (var worker in Workers.Where(w => w.Phase == TeamWorkerPhase.Working || w.Phase == TeamWorkerPhase.Waiting))
-            {
-                worker.Phase = TeamWorkerPhase.Stopped;
-            }
-
-            OnChanged();
+            // Nothing was done, so nothing is kept: the team branch only marks where it would have started.
+            await _teamGit.DeleteBranchAsync(repositoryRoot, teamBranch, CancellationToken.None);
+            throw;
         }
 
         var changes = await _teamGit.GetChangedFilesAsync(repositoryRoot, snapshot, teamBranch, CancellationToken.None);
@@ -331,10 +407,14 @@ public sealed class UltraTeamRun
         while (true)
         {
             var reason = await RunRoundAsync(goal, dispatchers, staggerStarts: Round == 1, cancellationToken);
-            if (reason != UltraTeamEndReason.TimeUp || _askToContinue is null)
+            if (reason is not (UltraTeamEndReason.TimeUp or UltraTeamEndReason.Stalled) || _askToContinue is null)
             {
                 return reason;
             }
+
+            PauseExplanation = reason == UltraTeamEndReason.Stalled
+                ? _stalledBecause
+                : "Time is up.";
 
             bool another;
             IsAwaitingContinue = true;
@@ -364,6 +444,8 @@ public sealed class UltraTeamRun
 
             Interlocked.Increment(ref _round);
             _roundStartedAt = _time.GetUtcNow();
+            _stalledBecause = null;
+            PauseExplanation = null;
             OnChanged();
         }
     }
@@ -376,6 +458,7 @@ public sealed class UltraTeamRun
         using var stopReminders = CancellationTokenSource.CreateLinkedTokenSource(runToken.Token);
 
         var reminders = SendRemindersAsync(stopReminders.Token);
+        var stallWatch = WatchForStallAsync(stopReminders.Token);
         var workers = dispatchers
             .Select((dispatcher, i) => (Dispatcher: dispatcher, State: Workers[i], Index: i))
             .Where(w => !w.State.IsDone)
@@ -393,20 +476,69 @@ public sealed class UltraTeamRun
         finally
         {
             await stopReminders.CancelAsync();
-            try
+            foreach (var background in new[] { reminders, stallWatch })
             {
-                await reminders;
-            }
-            catch (OperationCanceledException)
-            {
+                try
+                {
+                    await background;
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
         }
 
         return cancellationToken.IsCancellationRequested ? UltraTeamEndReason.Cancelled
             : Workers.All(w => w.IsDone) ? UltraTeamEndReason.AllDone
+            : _stalledBecause is not null ? UltraTeamEndReason.Stalled
             : TimeLeft <= TimeSpan.Zero ? UltraTeamEndReason.TimeUp
             : UltraTeamEndReason.WorkersStopped;
     }
+
+    /// <summary>
+    /// Ends the round when the team has stopped getting anywhere: nothing has reached the team branch
+    /// for the stall window, and merge builds have kept failing over it. Both, not either - a long
+    /// quiet stretch with no failed builds is a team working on something big, and failed builds that
+    /// still let others merge are ordinary work. It is the pattern three FAM runs showed for their
+    /// whole budget, every merge build failing the same way on a broken machine.
+    /// </summary>
+    private async Task WatchForStallAsync(CancellationToken cancellationToken)
+    {
+        var lastHead = await _teamGit.ResolveRefAsync(_repositoryRoot!, _teamBranch!, cancellationToken);
+        var lastMovedAt = _time.GetUtcNow();
+        var failuresAtLastMove = Workers.Sum(w => w.FailedMergeBuilds);
+
+        while (true)
+        {
+            await Task.Delay(_options.StallCheckInterval, _time, cancellationToken);
+            var head = await _teamGit.ResolveRefAsync(_repositoryRoot!, _teamBranch!, cancellationToken);
+            var failures = Workers.Sum(w => w.FailedMergeBuilds);
+            if (head != lastHead)
+            {
+                lastHead = head;
+                lastMovedAt = _time.GetUtcNow();
+                failuresAtLastMove = failures;
+                continue;
+            }
+
+            var quietFor = _time.GetUtcNow() - lastMovedAt;
+            var failedSince = failures - failuresAtLastMove;
+            if (quietFor < _options.StallWindow || failedSince < _options.StallFailedMergeBuilds)
+            {
+                continue;
+            }
+
+            var latest = Workers.Select(w => w.LastMergeBuildFailure).LastOrDefault(f => f is not null) ?? "";
+            _stalledBecause =
+                $"The team has stalled: nothing has reached the team branch for {(int)quietFor.TotalMinutes} min, and "
+                + $"{failedSince} merge builds failed in that time. The latest failure:\n{Cap(latest, 600)}";
+            Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.StallNotice);
+            OnChanged();
+            return;
+        }
+    }
+
+    private static string Cap(string text, int max) => text.Length <= max ? text : text[..max] + " [...]";
 
     private async Task RunWorkerAsync(
         string goal, TeamWorkerState state, TeamToolDispatcher dispatcher, int index, CancellationToken cancellationToken)
@@ -436,7 +568,7 @@ public sealed class UltraTeamRun
 
         try
         {
-            while (!state.IsDone && TimeLeft > TimeSpan.Zero)
+            while (!state.IsDone && !RoundOver)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var cycle = state.StartCycle();
@@ -453,9 +585,9 @@ public sealed class UltraTeamRun
                     _options.MaxIterationsPerCycle,
                     cancellationToken,
                     stopBeforeNextIteration: () =>
-                        state.IsDone || TimeLeft <= TimeSpan.Zero || HistoryChars(history) > _options.MaxCycleHistoryChars);
+                        state.IsDone || RoundOver || HistoryChars(history) > _options.MaxCycleHistoryChars);
 
-                if (result.StoppedEarly && !state.IsDone && TimeLeft > TimeSpan.Zero)
+                if (result.StoppedEarly && !state.IsDone && !RoundOver)
                 {
                     // Ended for context size: one short wrap-up so what the worker learned this cycle
                     // reaches the board instead of vanishing with the history.
@@ -543,6 +675,7 @@ public sealed class UltraTeamRun
                 {
                     Interlocked.Add(ref run._promptTokens, usage.PromptTokens);
                     Interlocked.Add(ref run._completionTokens, usage.CompletionTokens);
+                    Interlocked.Add(ref run._cachedPromptTokens, usage.CachedPromptTokens);
                     run.OnChanged();
                 }
 
