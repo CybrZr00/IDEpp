@@ -85,14 +85,20 @@ public sealed class UltraTeamRun
     private readonly TimeProvider _time;
     private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
     private readonly string _runDirectory;
+    private readonly Func<CancellationToken, Task<bool>>? _askToContinue;
     private int _promptTokens;
     private int _completionTokens;
+    private int _round = 1;
     private DateTimeOffset _startedAt;
+    private DateTimeOffset _roundStartedAt;
 
     /// <param name="ultraRootDirectory">Where run folders go - outside any repository, so worktrees
     /// never show up in the user's status, file list or index.</param>
     /// <param name="runCommand">run_command for workers, or null. Only used when the options allow
     /// shell commands.</param>
+    /// <param name="askToContinue">Asked when a round's time runs out: true starts another round of
+    /// the same length with the same workers, worktrees and board; false (or null here) ends the run.
+    /// Nothing is spent while it waits - every worker has already stopped between steps.</param>
     public UltraTeamRun(
         IChatClient client,
         string model,
@@ -102,9 +108,11 @@ public sealed class UltraTeamRun
         TeamGitWorkspace teamGit,
         TimeProvider time,
         string ultraRootDirectory,
-        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand)
+        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand,
+        Func<CancellationToken, Task<bool>>? askToContinue = null)
     {
         _client = new UsageCountingChatClient(client, this);
+        _askToContinue = askToContinue;
         _model = model;
         _options = options;
         _readOnlyTools = readOnlyTools;
@@ -133,9 +141,21 @@ public sealed class UltraTeamRun
 
     public IReadOnlyList<TeamWorkerState> Workers { get; }
 
+    /// <summary>The length of one round - the whole run, unless the user continues it.</summary>
     public TimeSpan TimeBudget => _options.TimeBudget;
 
     public TimeSpan Elapsed => _startedAt == default ? TimeSpan.Zero : _time.GetUtcNow() - _startedAt;
+
+    /// <summary>1 until the user continues a run whose time ran out.</summary>
+    public int Round => Volatile.Read(ref _round);
+
+    /// <summary>What is left of the current round. Time spent waiting for the user to decide
+    /// whether to continue is not taken out of the next round.</summary>
+    public TimeSpan TimeLeft =>
+        _roundStartedAt == default ? _options.TimeBudget : _options.TimeBudget - (_time.GetUtcNow() - _roundStartedAt);
+
+    /// <summary>True while the run waits for the user to say whether to continue.</summary>
+    public bool IsAwaitingContinue { get; private set; }
 
     public int PromptTokens => Volatile.Read(ref _promptTokens);
 
@@ -159,6 +179,7 @@ public sealed class UltraTeamRun
         CancellationToken cancellationToken)
     {
         _startedAt = _time.GetUtcNow();
+        _roundStartedAt = _startedAt;
         var teamBranch = TeamGitWorkspace.GetTeamBranchName(RunId);
         var snapshot = await _teamGit.CreateSnapshotCommitAsync(repositoryRoot, cancellationToken);
         EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, snapshot, cancellationToken), "create the team branch");
@@ -228,15 +249,68 @@ public sealed class UltraTeamRun
             Workers, Board.Snapshot(), PromptTokens, CompletionTokens);
     }
 
+    /// <summary>
+    /// Runs rounds until one ends for any reason but time - or time runs out and the user does not
+    /// want another. A new round restarts every worker that has not called team_done, from a fresh
+    /// cycle: the worktrees, branches and board are untouched in between, so nothing is lost but the
+    /// conversation each worker was in, which the board already carries across cycles anyway.
+    /// </summary>
     private async Task<UltraTeamEndReason> RunWorkersAsync(
         string goal, IReadOnlyList<TeamToolDispatcher> dispatchers, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var reason = await RunRoundAsync(goal, dispatchers, staggerStarts: Round == 1, cancellationToken);
+            if (reason != UltraTeamEndReason.TimeUp || _askToContinue is null)
+            {
+                return reason;
+            }
+
+            bool another;
+            IsAwaitingContinue = true;
+            OnChanged();
+            try
+            {
+                another = await _askToContinue(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return UltraTeamEndReason.Cancelled;
+            }
+            finally
+            {
+                IsAwaitingContinue = false;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return UltraTeamEndReason.Cancelled;
+            }
+
+            if (!another)
+            {
+                return reason;
+            }
+
+            Interlocked.Increment(ref _round);
+            _roundStartedAt = _time.GetUtcNow();
+            OnChanged();
+        }
+    }
+
+    private async Task<UltraTeamEndReason> RunRoundAsync(
+        string goal, IReadOnlyList<TeamToolDispatcher> dispatchers, bool staggerStarts, CancellationToken cancellationToken)
     {
         using var hardStop = new CancellationTokenSource(_options.TimeBudget + _options.HardStopGrace, _time);
         using var runToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardStop.Token);
         using var stopReminders = CancellationTokenSource.CreateLinkedTokenSource(runToken.Token);
 
         var reminders = SendRemindersAsync(stopReminders.Token);
-        var workers = dispatchers.Select((dispatcher, i) => RunWorkerAsync(goal, Workers[i], dispatcher, i, runToken.Token)).ToList();
+        var workers = dispatchers
+            .Select((dispatcher, i) => (Dispatcher: dispatcher, State: Workers[i], Index: i))
+            .Where(w => !w.State.IsDone)
+            .Select(w => RunWorkerAsync(goal, w.State, w.Dispatcher, staggerStarts ? w.Index : 0, runToken.Token))
+            .ToList();
 
         try
         {
@@ -263,8 +337,6 @@ public sealed class UltraTeamRun
             : TimeLeft <= TimeSpan.Zero ? UltraTeamEndReason.TimeUp
             : UltraTeamEndReason.WorkersStopped;
     }
-
-    private TimeSpan TimeLeft => _options.TimeBudget - Elapsed;
 
     private async Task RunWorkerAsync(
         string goal, TeamWorkerState state, TeamToolDispatcher dispatcher, int index, CancellationToken cancellationToken)
@@ -362,7 +434,7 @@ public sealed class UltraTeamRun
         await Task.Delay(deadline, _time, cancellationToken);
         Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.DeadlineReminder(TimeLeft));
 
-        var untilFinal = final - Elapsed;
+        var untilFinal = final - (_options.TimeBudget - TimeLeft);
         if (untilFinal > TimeSpan.Zero)
         {
             await Task.Delay(untilFinal, _time, cancellationToken);

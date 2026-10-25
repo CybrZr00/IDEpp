@@ -76,9 +76,52 @@ public sealed partial class TeamRunViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(DiscardBranchCommand))]
     private string? keptBranch;
 
+    /// <summary>Set while the run's time is up and it waits for the user: keep going for another
+    /// round, or finish and review what was merged.</summary>
+    [ObservableProperty]
+    private bool isAwaitingContinue;
+
+    [ObservableProperty]
+    private string continuePrompt = "";
+
+    [ObservableProperty]
+    private string continueLabel = "Keep going";
+
+    private TaskCompletionSource<bool>? _continueAnswer;
+
+    /// <summary>
+    /// Shows the keep-going / finish choice and completes with the answer - false if the run is
+    /// stopped while it waits. UI thread only.
+    /// </summary>
+    public Task<bool> AskToContinueAsync(TimeSpan round, CancellationToken cancellationToken)
+    {
+        var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _continueAnswer = answer;
+        var minutes = Math.Max(1, (int)Math.Round(round.TotalMinutes));
+        ContinuePrompt = $"Time is up. Keep the team going for another {minutes} minutes, or finish now and review what it merged?";
+        ContinueLabel = $"Keep going (+{minutes} min)";
+        IsAwaitingContinue = true;
+        cancellationToken.Register(() => answer.TrySetResult(false));
+        return answer.Task;
+    }
+
+    [RelayCommand]
+    private void KeepGoing() => AnswerContinue(true);
+
+    [RelayCommand]
+    private void FinishNow() => AnswerContinue(false);
+
+    private void AnswerContinue(bool keepGoing)
+    {
+        IsAwaitingContinue = false;
+        _continueAnswer?.TrySetResult(keepGoing);
+        _continueAnswer = null;
+    }
+
     public void Finish(UltraTeamResult result)
     {
         _timer.Stop();
+        IsAwaitingContinue = false;
         Refresh();
         IsRunning = false;
         OutcomeText = result.EndReason switch
@@ -115,9 +158,12 @@ public sealed partial class TeamRunViewModel : ObservableObject
 
     private void Refresh()
     {
-        var elapsed = _run.Elapsed;
         var merges = _run.Workers.Sum(w => w.Merges);
-        ProgressText = $"{Clock(elapsed)} / {Clock(_run.TimeBudget)}  ·  {merges} merge{(merges == 1 ? "" : "s")}  ·  "
+        var time = _run.IsAwaitingContinue
+            ? $"{Clock(_run.Elapsed)} elapsed, time is up"
+            : $"{Clock(_run.Elapsed)} elapsed, {Clock(_run.TimeLeft < TimeSpan.Zero ? TimeSpan.Zero : _run.TimeLeft)} left";
+        ProgressText = (_run.Round > 1 ? $"Round {_run.Round}  ·  " : "")
+                       + $"{time}  ·  {merges} merge{(merges == 1 ? "" : "s")}  ·  "
                        + $"{_run.PromptTokens + _run.CompletionTokens:N0} tokens";
 
         for (var i = 0; i < Workers.Count; i++)

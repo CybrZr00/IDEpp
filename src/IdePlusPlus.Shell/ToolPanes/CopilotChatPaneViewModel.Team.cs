@@ -142,15 +142,28 @@ public sealed partial class CopilotChatPaneViewModel
                     ChatEffort.Ultra);
                 IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
                 var teamApprovals = new TeamShellApprovals();
+                TeamRunViewModel? runCard = null;
                 var run = new UltraTeamRun(
                     client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit,
                     TimeProvider.System, UltraRootDirectory,
-                    (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct));
+                    (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct),
+                    askToContinue: ct => _dispatcher.InvokeAsync(async () =>
+                    {
+                        StatusMessage = "The Ultra team's time is up - keep it going, or finish and review? (on the team card)";
+                        try
+                        {
+                            return await runCard!.AskToContinueAsync(options.TimeBudget, ct);
+                        }
+                        finally
+                        {
+                            StatusMessage = null;
+                        }
+                    }).Task.Unwrap());
 
                 var teamBranch = TeamGitWorkspace.GetTeamBranchName(run.RunId);
                 card = new TeamRunViewModel(
                     run, SelectedProvider == ProviderLmStudio, () => DiscardTeamBranchAsync(repositoryRoot, teamBranch));
-                var runCard = card;
+                runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
                 CurrentActivity = $"Ultra team working - {options.WorkerCount} workers, up to {options.TimeBudget.TotalMinutes:0} min...";
@@ -321,8 +334,9 @@ public sealed partial class CopilotChatPaneViewModel
             UltraTeamEndReason.Cancelled => "stopped.",
             _ => "stopped: no worker was still making progress.",
         });
-        text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min, "
-                    + $"{result.PromptTokens + result.CompletionTokens:N0} tokens.\n\n");
+        text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min"
+                    + (run.Round > 1 ? $" over {run.Round} rounds" : "")
+                    + $", {result.PromptTokens + result.CompletionTokens:N0} tokens.\n\n");
 
         if (result.Changes.Count == 0)
         {

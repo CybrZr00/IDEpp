@@ -1,6 +1,7 @@
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Shell.Team;
+using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
 using Shouldly;
 using Xunit;
@@ -16,7 +17,7 @@ public sealed class UltraTeamRunTests : IDisposable
 
     private string UltraRoot => Path.Combine(_repo.Root, "ultra");
 
-    private UltraTeamRun CreateRun(int workers, TimeSpan budget) => new(
+    private UltraTeamRun CreateRun(int workers, TimeSpan budget, Func<CancellationToken, Task<bool>>? askToContinue = null) => new(
         _client,
         "model-x",
         new UltraTeamOptions(workers, budget, ShellCommandsEnabled: false, "Debug", ChatEffort.Ultra)
@@ -29,7 +30,8 @@ public sealed class UltraTeamRunTests : IDisposable
         _repo.TeamGit,
         TimeProvider.System,
         UltraRoot,
-        runCommand: null);
+        runCommand: null,
+        askToContinue);
 
     private Task<UltraTeamResult> RunAsync(UltraTeamRun run, CancellationToken cancellationToken = default) =>
         run.RunAsync(
@@ -129,6 +131,92 @@ public sealed class UltraTeamRunTests : IDisposable
         (DateTime.UtcNow - started).ShouldBeLessThan(TimeSpan.FromSeconds(30));
         result.Workers.ShouldAllBe(w => w.Phase == TeamWorkerPhase.Stopped);
         Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task WhenTimeRunsOut_AndTheUserContinues_TheSameTeamWorksAnotherRound()
+    {
+        _client.WhenScriptEmpty = _ => _client.Call(TeamTools.BoardReadToolName);
+        _client.DelayPerReply = TimeSpan.FromMilliseconds(50);
+        var asks = 0;
+        var requestsWhenAsked = new List<int>();
+        UltraTeamRun? run = null;
+        run = CreateRun(workers: 2, budget: TimeSpan.FromSeconds(2), askToContinue: _ =>
+        {
+            asks++;
+            requestsWhenAsked.Add(_client.Requests.Count);
+            // Every worker has stopped between steps before the question is asked.
+            run!.Workers.ShouldAllBe(w => w.Phase == TeamWorkerPhase.Stopped);
+            run.IsAwaitingContinue.ShouldBeTrue();
+            return Task.FromResult(asks == 1);
+        });
+
+        var result = await RunAsync(run);
+
+        asks.ShouldBe(2);
+        run.Round.ShouldBe(2);
+        result.EndReason.ShouldBe(UltraTeamEndReason.TimeUp);
+        // The second round did real work: more requests by the second question than the first.
+        requestsWhenAsked[1].ShouldBeGreaterThan(requestsWhenAsked[0]);
+        Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Stopping_WhileTheRunAsksWhetherToContinue_EndsItAsCancelled()
+    {
+        _client.WhenScriptEmpty = _ => _client.Call(TeamTools.BoardReadToolName);
+        _client.DelayPerReply = TimeSpan.FromMilliseconds(50);
+        using var stop = new CancellationTokenSource();
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromSeconds(1), askToContinue: async ct =>
+        {
+            await stop.CancelAsync();
+            await Task.Delay(Timeout.Infinite, ct);
+            return true;
+        });
+
+        var result = await RunAsync(run, stop.Token);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.Cancelled);
+        run.Round.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ARunThatFinishesInTime_NeverAsksToContinue()
+    {
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var asked = false;
+
+        var result = await RunAsync(CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), askToContinue: _ =>
+        {
+            asked = true;
+            return Task.FromResult(true);
+        }));
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        asked.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task TheCard_AsksToContinue_AndAnswersWithTheButtonPressed()
+    {
+        var card = new TeamRunViewModel(CreateRun(workers: 1, budget: TimeSpan.FromMinutes(30)), isLocalProvider: false, discardBranch: null);
+
+        var keepGoing = card.AskToContinueAsync(TimeSpan.FromMinutes(30), CancellationToken.None);
+        card.IsAwaitingContinue.ShouldBeTrue();
+        card.ContinueLabel.ShouldBe("Keep going (+30 min)");
+        card.KeepGoingCommand.Execute(null);
+
+        (await keepGoing).ShouldBeTrue();
+        card.IsAwaitingContinue.ShouldBeFalse();
+
+        using var stop = new CancellationTokenSource();
+        var stopped = card.AskToContinueAsync(TimeSpan.FromMinutes(30), stop.Token);
+        await stop.CancelAsync();
+        (await stopped).ShouldBeFalse();
+
+        var finish = card.AskToContinueAsync(TimeSpan.FromMinutes(30), CancellationToken.None);
+        card.FinishNowCommand.Execute(null);
+        (await finish).ShouldBeFalse();
     }
 
     [Fact]

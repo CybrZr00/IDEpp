@@ -193,6 +193,19 @@
                         </ItemsControl>
                     </Expander>
 
+                    <!-- Time is up and the run is waiting on the user; nothing is spent meanwhile. -->
+                    <StackPanel Margin="0,6,0,0"
+                                Visibility="{Binding IsAwaitingContinue, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <TextBlock Text="{Binding ContinuePrompt}" TextWrapping="Wrap" FontWeight="Bold" FontSize="11" />
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Button Content="{Binding ContinueLabel}" Command="{Binding KeepGoingCommand}" Padding="8,2" />
+                            <Button Content="Finish and review"
+                                    Command="{Binding FinishNowCommand}"
+                                    Margin="6,0,0,0"
+                                    Padding="8,2" />
+                        </StackPanel>
+                    </StackPanel>
+
                     <TextBlock Text="{Binding OutcomeText}"
                                Margin="0,6,0,0"
                                FontStyle="Italic"
