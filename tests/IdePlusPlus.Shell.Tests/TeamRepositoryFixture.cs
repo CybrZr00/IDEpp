@@ -84,7 +84,9 @@ public sealed class TeamRepositoryFixture : IDisposable
 
     public async Task<(TeamToolDispatcher Dispatcher, TeamWorkerContext Context, TeamWorkerState State)> CreateWorkerAsync(
         int number,
-        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand = null)
+        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand = null,
+        TimeSpan? buildTimeout = null,
+        SemaphoreSlim? buildSlots = null)
     {
         if (!_teamBranchCreated)
         {
@@ -111,7 +113,8 @@ public sealed class TeamRepositoryFixture : IDisposable
             $"Ultra {name}");
         var state = new TeamWorkerState(name);
         var dispatcher = new TeamToolDispatcher(
-            context, state, Board, Bus, ReadOnlyTools, new GitService(), TeamGit, BuildSlots, "Debug", runCommand);
+            context, state, Board, Bus, ReadOnlyTools, new GitService(), TeamGit, buildSlots ?? BuildSlots, "Debug", runCommand,
+            buildTimeout);
         return (dispatcher, context, state);
     }
 

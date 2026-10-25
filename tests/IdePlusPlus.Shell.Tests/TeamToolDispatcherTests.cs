@@ -199,6 +199,27 @@ public sealed class TeamToolDispatcherTests : IDisposable
         TeamRepositoryFixture.Git(_repo.RepositoryRoot, "show", $"{_repo.TeamBranch}:Lib/Class2.cs").ShouldContain("Class2");
     }
 
+    /// <summary>A 16-worker run's merge-gate builds were "stopped after 5 minutes" without ever
+    /// starting: the timeout ran while the build queued for one of the team's shared slots.</summary>
+    [Fact]
+    public async Task ABuildThatQueuesLongerThanItsTimeout_StillGetsItsWholeTimeToRun()
+    {
+        using var slots = new SemaphoreSlim(1);
+        var timeout = TimeSpan.FromSeconds(30);
+        var (dispatcher, _, _) = await _repo.CreateWorkerAsync(1, buildTimeout: timeout, buildSlots: slots);
+        await slots.WaitAsync();
+
+        var build = dispatcher.ExecuteAsync("build_solution", null, CancellationToken.None);
+        await Task.Delay(timeout + TimeSpan.FromSeconds(5));
+        build.IsCompleted.ShouldBeFalse();
+        slots.Release();
+        var (isError, text) = await build;
+
+        isError.ShouldBeFalse(text);
+        text.ShouldStartWith("Build succeeded");
+        text.ShouldContain("for a free build slot");
+    }
+
     [Fact]
     public async Task Merge_OfACommitThatDoesNotBuild_IsRefused_AndTheTeamBranchStays()
     {

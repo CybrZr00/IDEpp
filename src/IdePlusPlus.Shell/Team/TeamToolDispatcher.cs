@@ -29,8 +29,14 @@ namespace IdePlusPlus.Shell.Team;
 /// </summary>
 public sealed class TeamToolDispatcher
 {
-    private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultBuildTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>Waits this long or more for a free build slot are mentioned in the build report, so
+    /// a worker can tell a slow build from a busy team.</summary>
+    private static readonly TimeSpan ReportedSlotWait = TimeSpan.FromSeconds(10);
+
+    private readonly TimeSpan _buildTimeout;
 
     private readonly TeamWorkerContext _context;
     private readonly TeamWorkerState _state;
@@ -53,6 +59,8 @@ public sealed class TeamToolDispatcher
 
     /// <param name="runCommand">run_command's implementation - (command, reason, working directory,
     /// token) - or null when shell commands are off for this run.</param>
+    /// <param name="buildTimeout">How long one build may run once it has a build slot - not
+    /// counting the wait for the slot. Five minutes unless a test needs it shorter.</param>
     public TeamToolDispatcher(
         TeamWorkerContext context,
         TeamWorkerState state,
@@ -63,8 +71,10 @@ public sealed class TeamToolDispatcher
         TeamGitWorkspace teamGit,
         SemaphoreSlim buildSlots,
         string configuration,
-        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand)
+        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand,
+        TimeSpan? buildTimeout = null)
     {
+        _buildTimeout = buildTimeout ?? DefaultBuildTimeout;
         _context = context;
         _state = state;
         _board = board;
@@ -359,25 +369,37 @@ public sealed class TeamToolDispatcher
         return (exitCode != 0, report);
     }
 
-    /// <summary>Only a whole-solution build counts towards "known to build" - a single project
-    /// passing says nothing about what depends on it.</summary>
+    /// <summary>
+    /// Only a whole-solution build counts towards "known to build" - a single project passing says
+    /// nothing about what depends on it.
+    ///
+    /// The timeout starts once a build slot is free, not when the build is asked for. It used to
+    /// start first, so on a big team the wait for one of the shared slots used the build's whole
+    /// budget: a 16-worker run's merge-gate builds were "stopped after 5 minutes" without ever
+    /// starting, and nothing could merge.
+    /// </summary>
     private async Task<(int ExitCode, string Report)> RunBuildAsync(string target, CancellationToken cancellationToken)
     {
         var outputLines = new List<string>();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(BuildTimeout);
-
+        var queuedAt = DateTime.UtcNow;
         await _buildSlots.WaitAsync(cancellationToken);
+        var waited = DateTime.UtcNow - queuedAt;
+        var waitNote = waited >= ReportedSlotWait
+            ? $" (Waited {FormatDuration(waited)} for a free build slot first - the team shares them.)"
+            : "";
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_buildTimeout);
         try
         {
             var exitCode = await _buildService.BuildAsync(
                 target, line => { lock (outputLines) { outputLines.Add(line); } },
                 configuration: _configuration, cancellationToken: timeout.Token);
-            return (exitCode, ToolReports.FormatBuildReport(exitCode, _configuration, [], outputLines));
+            return (exitCode, ToolReports.FormatBuildReport(exitCode, _configuration, [], outputLines) + waitNote);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return (-1, $"The build was still running after {BuildTimeout.TotalMinutes:0} minutes and was stopped.");
+            return (-1, $"The build was still running after {FormatDuration(_buildTimeout)} and was stopped.{waitNote}");
         }
         finally
         {
@@ -579,6 +601,9 @@ public sealed class TeamToolDispatcher
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: hasBom);
         return (encoding.GetString(bytes, hasBom ? 3 : 0, bytes.Length - (hasBom ? 3 : 0)), encoding);
     }
+
+    private static string FormatDuration(TimeSpan span) =>
+        span.TotalMinutes >= 1 ? $"{span.TotalMinutes:0.#} min" : $"{span.TotalSeconds:0} s";
 
     private static int CountLines(string text) => text.Length == 0 ? 0 : text.Count(c => c == '\n') + 1;
 
