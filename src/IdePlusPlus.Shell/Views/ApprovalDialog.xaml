@@ -78,6 +78,14 @@
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Margin="0,14,0,0">
+            <!-- Only offered where a blanket answer makes sense (an Ultra team's commands); its label
+                 says exactly how far "all" reaches. -->
+            <Button x:Name="AllowAllButton" x:FieldModifier="public"
+                    Visibility="Collapsed"
+                    MinWidth="84"
+                    Padding="10,4"
+                    Margin="0,0,8,0"
+                    Click="AllowAllButton_OnClick" />
             <Button x:Name="AllowButton" x:FieldModifier="public"
                     Content="_Allow"
                     MinWidth="84"

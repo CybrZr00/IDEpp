@@ -44,6 +44,31 @@ public sealed class ApprovalDialogTests
     });
 
     [Fact]
+    public void AllowAll_IsOnlyOfferedWhenAsked_AndStaysOnScreen() => OnSta(() =>
+    {
+        var plain = ApprovalDialog.Create(new Window(), "t", "intro", "dotnet build");
+        plain.AllowAllButton.Visibility.ShouldBe(Visibility.Collapsed);
+        plain.Close();
+
+        var dialog = ApprovalDialog.Create(
+            new Window(), "IDE++ - run this command?", "A worker on the Ultra team wants to run a command on your machine:",
+            "dotnet build", note: "Its reason: check it compiles", warning: "It runs as you.");
+        dialog.OfferAllowAll("Allow all for this _run");
+
+        Show(dialog);
+
+        dialog.AllowAllButton.Visibility.ShouldBe(Visibility.Visible);
+        Bounds(dialog, dialog.AllowAllButton).Right.ShouldBeLessThanOrEqualTo(dialog.ActualWidth);
+        // Enter and Esc still mean No - a blanket yes is never the default.
+        dialog.DenyButton.IsDefault.ShouldBeTrue();
+        dialog.AllowAllButton.IsDefault.ShouldBeFalse();
+        dialog.Choice.ShouldBe(ApprovalChoice.Deny);
+
+        Render(dialog, "allow-all");
+        dialog.Close();
+    });
+
+    [Fact]
     public void AShortCommand_GetsASmallDialog_WithNoScrollHint() => OnSta(() =>
     {
         var dialog = ApprovalDialog.Create(

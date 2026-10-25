@@ -44,6 +44,13 @@ public sealed partial class CopilotChatPaneViewModel
     internal string UltraRootDirectory { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IdePlusPlus", "ultra");
 
+    /// <summary>
+    /// Asked before an Ultra worker's run_command, with the exact command line and the worker's
+    /// reason. Unlike ShellCommandApprovalPrompt it can answer for the rest of the run
+    /// (<see cref="ApprovalChoice.AllowAll"/>). Unset, team runs fall back to ShellCommandApprovalPrompt.
+    /// </summary>
+    public Func<string, string, Task<ApprovalChoice>>? TeamShellCommandApprovalPrompt { get; set; }
+
     /// <summary>Drives the pane's Ultra banner, which says what choosing it means before anything runs.</summary>
     public bool IsUltraEffort => SelectedEffort == ChatEffort.Ultra;
 
@@ -134,7 +141,7 @@ public sealed partial class CopilotChatPaneViewModel
                     _currentConfiguration?.Invoke() ?? "Debug",
                     ChatEffort.Ultra);
                 IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
-                var teamApprovals = new HashSet<string>(StringComparer.Ordinal);
+                var teamApprovals = new TeamShellApprovals();
                 var run = new UltraTeamRun(
                     client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit,
                     TimeProvider.System, UltraRootDirectory,
@@ -143,6 +150,8 @@ public sealed partial class CopilotChatPaneViewModel
                 var teamBranch = TeamGitWorkspace.GetTeamBranchName(run.RunId);
                 card = new TeamRunViewModel(
                     run, SelectedProvider == ProviderLmStudio, () => DiscardTeamBranchAsync(repositoryRoot, teamBranch));
+                var runCard = card;
+                teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
                 CurrentActivity = $"Ultra team working - {options.WorkerCount} workers, up to {options.TimeBudget.TotalMinutes:0} min...";
 
@@ -367,28 +376,41 @@ public sealed partial class CopilotChatPaneViewModel
         StatusMessage = result.Success ? $"Deleted {teamBranch}." : $"Could not delete {teamBranch}: {result.Output}";
     }
 
+    /// <summary>What one Ultra run's workers have been allowed to run: exact command lines, or -
+    /// once the user chooses "Allow all for this run" - anything, until the run ends.</summary>
+    private sealed class TeamShellApprovals
+    {
+        public HashSet<string> Commands { get; } = new(StringComparer.Ordinal);
+
+        public bool AllowAll { get; set; }
+
+        /// <summary>Raised on the UI thread when AllowAll is granted, so the run's card can say so.</summary>
+        public Action? AllowAllGranted { get; set; }
+    }
+
     /// <summary>
-    /// run_command for Ultra workers: the single agent's approval dialog, marshalled onto the UI
-    /// thread from worker threads and serialized, but with the run's own approval set.
+    /// run_command for Ultra workers: the approval dialog, marshalled onto the UI thread from worker
+    /// threads and serialized, with the run's own approvals.
     ///
     /// Not the session's: the same command line is a different command in a worktree, whose files -
     /// including any script the command runs - the team writes without review. An approval from the
     /// user's own checkout must not carry into a run, nor one from a run back out of it. Within a run
     /// one approval covers every worker, as the user chose, and the prompt says so - including that it
-    /// holds after workers change files the command reads.
+    /// holds after workers change files the command reads. "Allow all for this run" goes further, at
+    /// the user's word: no more prompts from this team until the run ends.
     /// </summary>
     private async Task<(bool IsError, string Text)> RunTeamShellCommandAsync(
-        string command, string reason, string workingDirectory, HashSet<string> runApprovals, CancellationToken cancellationToken)
+        string command, string reason, string workingDirectory, TeamShellApprovals approvals, CancellationToken cancellationToken)
     {
         var promptReason = $"{reason}\n\nRuns in an Ultra worker's own worktree ({workingDirectory}), whose files the "
-                           + "team may have changed. Approving lets every worker in this run use this exact command "
+                           + "team may have changed. Allow lets every worker in this run use this exact command "
                            + "until the run ends - even after they change files it reads.";
         string? refusal;
         await _teamShellApprovals.WaitAsync(cancellationToken);
         try
         {
             refusal = await _dispatcher.InvokeAsync(
-                () => ApproveShellCommandAsync(command, promptReason, runApprovals)).Task.Unwrap();
+                () => ApproveTeamShellCommandAsync(command, promptReason, approvals)).Task.Unwrap();
         }
         finally
         {
@@ -398,5 +420,42 @@ public sealed partial class CopilotChatPaneViewModel
         return refusal is not null
             ? (true, refusal)
             : await RunApprovedShellCommandAsync(command, workingDirectory, cancellationToken);
+    }
+
+    /// <summary>UI thread only, like ApproveShellCommandAsync, which it falls back to when the host
+    /// offers no three-way prompt.</summary>
+    private async Task<string?> ApproveTeamShellCommandAsync(string command, string reason, TeamShellApprovals approvals)
+    {
+        if (!AreShellCommandsEnabled)
+        {
+            return "Shell commands are turned off. The user can enable them in the Copilot Chat pane.";
+        }
+
+        if (approvals.AllowAll || approvals.Commands.Contains(command))
+        {
+            return null;
+        }
+
+        if (TeamShellCommandApprovalPrompt is not { } prompt)
+        {
+            return await ApproveShellCommandAsync(command, reason, approvals.Commands);
+        }
+
+        switch (await prompt(command, reason))
+        {
+            case ApprovalChoice.AllowAll:
+                approvals.AllowAll = true;
+                approvals.AllowAllGranted?.Invoke();
+                return null;
+
+            case ApprovalChoice.Allow:
+                approvals.Commands.Add(command);
+                return null;
+
+            default:
+                return "The user declined to run that command. Do not try to run it again, or work around "
+                       + "the refusal with a different command that does the same thing - post a FAIL saying "
+                       + "what you needed it for instead.";
+        }
     }
 }

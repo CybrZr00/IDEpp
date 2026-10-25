@@ -50,6 +50,30 @@ public partial class ApprovalDialog : Window
     public static bool Ask(Window owner, string title, string intro, string detail, string? note = null, string? warning = null) =>
         Create(owner, title, intro, detail, note, warning).ShowDialog() == true;
 
+    /// <summary>
+    /// <see cref="Ask"/> with a third button that answers for everything still to come. Deny stays
+    /// the default and what closing the window means.
+    /// </summary>
+    /// <param name="allowAllLabel">The third button's text - it should say how far "all" reaches,
+    /// since that is what the user is agreeing to.</param>
+    public static ApprovalChoice AskWithAllowAll(
+        Window owner, string title, string intro, string detail, string allowAllLabel, string? note = null, string? warning = null)
+    {
+        var dialog = Create(owner, title, intro, detail, note, warning);
+        dialog.OfferAllowAll(allowAllLabel);
+        return dialog.ShowDialog() == true ? dialog.Choice : ApprovalChoice.Deny;
+    }
+
+    /// <summary>What was chosen, once the dialog has closed with a yes. Allow unless the allow-all
+    /// button was the one pressed.</summary>
+    public ApprovalChoice Choice { get; private set; } = ApprovalChoice.Deny;
+
+    public void OfferAllowAll(string label)
+    {
+        AllowAllButton.Content = label;
+        AllowAllButton.Visibility = Visibility.Visible;
+    }
+
     /// <summary>Builds the dialog without showing it - <see cref="Ask"/> is this plus ShowDialog, split
     /// out so layout can be tested without a blocking modal.</summary>
     public static ApprovalDialog Create(Window owner, string title, string intro, string detail, string? note = null, string? warning = null)
@@ -83,5 +107,15 @@ public partial class ApprovalDialog : Window
         }
     }
 
-    private void AllowButton_OnClick(object sender, RoutedEventArgs e) => DialogResult = true;
+    private void AllowButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        Choice = ApprovalChoice.Allow;
+        DialogResult = true;
+    }
+
+    private void AllowAllButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        Choice = ApprovalChoice.AllowAll;
+        DialogResult = true;
+    }
 }

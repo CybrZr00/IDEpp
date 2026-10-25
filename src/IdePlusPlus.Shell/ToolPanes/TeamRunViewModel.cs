@@ -64,6 +64,11 @@ public sealed partial class TeamRunViewModel : ObservableObject
     [ObservableProperty]
     private bool isRunning = true;
 
+    /// <summary>Set once the user has let this run's workers run any command unasked - kept on the
+    /// card for the rest of the run, since nothing else would show it.</summary>
+    [ObservableProperty]
+    private string? shellNote;
+
     [ObservableProperty]
     private string? outcomeText;
 

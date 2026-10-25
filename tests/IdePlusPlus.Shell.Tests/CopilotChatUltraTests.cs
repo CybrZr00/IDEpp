@@ -197,6 +197,39 @@ public sealed class CopilotChatUltraTests : IDisposable
     });
 
     [Fact]
+    public void AllowAllForThisRun_SilencesTheTeamsLaterCommands_ButNotTheNextRun() => RunOnUiThread(async () =>
+    {
+        string[] script =
+        [
+            ToolCall("run_command", new { command = "echo one", reason = "first" }),
+            ToolCall("run_command", new { command = "echo two", reason = "second" }),
+            ToolCall(TeamTools.DoneToolName, new { summary = "nothing to change" }),
+            Text("done"),
+            ToolCall("run_command", new { command = "echo three", reason = "next run" }),
+            ToolCall(TeamTools.DoneToolName, new { summary = "nothing to change" }),
+        ];
+        _http.Script = n => n <= script.Length ? script[n - 1] : Text("done");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.AreShellCommandsEnabled = true;
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        var prompted = new List<string>();
+        viewModel.TeamShellCommandApprovalPrompt = (command, _) =>
+        {
+            prompted.Add(command);
+            return Task.FromResult(ApprovalChoice.AllowAll);
+        };
+
+        viewModel.InputText = "First run.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+        viewModel.InputText = "Second run.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        // One prompt per run: "echo two" ran unasked after Allow all, and the next run asked again.
+        prompted.ShouldBe(["echo one", "echo three"]);
+        viewModel.Messages.OfType<TeamRunViewModel>().First().ShellNote.ShouldNotBeNull();
+    });
+
+    [Fact]
     public void ComposeTeamGoal_CarriesTheRecentConversation_CappedAndLabelled()
     {
         var earlier = new List<CommunityToolkit.Mvvm.ComponentModel.ObservableObject>

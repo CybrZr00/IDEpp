@@ -153,6 +153,12 @@
                                TextWrapping="Wrap"
                                Margin="0,2,0,0"
                                Visibility="{Binding LocalProviderWarning, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+                    <TextBlock Text="{Binding ShellNote}"
+                               FontSize="10"
+                               Foreground="OrangeRed"
+                               TextWrapping="Wrap"
+                               Margin="0,2,0,0"
+                               Visibility="{Binding ShellNote, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
 
                     <ItemsControl ItemsSource="{Binding Workers}" Margin="0,4,0,0">
                         <ItemsControl.ItemTemplate>

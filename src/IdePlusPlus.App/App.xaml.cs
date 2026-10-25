@@ -140,6 +140,8 @@ public partial class App : Application
         var copilotChatPane = _serviceProvider.GetRequiredService<CopilotChatPaneViewModel>();
         copilotChatPane.ShellCommandApprovalPrompt =
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmShellCommand(mainWindow, command, reason)));
+        copilotChatPane.TeamShellCommandApprovalPrompt =
+            (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmTeamShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
         copilotChatPane.NewConversationConfirmation = warning =>
@@ -243,6 +245,26 @@ public partial class App : Application
             note: $"Its reason: {reason}",
             warning: "It runs as you, in the solution directory, with your permissions. Only allow it if the "
                      + "command above is something you would be willing to run yourself.");
+    }
+
+    /// <summary>
+    /// ConfirmShellCommand for an Ultra team's workers, plus a way to stop being asked: several
+    /// workers in parallel can otherwise want one approval after another for the whole run. "Allow
+    /// all" is scoped to that one run and its warning says so - it is still the exact command shown
+    /// that the user is looking at when they choose it. Defaults to No.
+    /// </summary>
+    private static ApprovalChoice ConfirmTeamShellCommand(Window owner, string command, string reason)
+    {
+        return ApprovalDialog.AskWithAllowAll(
+            owner,
+            "IDE++ - run this command?",
+            "A worker on the Ultra team wants to run a command on your machine:",
+            command,
+            "Allow all for this _run",
+            note: $"Its reason: {reason}",
+            warning: "It runs as you, in that worker's worktree, with your permissions. \"Allow all for this run\" "
+                     + "lets every worker on this team run any command, without asking, until the run ends - "
+                     + "including any extra rounds you continue it for.");
     }
 
     /// <summary>
