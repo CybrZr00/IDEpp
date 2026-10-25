@@ -37,14 +37,16 @@ public sealed class UltraTeamRunTests : IDisposable
         runCommand: null,
         askToContinue);
 
-    private Task<UltraTeamResult> RunAsync(UltraTeamRun run, CancellationToken cancellationToken = default, string? startFrom = null) =>
+    private Task<UltraTeamResult> RunAsync(
+        UltraTeamRun run, CancellationToken cancellationToken = default, string? startFrom = null, IReadOnlyList<string>? backlog = null) =>
         run.RunAsync(
             "Make Class1.Value return 2.",
             _repo.RepositoryRoot,
             Path.Combine(_repo.RepositoryRoot, "Scratch.slnx"),
             [],
             cancellationToken,
-            startFrom);
+            startFrom,
+            backlog);
 
     private static string Worktree(UltraTeamRun run, string worker, string root) => Path.Combine(root, run.RunId, worker);
 
@@ -79,6 +81,57 @@ public sealed class UltraTeamRunTests : IDisposable
         result.Changes.ShouldContain(new TeamFileChange("Lib/Earlier.cs", TeamFileChangeKind.Added));
         result.TeamBranchKept.ShouldBeTrue();
         File.Exists(Path.Combine(_repo.RepositoryRoot, "Lib", "Earlier.cs")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnApprovedPlansSteps_AreOnTheBoardAsTasks_BeforeTheFirstWorkerLooks()
+    {
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10));
+
+        await RunAsync(run, backlog: ["Extract the dialog seam", "Port the login window"]);
+
+        run.Board.Snapshot().Where(e => e.Type == TeamBoardEntryType.Task).Select(e => e.Text)
+            .ShouldBe(["Extract the dialog seam", "Port the login window"]);
+        var opening = _client.Requests.First().Messages[1].Content;
+        opening.ShouldContain("Backlog: 2 open or claimed, 0 done");
+        opening.ShouldContain("G2 [TASK] runner: Port the login window");
+    }
+
+    /// <summary>Three FAM runs relearned the same dead ends ("global.json pin is a dead end") because
+    /// each started with an empty board.</summary>
+    [Fact]
+    public async Task CarryingOnFromAnEarlierTeamBranch_TakesOverItsLessonsAndUnfinishedTasks_NotItsClaims()
+    {
+        const string earlierRun = "20261025-151019-4058";
+        var earlierBranch = TeamGitWorkspace.GetTeamBranchName(earlierRun);
+        CreateEarlierBranch(earlierBranch, "Lib/Earlier.cs", "public class Earlier { }\n");
+        Directory.CreateDirectory(Path.Combine(UltraRoot, earlierRun));
+        var earlierBoard = new TeamBoard(TimeProvider.System, TimeSpan.FromMinutes(10), Path.Combine(UltraRoot, earlierRun, "board.jsonl"));
+        earlierBoard.Write("w5", "FAIL", "global.json pin is a dead end", null);
+        earlierBoard.Write("w2", "FACT", "FAM.Desktop builds clean", null);
+        var (finished, _) = earlierBoard.Write("runner", "TASK", "Extract the dialog seam", null);
+        earlierBoard.Write("runner", "TASK", "Port the login window", null);
+        earlierBoard.Write("w3", "CLAIM", "Theme work", null);
+        earlierBoard.Write("w2", "PATCH_SUMMARY", $"files=IUserDialogService.cs | idea={finished!.Id} | evidence=build ok", null);
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10));
+
+        await RunAsync(run, startFrom: earlierBranch);
+
+        var carried = run.Board.Snapshot();
+        carried.Select(e => e.Text).ShouldBe(
+        [
+            "global.json pin is a dead end",
+            "FAM.Desktop builds clean",
+            "Port the login window",
+            // The finished task it names was not carried, so its id cannot match anything here.
+            $"files=IUserDialogService.cs | idea=earlier-{finished.Number} | evidence=build ok",
+        ]);
+        run.Board.CycleDigest("someone-new").ShouldContain("Backlog: 1 open or claimed, 0 done");
+        carried.ShouldAllBe(e => e.Author.EndsWith($"(run {earlierRun})") || e.Author == "w1");
+        run.CarriedBoardEntries.ShouldBe(4);
+        _client.Requests.First().Messages[1].Content.ShouldContain("global.json pin is a dead end");
     }
 
     [Fact]

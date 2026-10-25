@@ -36,14 +36,15 @@ public static class TeamTools
         Name: BoardWriteToolName,
         Description: "Add an entry to the team board. Types: OBSERVED (something you noticed), FACT (something you " +
                      "confirmed), FAIL (an approach that did not work, and why - the most valuable entry), CLAIM " +
-                     "(what you are working on now; post it before editing), PATCH_SUMMARY (what you merged, as " +
-                     "\"files=... | idea=... | evidence=...\"). Text is at most 100 characters (300 for " +
-                     "PATCH_SUMMARY); put anything longer in detail.",
+                     "(what you are working on now; post it before editing, naming the TASK id if it is one), " +
+                     "PATCH_SUMMARY (what you merged, as \"files=... | idea=... | evidence=...\", naming the TASK id " +
+                     "it completes), TASK (a backlog item - add these to split a big piece for peers). Text is at " +
+                     "most 100 characters (300 for PATCH_SUMMARY and TASK); put anything longer in detail.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
               "properties": {
-                "type": { "type": "string", "enum": ["OBSERVED", "FACT", "FAIL", "CLAIM", "PATCH_SUMMARY"] },
+                "type": { "type": "string", "enum": ["OBSERVED", "FACT", "FAIL", "CLAIM", "PATCH_SUMMARY", "TASK"] },
                 "text": { "type": "string", "description": "The gist - what a peer needs to decide whether this matters to them. At most 100 characters, or 300 for PATCH_SUMMARY." },
                 "detail": { "type": "string", "description": "Optional longer explanation, shown only when a peer calls board_unfold on this entry." }
               },

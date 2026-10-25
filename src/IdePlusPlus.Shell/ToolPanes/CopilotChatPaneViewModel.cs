@@ -2519,7 +2519,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 {stepsList}
                 """,
                 Messages.TakeWhile(m => m != marker));
-            await RunUltraTeamAsync(goal, history, assistantMessage, fallbackContextQuery: null);
+            await RunUltraTeamAsync(goal, history, assistantMessage, fallbackContextQuery: null, backlog: proposal.Steps.ToList());
             return;
         }
 

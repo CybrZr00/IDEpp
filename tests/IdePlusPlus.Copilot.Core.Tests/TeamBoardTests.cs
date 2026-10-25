@@ -211,4 +211,86 @@ public class TeamBoardTests
         entries.Count.ShouldBe(400);
         entries.Select(e => e.Id).Distinct().Count().ShouldBe(400);
     }
+
+    [Fact]
+    public void CycleDigest_FirstCycle_CarriesFailuresAndMerges_LaterCyclesOnlyWhatIsNew()
+    {
+        var board = CreateBoard();
+        board.Write("w2", "FAIL", "Regex parser too slow", null);
+        board.Write("w2", "PATCH_SUMMARY", "files=A.cs | idea=x | evidence=build ok", null);
+        board.Write("w2", "OBSERVED", "old observation", null);
+
+        var first = board.CycleDigest("w1");
+        first.ShouldContain("Regex parser too slow");
+        first.ShouldContain("files=A.cs");
+
+        board.Write("w3", "FACT", "brand new fact", null);
+        board.Write("w1", "FACT", "my own fact", null);
+        var second = board.CycleDigest("w1");
+
+        second.ShouldContain("New since your last cycle (1)");
+        second.ShouldContain("brand new fact");
+        second.ShouldNotContain("Regex parser too slow");
+        second.ShouldNotContain("my own fact");
+        board.CycleDigest("w1").ShouldContain("Nothing new since your last cycle");
+    }
+
+    [Fact]
+    public void Tasks_AreOpen_ThenClaimed_ThenDone_ByNamingTheirId()
+    {
+        var board = CreateBoard();
+        var (task, _) = board.Write(TeamMessageBus.RunnerName, "TASK", "Port the login window", null);
+        board.CycleDigest("w1").ShouldContain($"{task!.Id} [TASK] runner: Port the login window");
+
+        board.Write("w1", "CLAIM", $"{task.Id}: login window", null);
+        board.CycleDigest("w2").ShouldContain("Port the login window  [claimed]");
+        TeamBoard.StatusOf(task, board.Snapshot(), board.ActiveClaims()).ShouldBe(TeamTaskStatus.Claimed);
+
+        board.Write("w1", "PATCH_SUMMARY", $"files=LoginWindow.xaml | idea={task.Id} done | evidence=build ok", null);
+        TeamBoard.StatusOf(task, board.Snapshot(), board.ActiveClaims()).ShouldBe(TeamTaskStatus.Done);
+        board.CycleDigest("w3").ShouldContain("0 open or claimed, 1 done");
+        TeamBoard.UnfinishedTasks(board.Snapshot()).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void ATaskId_IsMatchedAsAWholeWord()
+    {
+        var board = CreateBoard();
+        var (task, _) = board.Write("runner", "TASK", "First", null);
+        for (var i = 0; i < 10; i++)
+        {
+            board.Write("w1", "FACT", $"filler {i}", null);
+        }
+
+        // G11 must not complete G1.
+        board.Write("w1", "PATCH_SUMMARY", "files=x | idea=G11 | evidence=ok", null);
+
+        TeamBoard.StatusOf(task!, board.Snapshot(), []).ShouldBe(TeamTaskStatus.Open);
+    }
+
+    [Fact]
+    public void AJournal_ReadsBack_AndImportsUnderTheEarlierRunsName()
+    {
+        var journal = Path.Combine(Path.GetTempPath(), $"board-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var earlier = CreateBoard(journal);
+            earlier.Write("w2", "FAIL", "global.json pin is a dead end", "tried 10.0.103");
+            File.AppendAllText(journal, "{not json" + Environment.NewLine);
+
+            var read = TeamBoard.ReadJournal(journal);
+            read.ShouldHaveSingleItem().Detail.ShouldBe("tried 10.0.103");
+
+            var later = CreateBoard();
+            later.Import(read, "run 20261025-151019-4058");
+            var imported = later.Snapshot().ShouldHaveSingleItem();
+            imported.Author.ShouldBe("w2 (run 20261025-151019-4058)");
+            imported.Type.ShouldBe(TeamBoardEntryType.Fail);
+            imported.Id.ShouldBe("G1");
+        }
+        finally
+        {
+            File.Delete(journal);
+        }
+    }
 }

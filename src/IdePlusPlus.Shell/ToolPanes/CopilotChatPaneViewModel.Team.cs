@@ -156,8 +156,13 @@ public sealed partial class CopilotChatPaneViewModel
     /// which a team needs for its worktrees - says why and answers as a single High-effort agent
     /// instead, through <paramref name="fallbackHistory"/>.
     /// </summary>
+    /// <param name="backlog">Steps of an approved plan, put on the board as TASKs for workers to take.</param>
     private async Task RunUltraTeamAsync(
-        string goal, List<ChatMessage> fallbackHistory, ChatMessageViewModel assistantMessage, string? fallbackContextQuery)
+        string goal,
+        List<ChatMessage> fallbackHistory,
+        ChatMessageViewModel assistantMessage,
+        string? fallbackContextQuery,
+        IReadOnlyList<string>? backlog = null)
     {
         string? fallbackReason = null;
         var turn = BeginTurn("Starting the Ultra team...");
@@ -222,7 +227,7 @@ public sealed partial class CopilotChatPaneViewModel
                 // On the thread pool: the run's own continuations then stay off the UI thread rather
                 // than queueing behind it for every tool call of every worker.
                 var result = await Task.Run(
-                    () => run.RunAsync(goal, repositoryRoot, solutionPath, testProjects, turn.Token, startFrom), turn.Token);
+                    () => run.RunAsync(goal, repositoryRoot, solutionPath, testProjects, turn.Token, startFrom, backlog), turn.Token);
                 ThrowIfDetached(turn);
 
                 card.Finish(result);
@@ -393,7 +398,17 @@ public sealed partial class CopilotChatPaneViewModel
         });
         text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min"
                     + (run.Round > 1 ? $" over {run.Round} rounds" : "")
-                    + $", {result.PromptTokens + result.CompletionTokens:N0} tokens.\n\n");
+                    + $", {result.PromptTokens + result.CompletionTokens:N0} tokens"
+                    + (run.CachedPromptTokens > 0 && result.PromptTokens > 0
+                        ? $" ({100.0 * run.CachedPromptTokens / result.PromptTokens:0}% of input from the provider's cache)"
+                        : "")
+                    + ".\n\n");
+        if (run.StartedFrom is not null)
+        {
+            text.Append($"Carried on from `{run.StartedFrom}`"
+                        + (run.CarriedBoardEntries > 0 ? $", with {run.CarriedBoardEntries} board entries taken over from that run" : "")
+                        + ".\n\n");
+        }
 
         if (result.Changes.Count == 0)
         {

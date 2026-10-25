@@ -119,6 +119,7 @@ public sealed class UltraTeamRun
     private readonly TimeProvider _time;
     private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
     private readonly string _runDirectory;
+    private readonly string _ultraRootDirectory;
     private readonly Func<CancellationToken, Task<bool>>? _askToContinue;
     private int _promptTokens;
     private int _completionTokens;
@@ -157,6 +158,7 @@ public sealed class UltraTeamRun
         _runCommand = options.ShellCommandsEnabled ? runCommand : null;
 
         RunId = $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..4]}";
+        _ultraRootDirectory = ultraRootDirectory;
         _runDirectory = Path.Combine(ultraRootDirectory, RunId);
         Directory.CreateDirectory(_runDirectory);
 
@@ -188,6 +190,9 @@ public sealed class UltraTeamRun
     /// whether to continue is not taken out of the next round.</summary>
     public TimeSpan TimeLeft =>
         _roundStartedAt == default ? _options.TimeBudget : _options.TimeBudget - (_time.GetUtcNow() - _roundStartedAt);
+
+    /// <summary>How many board entries this run took over from the earlier run it carries on from.</summary>
+    public int CarriedBoardEntries { get; private set; }
 
     /// <summary>True while the run's preflight build is going, before any worker starts.</summary>
     public bool IsCheckingBuild { get; private set; }
@@ -238,7 +243,8 @@ public sealed class UltraTeamRun
         string solutionPath,
         IReadOnlyList<string> testProjectPaths,
         CancellationToken cancellationToken,
-        string? startFrom = null)
+        string? startFrom = null,
+        IReadOnlyList<string>? backlog = null)
     {
         _startedAt = _time.GetUtcNow();
         _roundStartedAt = _startedAt;
@@ -266,7 +272,10 @@ public sealed class UltraTeamRun
             start = merge.Commit!;
             StartedFrom = startFrom;
             goal = goal + "\n\n" + TeamPrompts.ContinuingFrom(startFrom);
+            CarryBoardFrom(startFrom);
         }
+
+        SeedBacklog(backlog);
 
         EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, start, cancellationToken), "create the team branch");
 
@@ -368,6 +377,51 @@ public sealed class UltraTeamRun
         return new UltraTeamResult(
             RunId, repositoryRoot, snapshot, teamBranch, keepBranch, changes, endReason,
             Workers, Board.Snapshot(), PromptTokens, CompletionTokens, keptWorkerBranches);
+    }
+
+    /// <summary>
+    /// When the run carries on from an earlier run's team branch, takes over what that run learned:
+    /// its FACTs, FAILs and PATCH_SUMMARYs, and the TASKs it did not finish. Its claims are left
+    /// behind - they belonged to workers that no longer exist. A branch from anywhere else has no
+    /// board, and nothing is carried.
+    /// </summary>
+    private void CarryBoardFrom(string branch)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(branch, @"^(?:refs/heads/)?ideplusplus/ultra/(?<run>[^/]+)/team$");
+        if (!match.Success)
+        {
+            return;
+        }
+
+        var earlierRun = match.Groups["run"].Value;
+        var entries = TeamBoard.ReadJournal(Path.Combine(_ultraRootDirectory, earlierRun, "board.jsonl"));
+        var carried = entries
+            .Where(e => e.Type is TeamBoardEntryType.Fact or TeamBoardEntryType.Fail or TeamBoardEntryType.PatchSummary)
+            .Concat(TeamBoard.UnfinishedTasks(entries))
+            .OrderBy(e => e.Number)
+            .ToList();
+        Board.Import(carried, $"run {earlierRun}");
+        CarriedBoardEntries = carried.Count;
+    }
+
+    /// <summary>Puts each step of an approved plan on the board as a TASK, so workers take the
+    /// plan's pieces instead of each surveying the codebase and choosing overlapping work.</summary>
+    private void SeedBacklog(IReadOnlyList<string>? backlog)
+    {
+        foreach (var step in backlog ?? [])
+        {
+            var text = step.Trim();
+            if (text.Length == 0)
+            {
+                continue;
+            }
+
+            Board.Write(
+                TeamMessageBus.RunnerName,
+                "TASK",
+                text.Length <= TeamBoard.MaxPatchSummaryLength ? text : text[..(TeamBoard.MaxPatchSummaryLength - 3)] + "...",
+                text.Length <= TeamBoard.MaxPatchSummaryLength ? null : text);
+        }
     }
 
     /// <summary>
@@ -573,7 +627,7 @@ public sealed class UltraTeamRun
                 cancellationToken.ThrowIfCancellationRequested();
                 var cycle = state.StartCycle();
                 var opening = TeamPrompts.CycleStart(
-                    goal, cycle, TimeLeft, _options.TimeBudget, previousEnding, Bus.TakeChannel(state.Name), Board.Read());
+                    goal, cycle, TimeLeft, _options.TimeBudget, previousEnding, Bus.TakeChannel(state.Name), Board.CycleDigest(state.Name));
                 if (nudge is not null)
                 {
                     opening = $"{nudge}\n\n{opening}";

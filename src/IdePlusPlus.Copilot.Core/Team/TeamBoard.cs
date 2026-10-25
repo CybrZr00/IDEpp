@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace IdePlusPlus.Copilot.Core.Team;
 
@@ -10,6 +11,18 @@ public enum TeamBoardEntryType
     Fail,
     Claim,
     PatchSummary,
+
+    /// <summary>A backlog item - seeded from an approved plan, carried from an earlier run, or added
+    /// by a worker splitting a big piece. Claimed by naming its id in a CLAIM, done when a
+    /// PATCH_SUMMARY names it.</summary>
+    Task,
+}
+
+public enum TeamTaskStatus
+{
+    Open,
+    Claimed,
+    Done,
 }
 
 public sealed record TeamBoardEntry(
@@ -38,10 +51,16 @@ public sealed record TeamBoardEntry(
 ///
 /// Thread-safe: every worker writes to the same instance from its own thread-pool continuation.
 /// </summary>
-public sealed class TeamBoard
+public sealed partial class TeamBoard
 {
     public const int MaxTextLength = 100;
     public const int MaxPatchSummaryLength = 300;
+
+    /// <summary>How much of the board a cycle's opening carries before pointing at board_read and
+    /// board_grep for the rest. Small on purpose: every cycle of every worker pays for it.</summary>
+    public const int DigestNewEntries = 60;
+    public const int DigestFirstCycleEntries = 30;
+    public const int DigestTasks = 60;
     public const int MaxDetailLength = 4_000;
     public const int ReadWindow = 200;
     public const int MaxGrepResults = 100;
@@ -49,6 +68,7 @@ public sealed class TeamBoard
     private readonly object _lock = new();
     private readonly List<TeamBoardEntry> _entries = [];
     private readonly Dictionary<string, int> _noticeCursors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _digestCursors = new(StringComparer.Ordinal);
     private readonly HashSet<int> _releasedClaims = [];
     private readonly TimeProvider _time;
     private readonly string? _journalPath;
@@ -72,6 +92,7 @@ public sealed class TeamBoard
         TeamBoardEntryType.Fail => "FAIL",
         TeamBoardEntryType.Claim => "CLAIM",
         TeamBoardEntryType.PatchSummary => "PATCH_SUMMARY",
+        TeamBoardEntryType.Task => "TASK",
         _ => type.ToString().ToUpperInvariant(),
     };
 
@@ -106,7 +127,7 @@ public sealed class TeamBoard
             return (null, "A board entry needs some text.");
         }
 
-        var limit = type == TeamBoardEntryType.PatchSummary ? MaxPatchSummaryLength : MaxTextLength;
+        var limit = type is TeamBoardEntryType.PatchSummary or TeamBoardEntryType.Task ? MaxPatchSummaryLength : MaxTextLength;
         if (text.Length > limit)
         {
             return (null,
@@ -140,6 +161,193 @@ public sealed class TeamBoard
         AppendToJournal(entry);
         EntryAdded?.Invoke(entry);
         return (entry, null);
+    }
+
+    /// <summary>
+    /// Adds entries from another run's board - its journal, read with <see cref="ReadJournal"/> -
+    /// keeping their text and detail but not their ids, which this board numbers itself. Authors are
+    /// marked as from that run, so a worker can tell a peer's FACT from one inherited. Journalled like
+    /// any other entry, so a run carried on from this one inherits them in turn.
+    /// </summary>
+    /// <remarks>
+    /// Ids in their text are renumbered with them: a carried PATCH_SUMMARY that says it finished G3
+    /// must not mark whatever is G3 on this board as done. A mention of an entry that was not carried
+    /// (a finished TASK, a claim) becomes "earlier-3", which no id here can match.
+    /// </remarks>
+    public void Import(IEnumerable<TeamBoardEntry> entries, string origin)
+    {
+        var incoming = entries.ToList();
+        List<TeamBoardEntry> added;
+        lock (_lock)
+        {
+            var renumbered = incoming
+                .Select((e, i) => (Old: e.Number, New: _entries.Count + 1 + i))
+                .ToDictionary(p => p.Old, p => p.New);
+            string Renumber(string text) => IdMention().Replace(
+                text, m => renumbered.TryGetValue(int.Parse(m.Groups[1].Value), out var n) ? $"G{n}" : $"earlier-{m.Groups[1].Value}");
+
+            added = incoming
+                .Select(e => new TeamBoardEntry(
+                    renumbered[e.Number], e.Type, $"{e.Author} ({origin})", Renumber(e.Text),
+                    e.Detail is null ? null : Renumber(e.Detail), _time.GetUtcNow()))
+                .ToList();
+            _entries.AddRange(added);
+        }
+
+        foreach (var entry in added)
+        {
+            AppendToJournal(entry);
+            EntryAdded?.Invoke(entry);
+        }
+    }
+
+    [GeneratedRegex(@"\bG(\d+)\b")]
+    private static partial Regex IdMention();
+
+    /// <summary>A board's journal (board.jsonl) read back - lines that do not parse are skipped,
+    /// since the journal is written best-effort and a half-written last line is possible.</summary>
+    public static IReadOnlyList<TeamBoardEntry> ReadJournal(string path)
+    {
+        var entries = new List<TeamBoardEntry>();
+        if (!File.Exists(path))
+        {
+            return entries;
+        }
+
+        foreach (var line in File.ReadLines(path))
+        {
+            try
+            {
+                using var json = JsonDocument.Parse(line);
+                var root = json.RootElement;
+                if (!TryParseType(root.GetProperty("type").GetString(), out var type))
+                {
+                    continue;
+                }
+
+                var number = int.TryParse(root.GetProperty("id").GetString()?.TrimStart('G'), out var n) ? n : entries.Count + 1;
+                entries.Add(new TeamBoardEntry(
+                    number,
+                    type,
+                    root.GetProperty("author").GetString() ?? "?",
+                    root.GetProperty("text").GetString() ?? "",
+                    root.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String ? detail.GetString() : null,
+                    root.TryGetProperty("time", out var time) && time.TryGetDateTimeOffset(out var at) ? at : DateTimeOffset.MinValue));
+            }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+            {
+            }
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// What became of a TASK, read off the entries after it: done once a PATCH_SUMMARY names its id,
+    /// claimed while an active CLAIM does, open otherwise. Naming the id is the whole protocol - no
+    /// tool to learn, and a worker that forgets just leaves the task looking open.
+    /// </summary>
+    public static TeamTaskStatus StatusOf(TeamBoardEntry task, IReadOnlyList<TeamBoardEntry> entries, IReadOnlyCollection<TeamBoardEntry> activeClaims)
+    {
+        var mention = new Regex($@"\b{Regex.Escape(task.Id)}\b", RegexOptions.IgnoreCase);
+        if (entries.Any(e => e.Number > task.Number && e.Type == TeamBoardEntryType.PatchSummary && mention.IsMatch(e.Text)))
+        {
+            return TeamTaskStatus.Done;
+        }
+
+        return activeClaims.Any(c => c.Number > task.Number && mention.IsMatch(c.Text))
+            ? TeamTaskStatus.Claimed
+            : TeamTaskStatus.Open;
+    }
+
+    /// <summary>The open (and claimed) TASKs, for carrying a backlog into a later run.</summary>
+    public static IReadOnlyList<TeamBoardEntry> UnfinishedTasks(IReadOnlyList<TeamBoardEntry> entries) =>
+        entries
+            .Where(e => e.Type == TeamBoardEntryType.Task && StatusOf(e, entries, []) != TeamTaskStatus.Done)
+            .ToList();
+
+    /// <summary>
+    /// The board as a cycle's opening carries it - only what this worker has not seen, not the
+    /// whole board every time. Every cycle of every worker pays for this text, and the full board
+    /// re-sent each time was most of a cycle's opening. Active claims and the backlog always come;
+    /// then, on the first cycle, every FAIL and PATCH_SUMMARY so far (what not to retry, what is
+    /// already done) plus the latest few entries, and on later cycles just what is new since.
+    /// </summary>
+    public string CycleDigest(string viewer)
+    {
+        lock (_lock)
+        {
+            var now = _time.GetUtcNow();
+            var claims = ActiveClaimsLocked(now);
+            var cursor = _digestCursors.GetValueOrDefault(viewer);
+            _digestCursors[viewer] = _entries.Count;
+
+            if (_entries.Count == 0)
+            {
+                return "The board is empty - nobody has posted anything yet.";
+            }
+
+            var report = new StringBuilder();
+            report.Append(claims.Count == 0 ? "Active claims: none.\n" : "Active claims:\n");
+            foreach (var claim in claims)
+            {
+                report.Append("  ").Append(Format(claim)).Append('\n');
+            }
+
+            var tasks = _entries.Where(e => e.Type == TeamBoardEntryType.Task).ToList();
+            if (tasks.Count > 0)
+            {
+                var statuses = tasks.Select(t => (Task: t, Status: StatusOf(t, _entries, claims))).ToList();
+                var done = statuses.Count(s => s.Status == TeamTaskStatus.Done);
+                report.Append($"\nBacklog: {statuses.Count - done} open or claimed, {done} done. Claim one by naming its id "
+                              + "in a CLAIM; name it in your PATCH_SUMMARY when merged.\n");
+                foreach (var (task, status) in statuses.Where(s => s.Status != TeamTaskStatus.Done).Take(DigestTasks))
+                {
+                    report.Append("  ").Append(Format(task)).Append(status == TeamTaskStatus.Claimed ? "  [claimed]" : "").Append('\n');
+                }
+            }
+
+            var others = _entries.Where(e => e.Type is not (TeamBoardEntryType.Claim or TeamBoardEntryType.Task)).ToList();
+            if (cursor == 0)
+            {
+                var lessons = others.Where(e => e.Type is TeamBoardEntryType.Fail or TeamBoardEntryType.PatchSummary).ToList();
+                var latest = others.Except(lessons).TakeLast(DigestFirstCycleEntries).ToList();
+                if (lessons.Count > 0)
+                {
+                    report.Append("\nFailed approaches and merged work so far:\n");
+                    foreach (var entry in lessons.TakeLast(DigestNewEntries))
+                    {
+                        report.Append("  ").Append(Format(entry)).Append('\n');
+                    }
+                }
+
+                if (latest.Count > 0)
+                {
+                    report.Append("\nLatest other entries:\n");
+                    foreach (var entry in latest)
+                    {
+                        report.Append("  ").Append(Format(entry)).Append('\n');
+                    }
+                }
+            }
+            else
+            {
+                var fresh = others.Where(e => e.Number > cursor && e.Author != viewer).ToList();
+                report.Append(fresh.Count == 0 ? "\nNothing new since your last cycle.\n" : $"\nNew since your last cycle ({fresh.Count}):\n");
+                foreach (var entry in fresh.TakeLast(DigestNewEntries))
+                {
+                    report.Append("  ").Append(Format(entry)).Append('\n');
+                }
+
+                if (fresh.Count > DigestNewEntries)
+                {
+                    report.Append($"  ({fresh.Count - DigestNewEntries} older new entries not shown)\n");
+                }
+            }
+
+            report.Append($"\n({_entries.Count} entries in all - board_read for the latest, board_grep to search everything.)");
+            return report.ToString();
+        }
     }
 
     /// <summary>Ends an author's claim without a PATCH_SUMMARY - they finished, or left the run.</summary>

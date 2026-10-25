@@ -36,8 +36,8 @@ public static class TeamPrompts
               board_unfold).
 
             Work cycle - repeat until the goal is met
-            1. Gather: board_read. Don't re-derive a peer's FACT, never retry a FAIL, and don't take an area
-               someone has CLAIMed.
+            1. Gather: read the board in your cycle's opening (board_read for more). Don't re-derive a peer's
+               FACT, never retry a FAIL, and don't take an area someone has CLAIMed.
             2. Claim: board_write a CLAIM naming the files or area and the outcome, before you edit anything.
             3. Act: make the change in your worktree with edit_file.
             4. Verify: build_solution, and run_tests where tests cover it. Revise until it builds and does what
@@ -55,6 +55,9 @@ public static class TeamPrompts
             - CLAIM: what you are doing now. One at a time; it lapses after {(int)claimLifetime.TotalMinutes} minutes, or when you post
               your PATCH_SUMMARY.
             - PATCH_SUMMARY: what you merged, and the evidence that it works.
+            - TASK: a backlog item. When the board has open TASKs, take one of those rather than inventing
+              work: CLAIM it by its id ("G4: ..."), and name the id in your PATCH_SUMMARY so it shows as done.
+              Add TASKs yourself to split a piece too big for one worker.
 
             Messages
             - team_dm when two of you are about to edit the same thing, or a peer's work depends on something you

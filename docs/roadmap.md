@@ -41,7 +41,11 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       no cost data, and +1.4 points at 8 agents — this is for large, decomposable tasks. Runs can carry
       on: "Start from" merges an earlier run's team branch (or any branch) into the starting snapshot,
       a worker branch holding unmerged work is kept rather than deleted, and when time runs out the
-      card offers another round.
+      card offers another round. A run builds the solution once before any worker starts, pauses and
+      asks when nothing has merged for 10 minutes while merge builds keep failing, caches prompts on
+      Anthropic models, seeds an approved plan's steps as board TASKs, sends each cycle only the board
+      entries that worker has not seen, and takes over an earlier run's FACTs, FAILs, PATCH_SUMMARYs
+      and unfinished TASKs when it carries on from that run's team branch.
 - [x] Plan Mode (Part 1.2) — `propose_plan` tool gates `propose_edit` behind an approved checklist.
 - [x] Git integration MVP (Part 1.1) — new `IdePlusPlus.SourceControl` project (shells to `git.exe`),
       status/stage/commit/push/pull/fetch/branch-switch, a Git tool pane reusing the existing
