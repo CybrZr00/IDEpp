@@ -46,6 +46,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         useLmStudioEmbeddings = _appSettingsStore.Get(EmbeddingClientSelector.ProviderSettingName) == EmbeddingClientSelector.LmStudioProvider;
         systemPrompt = _appSettingsStore.Get(CopilotChatPaneViewModel.SystemPromptSettingKey) ?? "";
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
+        ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraWorkerCount(_appSettingsStore);
+        ultraTimeBudgetMinutes = CopilotChatPaneViewModel.ReadUltraTimeBudgetMinutes(_appSettingsStore);
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -103,6 +105,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// bool settings (IsAutoMode/IsPlanMode) save themselves rather than needing a separate button.</summary>
     [ObservableProperty]
     private bool restoreNuGetOnSolutionLoad;
+
+    /// <summary>How many workers an Ultra message starts, and how long they get. Read with the same
+    /// clamping the chat pane applies, so what this shows is what a run will use.</summary>
+    [ObservableProperty]
+    private int ultraWorkerCount;
+
+    [ObservableProperty]
+    private int ultraTimeBudgetMinutes;
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -175,6 +185,19 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(LmStudioEmbeddingClient.BaseUrlSettingName, LmStudioBaseUrl.Trim());
         _appSettingsStore.Set(LmStudioEmbeddingClient.ModelSettingName, LmStudioModel.Trim());
         StatusMessage = "LM Studio settings saved.";
+    }
+
+    [RelayCommand]
+    private void SaveUltraSettings()
+    {
+        UltraWorkerCount = Math.Clamp(UltraWorkerCount, 1, CopilotChatPaneViewModel.MaxUltraWorkerCount);
+        UltraTimeBudgetMinutes = Math.Clamp(
+            UltraTimeBudgetMinutes,
+            CopilotChatPaneViewModel.MinUltraTimeBudgetMinutes,
+            CopilotChatPaneViewModel.MaxUltraTimeBudgetMinutes);
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
+        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers, up to {UltraTimeBudgetMinutes} minutes.";
     }
 
     [RelayCommand]

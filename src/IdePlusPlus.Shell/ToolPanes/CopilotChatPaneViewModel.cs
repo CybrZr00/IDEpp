@@ -156,7 +156,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     // thumb for English text, and erring toward warning too early costs nothing.
     private const int LongConversationCharThreshold = 4 * 100_000;
 
-    // Manual mode's 8-iteration cap was implicitly backstopped by every propose_edit needing a
+    // Manual mode's cap is implicitly backstopped by every propose_edit needing a
     // human click to proceed - Auto Mode removes that checkpoint, so a purely tool-call-driven
     // agentic task (e.g. against MCP tools) needs more room to run before hitting the ceiling.
     // CancelStreaming is always available as the actual safety valve.
@@ -322,6 +322,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private string selectedModel;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsUltraEffort))]
     private ChatEffort selectedEffort;
 
     /// <summary>When on, edit proposals are accepted the instant they finish streaming instead of
@@ -801,6 +802,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
+
+        // With Plan Mode on, an Ultra message is planned by the single agent first; approving the plan
+        // is what hands it to the team (see ApprovePlanAsync).
+        if (SelectedEffort == ChatEffort.Ultra && !IsPlanMode)
+        {
+            var goal = ComposeTeamGoal(userText, Messages.TakeWhile(m => m != userMessage));
+            await RunUltraTeamAsync(goal, history, assistantMessage, fallbackContextQuery: userText);
+            return;
+        }
 
         // The context (memory, skills, the open file, a codebase search) is gathered inside the turn,
         // not before it: the codebase search is a network call, and until the turn has started
@@ -1726,29 +1736,53 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return (true, "No solution is open, so there is no directory to run a command in.");
         }
 
-        if (!_approvedCommands.Contains(command))
+        if (await ApproveShellCommandAsync(command, reason) is { } refusal)
         {
-            if (ShellCommandApprovalPrompt is not { } prompt)
-            {
-                return (true, "Shell commands cannot be approved in this session, so nothing was run.");
-            }
-
-            if (!await prompt(command, reason ?? "(no reason given)"))
-            {
-                return (true,
-                    "The user declined to run that command. Do not try to run it again, or work around "
-                    + "the refusal with a different command that does the same thing - explain what you "
-                    + "wanted it for instead.");
-            }
-
-            _approvedCommands.Add(command);
+            return (true, refusal);
         }
 
+        return await RunApprovedShellCommandAsync(command, _solutionDirectory, cancellationToken);
+    }
+
+    /// <summary>Null once the user has approved this exact command line, now or earlier this
+    /// session; otherwise the refusal to hand back to the model. UI thread only - it owns
+    /// _approvedCommands and shows the prompt.</summary>
+    private async Task<string?> ApproveShellCommandAsync(string command, string? reason)
+    {
+        if (!AreShellCommandsEnabled)
+        {
+            return "Shell commands are turned off. The user can enable them in the Copilot Chat pane.";
+        }
+
+        if (_approvedCommands.Contains(command))
+        {
+            return null;
+        }
+
+        if (ShellCommandApprovalPrompt is not { } prompt)
+        {
+            return "Shell commands cannot be approved in this session, so nothing was run.";
+        }
+
+        if (!await prompt(command, reason ?? "(no reason given)"))
+        {
+            return "The user declined to run that command. Do not try to run it again, or work around "
+                   + "the refusal with a different command that does the same thing - explain what you "
+                   + "wanted it for instead.";
+        }
+
+        _approvedCommands.Add(command);
+        return null;
+    }
+
+    private async Task<(bool IsError, string Text)> RunApprovedShellCommandAsync(
+        string command, string workingDirectory, CancellationToken cancellationToken)
+    {
         ShellCommandResult result;
         try
         {
             result = await _shellCommandRunner.RunAsync(
-                command, _solutionDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, cancellationToken);
+                command, workingDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2442,6 +2476,22 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         var assistantMessage = new ChatMessageViewModel(ChatRole.Assistant);
         Messages.Add(assistantMessage);
+
+        if (SelectedEffort == ChatEffort.Ultra)
+        {
+            var goal = ComposeTeamGoal(
+                $"""
+                Implement this approved plan.
+
+                Summary: {proposal.Summary}
+
+                Steps:
+                {stepsList}
+                """,
+                Messages.TakeWhile(m => m != marker));
+            await RunUltraTeamAsync(goal, history, assistantMessage, fallbackContextQuery: null);
+            return;
+        }
 
         await RunAssistantTurnsAsync(history, assistantMessage);
     }

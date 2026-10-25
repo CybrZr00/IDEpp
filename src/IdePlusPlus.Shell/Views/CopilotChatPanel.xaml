@@ -130,6 +130,79 @@
             </Border>
         </DataTemplate>
 
+        <!-- An Ultra team run's live status. Review styling, like the independent review: it is other
+             agents' work being reported on, not the primary assistant talking. -->
+        <DataTemplate DataType="{x:Type toolPanes:TeamRunViewModel}">
+            <Border Margin="4"
+                    Padding="8"
+                    CornerRadius="4"
+                    Background="{DynamicResource ReviewBackgroundBrush}"
+                    BorderBrush="{DynamicResource ReviewBorderBrush}"
+                    BorderThickness="1"
+                    HorizontalAlignment="Left"
+                    MaxWidth="480">
+                <StackPanel>
+                    <TextBlock Text="{Binding Header}"
+                               FontSize="11"
+                               FontWeight="Bold"
+                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <TextBlock Text="{Binding ProgressText}" FontSize="11" Margin="0,2,0,0" />
+                    <TextBlock Text="{Binding LocalProviderWarning}"
+                               FontSize="10"
+                               Foreground="OrangeRed"
+                               TextWrapping="Wrap"
+                               Margin="0,2,0,0"
+                               Visibility="{Binding LocalProviderWarning, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+
+                    <ItemsControl ItemsSource="{Binding Workers}" Margin="0,4,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,1">
+                                    <TextBlock TextWrapping="Wrap" FontSize="11">
+                                        <Run Text="{Binding Name, Mode=OneWay}" FontWeight="Bold" />
+                                        <Run Text="{Binding Status, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Claim, StringFormat='claim: {0}'}"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               Margin="12,0,0,0"
+                                               Foreground="{DynamicResource MutedForegroundBrush}"
+                                               Visibility="{Binding Claim, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Expander Header="Board" IsExpanded="True" FontSize="11" Margin="0,4,0,0">
+                        <ItemsControl ItemsSource="{Binding RecentBoard}" Margin="4,2,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}"
+                                               FontFamily="Consolas"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Expander>
+
+                    <TextBlock Text="{Binding OutcomeText}"
+                               Margin="0,6,0,0"
+                               FontStyle="Italic"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding OutcomeText, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+                    <Button Content="Delete team branch"
+                            Command="{Binding DiscardBranchCommand}"
+                            HorizontalAlignment="Left"
+                            Margin="0,4,0,0"
+                            Padding="8,2"
+                            Visibility="{Binding KeptBranch, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}"
+                            ToolTip="Deletes the branch holding everything the team merged. Review cards already shown keep working." />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
         <DataTemplate DataType="{x:Type toolPanes:EditProposalViewModel}">
             <Border Margin="4"
                     Padding="8"
@@ -444,6 +517,12 @@
                        Margin="0,2,0,0"
                        TextWrapping="Wrap"
                        Visibility="{Binding IsPlanMode, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+            <TextBlock Text="⚡ Ultra is on - your next message goes to a team of workers, each in its own git worktree. Like Auto Mode, they edit, build and run tests without review, so code they write runs on this machine. Their result comes back as edits for you to review. Team size and time budget are in Settings."
+                       FontSize="10"
+                       Foreground="OrangeRed"
+                       Margin="0,2,0,0"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding IsUltraEffort, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
             <TextBlock Text="⚡ Auto Mode is on - edits are applied automatically, without review"
                        FontSize="10"
                        Foreground="OrangeRed"

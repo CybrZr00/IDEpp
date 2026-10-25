@@ -25,7 +25,20 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       `IdePlusPlus.Infrastructure.Tests` project.
 - [x] Effort control (Part 1.3) — `ChatEffort` threaded through `IChatClient`/OpenRouter/LM Studio as an
       OpenRouter `reasoning.effort` field, persisted UI picker.
-- [x] Auto Mode (Part 1.4) — edit proposals auto-accept when on; tool-loop cap raised to 30 iterations.
+- [x] Auto Mode (Part 1.4) — edit proposals auto-accept when on; tool-loop cap raised to 60 iterations
+      (40 in manual mode).
+- [x] Ultra effort — an Agensh-style agent team (Microsoft Research, "Agensh: Scaling Organizational
+      Intelligence to 1,024 Agents", arXiv 2609.26781) behind a fifth Effort level. N identical
+      workers, no orchestrator: each runs `HeadlessAgentLoop` in its own git worktree off a snapshot of
+      the user's working tree and coordinates only through a shared board (`TeamBoard`: typed, capped
+      OBSERVED/FACT/FAIL/CLAIM/PATCH_SUMMARY entries), channel posts and mid-step direct messages
+      (`TeamMessageBus`), and a team branch it fast-forwards with a compare-and-swap after a passing
+      build (`TeamGitWorkspace`, `TeamToolDispatcher`). `UltraTeamRun` is the paper's runner — stagger,
+      fresh-context cycles, idle nudges, deadline reminders, cleanup — plus an early stop once every
+      worker calls `team_done`. The result lands as one edit proposal per file, 3-way merged with
+      anything the user changed meanwhile; nothing is applied unreviewed. Worker count (default 4) and
+      time budget (default 30 min) are in Settings. Caveats from the paper: no results below 8 agents,
+      no cost data, and +1.4 points at 8 agents — this is for large, decomposable tasks.
 - [x] Plan Mode (Part 1.2) — `propose_plan` tool gates `propose_edit` behind an approved checklist.
 - [x] Git integration MVP (Part 1.1) — new `IdePlusPlus.SourceControl` project (shells to `git.exe`),
       status/stage/commit/push/pull/fetch/branch-switch, a Git tool pane reusing the existing
