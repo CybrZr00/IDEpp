@@ -27,7 +27,9 @@ public sealed class FakeChatClient : IChatClient
         ChatEffort effort = ChatEffort.None,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        Requests.Add(messages);
+        // A copy: a loop that owns its history keeps appending to the same list, which would
+        // otherwise make every recorded request look like the final one.
+        Requests.Add([.. messages]);
 
         if (_turns.Count == 0)
         {

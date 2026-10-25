@@ -7,7 +7,13 @@ namespace IdePlusPlus.Copilot.Core;
 /// <summary>Richer than a bare string so a caller can report "may be incomplete" or account for
 /// spend, rather than silently dropping that information.</summary>
 public sealed record HeadlessRunResult(
-    string FinalText, int Iterations, int ToolCallCount, bool HitIterationCap, int PromptTokens, int CompletionTokens);
+    string FinalText,
+    int Iterations,
+    int ToolCallCount,
+    bool HitIterationCap,
+    int PromptTokens,
+    int CompletionTokens,
+    bool StoppedEarly = false);
 
 /// <summary>
 /// A small, WPF-free agent loop for headless callers - sub-agents (investigate_parallel) today,
@@ -32,30 +38,47 @@ public sealed class HeadlessAgentLoop
     private readonly ChatEffort _effort;
     private readonly IReadOnlyList<ToolDefinition> _tools;
     private readonly Func<string, JsonNode?, CancellationToken, Task<(bool IsError, string Text)>> _executeTool;
+    private readonly Func<string?>? _drainNotices;
 
+    /// <param name="drainNotices">Optional: called after every tool call, and whatever it returns is
+    /// appended to that call's result. This is how an Ultra worker receives a direct message or a
+    /// peer's board entry mid-step - see Team.TeamNotices.</param>
     public HeadlessAgentLoop(
         IChatClient client,
         string model,
         ChatEffort effort,
         IReadOnlyList<ToolDefinition> tools,
-        Func<string, JsonNode?, CancellationToken, Task<(bool IsError, string Text)>> executeTool)
+        Func<string, JsonNode?, CancellationToken, Task<(bool IsError, string Text)>> executeTool,
+        Func<string?>? drainNotices = null)
     {
         _client = client;
         _model = model;
         _effort = effort;
         _tools = tools;
         _executeTool = executeTool;
+        _drainNotices = drainNotices;
     }
 
-    public async Task<HeadlessRunResult> RunAsync(
-        string systemPrompt, string task, int maxIterations, CancellationToken cancellationToken)
-    {
-        var history = new List<ChatMessage>
-        {
-            new(ChatRole.System, systemPrompt),
-            new(ChatRole.User, task),
-        };
+    public Task<HeadlessRunResult> RunAsync(
+        string systemPrompt, string task, int maxIterations, CancellationToken cancellationToken) =>
+        RunAsync(
+            [new ChatMessage(ChatRole.System, systemPrompt), new ChatMessage(ChatRole.User, task)],
+            maxIterations,
+            cancellationToken);
 
+    /// <summary>
+    /// Runs the loop over a history the caller owns, appending to it as it goes, so the caller can
+    /// add a message and run again to continue the same conversation - or inspect its size.
+    /// </summary>
+    /// <param name="stopBeforeNextIteration">Optional: checked before every model request after the
+    /// first. Returning true ends the run there, with StoppedEarly set - for a caller whose budget
+    /// (time, context size) runs out between steps, without cancelling a step half way.</param>
+    public async Task<HeadlessRunResult> RunAsync(
+        List<ChatMessage> history,
+        int maxIterations,
+        CancellationToken cancellationToken,
+        Func<bool>? stopBeforeNextIteration = null)
+    {
         var finalText = "";
         var toolCallCount = 0;
         var promptTokens = 0;
@@ -63,6 +86,12 @@ public sealed class HeadlessAgentLoop
 
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {
+            if (iteration > 0 && stopBeforeNextIteration?.Invoke() == true)
+            {
+                return new HeadlessRunResult(
+                    finalText, iteration, toolCallCount, HitIterationCap: false, promptTokens, completionTokens, StoppedEarly: true);
+            }
+
             var turn = await StreamOneTurnAsync(history, cancellationToken).ConfigureAwait(false);
             finalText = turn.Text;
             promptTokens += turn.PromptTokens;
@@ -70,6 +99,9 @@ public sealed class HeadlessAgentLoop
 
             if (turn.Calls.Count == 0)
             {
+                // Kept in the history too, so a caller continuing the conversation sends the model its
+                // own last reply rather than a gap where it should be.
+                history.Add(new ChatMessage(ChatRole.Assistant, turn.Text));
                 return new HeadlessRunResult(finalText, iteration + 1, toolCallCount, HitIterationCap: false, promptTokens, completionTokens);
             }
 
@@ -95,6 +127,11 @@ public sealed class HeadlessAgentLoop
                 }
 
                 var (isError, resultText) = await _executeTool(call.Name, arguments, cancellationToken).ConfigureAwait(false);
+                if (_drainNotices?.Invoke() is { Length: > 0 } notices)
+                {
+                    resultText = resultText + "\n\n" + notices;
+                }
+
                 history.Add(new ChatMessage(ChatRole.Tool, resultText, ToolCallId: call.Id));
             }
         }

@@ -151,4 +151,70 @@ public class HeadlessAgentLoopTests
 
         receivedArguments.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task RunAsync_OverACallersHistory_AppendsToIt_SoTheConversationCanContinue()
+    {
+        var client = new FakeChatClient(
+            [ToolCall(0, "call-1", "read_file", "{}")],
+            [new TextDelta("first done")],
+            [new TextDelta("second done")]);
+        var loop = new HeadlessAgentLoop(client, "model-x", ChatEffort.None, [], (_, _, _) => Task.FromResult((false, "content")));
+        var history = new List<ChatMessage> { new(ChatRole.System, "system"), new(ChatRole.User, "first") };
+
+        await loop.RunAsync(history, maxIterations: 5, CancellationToken.None);
+        history.Add(new ChatMessage(ChatRole.User, "keep going"));
+        var second = await loop.RunAsync(history, maxIterations: 5, CancellationToken.None);
+
+        second.FinalText.ShouldBe("second done");
+        // The final reply of the first run is in the history, so the second run's request shows the
+        // model its own answer before the follow-up rather than a gap.
+        var lastRequest = client.Requests[^1];
+        lastRequest.Select(m => m.Role).ShouldBe(
+            [ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.Tool, ChatRole.Assistant, ChatRole.User]);
+        lastRequest[4].Content.ShouldBe("first done");
+    }
+
+    [Fact]
+    public async Task RunAsync_AppendsDrainedNoticesToEachToolResult()
+    {
+        var client = new FakeChatClient(
+            [ToolCall(0, "call-1", "read_file", "{}"), ToolCall(1, "call-2", "list_files", "{}")],
+            [new TextDelta("done")]);
+        var pending = new Queue<string?>(["[team notices]\nDM from w2: hi", null]);
+        var loop = new HeadlessAgentLoop(
+            client, "model-x", ChatEffort.None, [], (_, _, _) => Task.FromResult((false, "result")),
+            drainNotices: () => pending.Dequeue());
+
+        await loop.RunAsync("system", "task", maxIterations: 5, CancellationToken.None);
+
+        var toolResults = client.Requests[1].Where(m => m.Role == ChatRole.Tool).ToList();
+        toolResults[0].Content.ShouldBe("result\n\n[team notices]\nDM from w2: hi");
+        toolResults[1].Content.ShouldBe("result");
+    }
+
+    [Fact]
+    public async Task RunAsync_StopsBetweenSteps_WhenTheCallerAsks()
+    {
+        var client = new FakeChatClient(
+            [ToolCall(0, "call-1", "read_file", "{}")],
+            [ToolCall(0, "call-2", "read_file", "{}")],
+            [new TextDelta("never reached")]);
+        var steps = 0;
+        var loop = new HeadlessAgentLoop(client, "model-x", ChatEffort.None, [], (_, _, _) =>
+        {
+            steps++;
+            return Task.FromResult((false, "content"));
+        });
+
+        var result = await loop.RunAsync(
+            [new ChatMessage(ChatRole.System, "system"), new ChatMessage(ChatRole.User, "task")],
+            maxIterations: 10,
+            CancellationToken.None,
+            stopBeforeNextIteration: () => steps >= 2);
+
+        result.StoppedEarly.ShouldBeTrue();
+        result.HitIterationCap.ShouldBeFalse();
+        client.Requests.Count.ShouldBe(2);
+    }
 }
