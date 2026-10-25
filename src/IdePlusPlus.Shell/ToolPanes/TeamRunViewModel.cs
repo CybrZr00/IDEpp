@@ -37,12 +37,16 @@ public sealed partial class TeamRunViewModel : ObservableObject
 
     /// <param name="discardBranches">Deletes the given branches - the run's team branch and any kept
     /// worker branches - once the user has finished with them. Null hides the button.</param>
-    public TeamRunViewModel(UltraTeamRun run, bool isLocalProvider, Func<IReadOnlyList<string>, Task>? discardBranches)
+    /// <param name="startedFrom">The branch the run carries on from, shown in the header; null for a
+    /// run from the working tree alone.</param>
+    public TeamRunViewModel(
+        UltraTeamRun run, bool isLocalProvider, Func<IReadOnlyList<string>, Task>? discardBranches, string? startedFrom = null)
     {
         _run = run;
         _discardBranches = discardBranches;
         Workers = new ObservableCollection<TeamWorkerRowViewModel>(run.Workers.Select(w => new TeamWorkerRowViewModel(w.Name)));
-        Header = $"⚡ Ultra team - {run.Workers.Count} worker{(run.Workers.Count == 1 ? "" : "s")}";
+        Header = $"⚡ Ultra team - {run.Workers.Count} worker{(run.Workers.Count == 1 ? "" : "s")}"
+                 + (startedFrom is null ? "" : $", carrying on from {startedFrom}");
         LocalProviderWarning = isLocalProvider
             ? "A local model server usually answers one request at a time, so these workers will mostly take turns."
             : null;

@@ -38,7 +38,10 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       worker calls `team_done`. The result lands as one edit proposal per file, 3-way merged with
       anything the user changed meanwhile; nothing is applied unreviewed. Worker count (default 4) and
       time budget (default 30 min) are in Settings. Caveats from the paper: no results below 8 agents,
-      no cost data, and +1.4 points at 8 agents — this is for large, decomposable tasks.
+      no cost data, and +1.4 points at 8 agents — this is for large, decomposable tasks. Runs can carry
+      on: "Start from" merges an earlier run's team branch (or any branch) into the starting snapshot,
+      a worker branch holding unmerged work is kept rather than deleted, and when time runs out the
+      card offers another round.
 - [x] Plan Mode (Part 1.2) — `propose_plan` tool gates `propose_edit` behind an approved checklist.
 - [x] Git integration MVP (Part 1.1) — new `IdePlusPlus.SourceControl` project (shells to `git.exe`),
       status/stage/commit/push/pull/fetch/branch-switch, a Git tool pane reusing the existing

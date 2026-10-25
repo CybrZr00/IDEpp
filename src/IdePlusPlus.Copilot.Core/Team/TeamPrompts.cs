@@ -123,6 +123,13 @@ public static class TeamPrompts
         return message.ToString();
     }
 
+    /// <summary>Added to the goal of a run that carries on from an earlier branch. Without it a team
+    /// starting from a half-built port treats what is there as unexplained clutter, or rebuilds it.</summary>
+    public static string ContinuingFrom(string branch) =>
+        $"This run carries on from `{branch}`, which already holds earlier work towards this goal - it is in "
+        + "your worktree. Build on it: read what is there, and any plan or progress notes it includes, before "
+        + "you claim anything, and do not redo work that is already done.";
+
     public const string IdleNudge =
         "Your last cycle ended without merging or posting anything. Keep working: board_read, then claim and do the "
         + "next useful piece of the goal - or, if the goal is fully met and nothing is left for you, call team_done.";

@@ -142,6 +142,109 @@ public sealed class TeamGitWorkspaceTests : IDisposable
         TreeFiles(snapshot).ShouldBe(["code.cs", "new.cs"], ignoreOrder: true);
     }
 
+    // --- Starting a run from an earlier branch ---
+
+    /// <summary>Commits <paramref name="content"/> to <paramref name="relativePath"/> on a new branch
+    /// off HEAD, and puts the repository back on its original branch and contents.</summary>
+    private void CommitOnBranch(string branch, string relativePath, string content)
+    {
+        RunGit("switch", "-c", branch);
+        WriteFile(relativePath, content);
+        RunGit("add", "-A");
+        RunGit("commit", "-m", $"{branch} work");
+        RunGit("switch", "main");
+    }
+
+    [Fact]
+    public async Task MergeIntoSnapshotAsync_CombinesTheWorkingTreeWithTheBranch_WithoutTouchingAnything()
+    {
+        WriteFile("a.txt", "a");
+        RunGit("add", "-A");
+        RunGit("commit", "-m", "Initial commit");
+        CommitOnBranch("earlier", "earlier.txt", "from the earlier run");
+        WriteFile("mine.txt", "uncommitted in the user's tree");
+        var statusBefore = RunGit("status", "--porcelain");
+        var snapshot = await _workspace.CreateSnapshotCommitAsync(_repositoryDirectory);
+
+        var result = await _workspace.MergeIntoSnapshotAsync(_repositoryDirectory, snapshot, "earlier");
+
+        result.Status.ShouldBe(TeamStartMergeStatus.Merged);
+        TreeFiles(result.Commit!).ShouldBe(["a.txt", "earlier.txt", "mine.txt"], ignoreOrder: true);
+        RunGit("rev-list", "--parents", "-n", "1", result.Commit!).Trim().Split(' ').Length.ShouldBe(3);
+        RunGit("status", "--porcelain").ShouldBe(statusBefore);
+        RunGit("branch", "--show-current").Trim().ShouldBe("main");
+    }
+
+    [Fact]
+    public async Task MergeIntoSnapshotAsync_WhenTheBranchIsAlreadyIn_StartsFromTheSnapshot()
+    {
+        WriteFile("a.txt", "a");
+        RunGit("add", "-A");
+        RunGit("commit", "-m", "Initial commit");
+        RunGit("branch", "same");
+        var snapshot = await _workspace.CreateSnapshotCommitAsync(_repositoryDirectory);
+
+        var result = await _workspace.MergeIntoSnapshotAsync(_repositoryDirectory, snapshot, "same");
+
+        result.Status.ShouldBe(TeamStartMergeStatus.AlreadyContained);
+        result.Commit.ShouldBe(snapshot);
+    }
+
+    [Fact]
+    public async Task MergeIntoSnapshotAsync_OnAConflict_NamesTheFiles_AndCreatesNothing()
+    {
+        WriteFile("shared.txt", "original\n");
+        RunGit("add", "-A");
+        RunGit("commit", "-m", "Initial commit");
+        CommitOnBranch("earlier", "shared.txt", "the earlier run's version\n");
+        WriteFile("shared.txt", "the user's own edit\n");
+        var refsBefore = RunGit("for-each-ref");
+        var snapshot = await _workspace.CreateSnapshotCommitAsync(_repositoryDirectory);
+
+        var result = await _workspace.MergeIntoSnapshotAsync(_repositoryDirectory, snapshot, "earlier");
+
+        result.Status.ShouldBe(TeamStartMergeStatus.Conflicted);
+        result.Commit.ShouldBeNull();
+        result.ConflictedPaths.ShouldBe(["shared.txt"]);
+        RunGit("for-each-ref").ShouldBe(refsBefore);
+        ReadFile("shared.txt").ShouldBe("the user's own edit\n");
+    }
+
+    [Fact]
+    public async Task MergeIntoSnapshotAsync_ForAnUnknownBranch_SaysSo()
+    {
+        WriteFile("a.txt", "a");
+        RunGit("add", "-A");
+        RunGit("commit", "-m", "Initial commit");
+        var snapshot = await _workspace.CreateSnapshotCommitAsync(_repositoryDirectory);
+
+        var error = await Should.ThrowAsync<InvalidOperationException>(
+            () => _workspace.MergeIntoSnapshotAsync(_repositoryDirectory, snapshot, "no-such-branch"));
+
+        error.Message.ShouldContain("no-such-branch");
+    }
+
+    [Fact]
+    public async Task ListTeamBranchesAsync_ListsOnlyTeamBranches_NewestFirst()
+    {
+        WriteFile("a.txt", "a");
+        RunGit("add", "-A");
+        RunGit("commit", "-m", "Initial commit");
+        var head = RunGit("rev-parse", "HEAD").Trim();
+        RunGit("branch", TeamGitWorkspace.GetTeamBranchName("older"), head);
+        RunGit("branch", TeamGitWorkspace.GetWorkerBranchName("older", 1), head);
+        RunGit("branch", "unrelated", head);
+        WriteFile("b.txt", "b");
+        RunGit("add", "-A");
+        // A later committer date, so newest-first is not a tie.
+        RunGitWithEnvironment(["commit", "-m", "Later"], "GIT_COMMITTER_DATE", "2099-01-01T00:00:00");
+        RunGit("branch", TeamGitWorkspace.GetTeamBranchName("newer"));
+
+        var branches = await _workspace.ListTeamBranchesAsync(_repositoryDirectory);
+
+        branches.ShouldBe([TeamGitWorkspace.GetTeamBranchName("newer"), TeamGitWorkspace.GetTeamBranchName("older")]);
+    }
+
     // --- Worktrees, commits and merges between workers ---
 
     [Fact]
@@ -646,7 +749,17 @@ public sealed class TeamGitWorkspaceTests : IDisposable
     private static int GitExitCodeIn(string workingDirectory, params string[] arguments) =>
         RunGitProcess(workingDirectory, arguments).ExitCode;
 
-    private static (int ExitCode, string Output, string Error) RunGitProcess(string workingDirectory, string[] arguments)
+    private void RunGitWithEnvironment(string[] arguments, string variable, string value)
+    {
+        var (exitCode, _, error) = RunGitProcess(_repositoryDirectory, arguments, (variable, value));
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        }
+    }
+
+    private static (int ExitCode, string Output, string Error) RunGitProcess(
+        string workingDirectory, string[] arguments, (string Name, string Value)? environment = null)
     {
         var startInfo = new ProcessStartInfo("git")
         {
@@ -661,6 +774,11 @@ public sealed class TeamGitWorkspaceTests : IDisposable
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+
+        if (environment is { } variable)
+        {
+            startInfo.Environment[variable.Name] = variable.Value;
         }
 
         using var process = Process.Start(startInfo)!;

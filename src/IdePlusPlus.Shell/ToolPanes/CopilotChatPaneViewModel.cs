@@ -541,6 +541,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         SaveMemoryCommand.NotifyCanExecuteChanged();
         IndexCodebaseCommand.NotifyCanExecuteChanged();
         ReviewLastChangeCommand.NotifyCanExecuteChanged();
+
+        // The previous solution's team branches are not this one's to carry on from.
+        UltraStartFrom = WorkingTreeStartOption;
+        if (IsUltraEffort)
+        {
+            _ = RefreshUltraStartOptionsAsync();
+        }
     }
 
     /// <summary>
@@ -2819,7 +2826,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     partial void OnSelectedModelChanged(string value) =>
         _appSettingsStore.Set(ModelSettingKeyFor(SelectedProvider), value);
 
-    partial void OnSelectedEffortChanged(ChatEffort value) => _appSettingsStore.Set(EffortSettingKey, value.ToString());
+    partial void OnSelectedEffortChanged(ChatEffort value)
+    {
+        _appSettingsStore.Set(EffortSettingKey, value.ToString());
+        if (value == ChatEffort.Ultra)
+        {
+            _ = RefreshUltraStartOptionsAsync();
+        }
+    }
 
     partial void OnIsAutoModeChanged(bool value) => _appSettingsStore.Set(AutoModeSettingKey, value.ToString());
 

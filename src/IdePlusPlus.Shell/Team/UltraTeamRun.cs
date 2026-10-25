@@ -162,6 +162,10 @@ public sealed class UltraTeamRun
     /// <summary>True while the run waits for the user to say whether to continue.</summary>
     public bool IsAwaitingContinue { get; private set; }
 
+    /// <summary>The branch this run carries on from, merged into the working-tree snapshot it starts
+    /// at - null for a run that starts from the working tree alone.</summary>
+    public string? StartedFrom { get; private set; }
+
     public int PromptTokens => Volatile.Read(ref _promptTokens);
 
     public int CompletionTokens => Volatile.Read(ref _completionTokens);
@@ -176,18 +180,44 @@ public sealed class UltraTeamRun
     internal static (TimeSpan Deadline, TimeSpan Final) ReminderSchedule(TimeSpan budget) =>
         (budget * 0.8, budget - TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(2).Ticks, (budget * 0.1).Ticks)));
 
+    /// <param name="startFrom">A branch to carry on from - an earlier run's team branch, or any branch
+    /// or commit - merged into the working-tree snapshot so workers start with both. Refused, before
+    /// anything is created, if it conflicts with the working tree.</param>
     public async Task<UltraTeamResult> RunAsync(
         string goal,
         string repositoryRoot,
         string solutionPath,
         IReadOnlyList<string> testProjectPaths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? startFrom = null)
     {
         _startedAt = _time.GetUtcNow();
         _roundStartedAt = _startedAt;
         var teamBranch = TeamGitWorkspace.GetTeamBranchName(RunId);
+
+        // The snapshot stays what the result is compared against - the user's tree as it was - so a
+        // run started from an earlier branch offers that branch's work for review too, not only what
+        // this run added on top of it.
         var snapshot = await _teamGit.CreateSnapshotCommitAsync(repositoryRoot, cancellationToken);
-        EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, snapshot, cancellationToken), "create the team branch");
+        var start = snapshot;
+        if (!string.IsNullOrWhiteSpace(startFrom))
+        {
+            startFrom = startFrom.Trim();
+            var merge = await _teamGit.MergeIntoSnapshotAsync(repositoryRoot, snapshot, startFrom, cancellationToken);
+            if (merge.Status == TeamStartMergeStatus.Conflicted)
+            {
+                throw new InvalidOperationException(
+                    $"Can't start from {startFrom}: it changes the same lines as your working tree in "
+                    + $"{string.Join(", ", merge.ConflictedPaths)}. Commit, stash or undo those edits - or apply "
+                    + "that branch first - and send again.");
+            }
+
+            start = merge.Commit!;
+            StartedFrom = startFrom;
+            goal = goal + "\n\n" + TeamPrompts.ContinuingFrom(startFrom);
+        }
+
+        EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, start, cancellationToken), "create the team branch");
 
         var created = new List<(string Worktree, string Branch, string Author)>();
         var keptWorkerBranches = new List<string>();
@@ -204,7 +234,7 @@ public sealed class UltraTeamRun
                 var worktree = Path.Combine(_runDirectory, state.Name);
                 var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, i + 1);
                 EnsureSucceeded(
-                    await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, snapshot, cancellationToken),
+                    await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, start, cancellationToken),
                     $"create {state.Name}'s worktree");
                 var author = $"IDE++ Ultra {state.Name}";
                 created.Add((worktree, branch, author));

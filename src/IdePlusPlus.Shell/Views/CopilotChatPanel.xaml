@@ -548,6 +548,19 @@
                        Margin="0,2,0,0"
                        TextWrapping="Wrap"
                        Visibility="{Binding IsUltraEffort, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+            <!-- What the next Ultra run starts from: the working tree alone, or an earlier run's team
+                 branch (or any branch typed in) merged into it, so a run can carry on instead of
+                 starting over. -->
+            <DockPanel Margin="0,2,0,0"
+                       LastChildFill="True"
+                       Visibility="{Binding IsUltraEffort, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                <TextBlock DockPanel.Dock="Left" Text="Start from" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0" />
+                <ComboBox ItemsSource="{Binding UltraStartOptions}"
+                          Text="{Binding UltraStartFrom, UpdateSourceTrigger=PropertyChanged}"
+                          IsEditable="True"
+                          FontSize="11"
+                          ToolTip="Carry on from an earlier Ultra run's team branch, or type any branch or commit. It is merged into your working tree for the team to build on, and its work is offered for review with the rest." />
+            </DockPanel>
             <TextBlock Text="⚡ Auto Mode is on - edits are applied automatically, without review"
                        FontSize="10"
                        Foreground="OrangeRed"

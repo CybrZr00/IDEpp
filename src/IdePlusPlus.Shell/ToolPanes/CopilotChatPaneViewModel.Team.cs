@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -50,6 +51,54 @@ public sealed partial class CopilotChatPaneViewModel
     /// (<see cref="ApprovalChoice.AllowAll"/>). Unset, team runs fall back to ShellCommandApprovalPrompt.
     /// </summary>
     public Func<string, string, Task<ApprovalChoice>>? TeamShellCommandApprovalPrompt { get; set; }
+
+    /// <summary>The "Start from" choice that means no branch: the run starts from the working tree alone.</summary>
+    public const string WorkingTreeStartOption = "(your working tree)";
+
+    /// <summary>What an Ultra run can carry on from: the working tree, then this repository's team
+    /// branches from earlier runs, newest first. The combo box is editable, so any other branch or
+    /// commit can be typed in.</summary>
+    public ObservableCollection<string> UltraStartOptions { get; } = [WorkingTreeStartOption];
+
+    [ObservableProperty]
+    private string ultraStartFrom = WorkingTreeStartOption;
+
+    private string? SelectedUltraStartBranch =>
+        string.IsNullOrWhiteSpace(UltraStartFrom) || UltraStartFrom == WorkingTreeStartOption ? null : UltraStartFrom.Trim();
+
+    /// <summary>
+    /// Re-reads the team branches on offer. A failure (no repository, git missing) just leaves the
+    /// working tree as the only option - the picker is a convenience, and a run outside git falls back
+    /// to a single agent anyway. A selection that no longer exists is reset rather than left to fail
+    /// at send time; one the user typed that was never on the list is left alone.
+    /// </summary>
+    internal async Task RefreshUltraStartOptionsAsync()
+    {
+        IReadOnlyList<string> branches = [];
+        try
+        {
+            if (_solutionDirectory is { } directory
+                && await _teamGit.FindRepositoryRootAsync(directory) is { } repositoryRoot)
+            {
+                branches = await _teamGit.ListTeamBranchesAsync(repositoryRoot);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            Log.Warning(ex, "Couldn't list the Ultra team branches to carry on from");
+        }
+
+        var selected = UltraStartFrom;
+        var wasOffered = UltraStartOptions.Contains(selected);
+        UltraStartOptions.Clear();
+        UltraStartOptions.Add(WorkingTreeStartOption);
+        foreach (var branch in branches)
+        {
+            UltraStartOptions.Add(branch);
+        }
+
+        UltraStartFrom = wasOffered && !UltraStartOptions.Contains(selected) ? WorkingTreeStartOption : selected;
+    }
 
     /// <summary>Drives the pane's Ultra banner, which says what choosing it means before anything runs.</summary>
     public bool IsUltraEffort => SelectedEffort == ChatEffort.Ultra;
@@ -160,8 +209,9 @@ public sealed partial class CopilotChatPaneViewModel
                         }
                     }).Task.Unwrap());
 
+                var startFrom = SelectedUltraStartBranch;
                 card = new TeamRunViewModel(
-                    run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches));
+                    run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom);
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
@@ -172,7 +222,7 @@ public sealed partial class CopilotChatPaneViewModel
                 // On the thread pool: the run's own continuations then stay off the UI thread rather
                 // than queueing behind it for every tool call of every worker.
                 var result = await Task.Run(
-                    () => run.RunAsync(goal, repositoryRoot, solutionPath, testProjects, turn.Token), turn.Token);
+                    () => run.RunAsync(goal, repositoryRoot, solutionPath, testProjects, turn.Token, startFrom), turn.Token);
                 ThrowIfDetached(turn);
 
                 card.Finish(result);
@@ -180,6 +230,7 @@ public sealed partial class CopilotChatPaneViewModel
                 TotalCompletionTokens += result.CompletionTokens;
                 CurrentActivity = "Preparing the team's changes for review...";
                 await ProposeTeamResultAsync(run, result, assistantMessage, turn.Token);
+                await RefreshUltraStartOptionsAsync();
             }
         }
         catch (OperationCanceledException) when (turn.Token.IsCancellationRequested || !IsLive(turn))
@@ -415,6 +466,7 @@ public sealed partial class CopilotChatPaneViewModel
         StatusMessage = failed.Count == 0
             ? $"Deleted {branches.Count} branch{(branches.Count == 1 ? "" : "es")} from the Ultra run."
             : $"Could not delete: {string.Join(", ", failed)}.";
+        await RefreshUltraStartOptionsAsync();
     }
 
     /// <summary>What one Ultra run's workers have been allowed to run: exact command lines, or -

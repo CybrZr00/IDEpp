@@ -33,15 +33,65 @@ public sealed class UltraTeamRunTests : IDisposable
         runCommand: null,
         askToContinue);
 
-    private Task<UltraTeamResult> RunAsync(UltraTeamRun run, CancellationToken cancellationToken = default) =>
+    private Task<UltraTeamResult> RunAsync(UltraTeamRun run, CancellationToken cancellationToken = default, string? startFrom = null) =>
         run.RunAsync(
             "Make Class1.Value return 2.",
             _repo.RepositoryRoot,
             Path.Combine(_repo.RepositoryRoot, "Scratch.slnx"),
             [],
-            cancellationToken);
+            cancellationToken,
+            startFrom);
 
     private static string Worktree(UltraTeamRun run, string worker, string root) => Path.Combine(root, run.RunId, worker);
+
+    /// <summary>A branch off main with one more file, as an earlier run's team branch would be -
+    /// the repository is left on main with its files unchanged.</summary>
+    private void CreateEarlierBranch(string name, string relativePath, string content)
+    {
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "-c", name);
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, relativePath), content);
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "earlier work");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "main");
+    }
+
+    [Fact]
+    public async Task ARunStartedFromAnEarlierBranch_HasItsWorkInEveryWorktree_AndOffersItForReview()
+    {
+        CreateEarlierBranch("earlier", "Lib/Earlier.cs", "public class Earlier { }\n");
+        _client.Script("w1",
+            _client.Call(WorkspaceTools.ReadFileToolName, new { file = "Lib/Earlier.cs" }),
+            _client.Call(TeamTools.DoneToolName, new { summary = "it was already done" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10));
+
+        var result = await RunAsync(run, startFrom: "earlier");
+
+        run.StartedFrom.ShouldBe("earlier");
+        var requests = _client.Requests.Select(r => r.Messages).ToList();
+        requests[0][1].Content.ShouldContain("carries on from `earlier`");
+        requests[1].ShouldContain(m => m.Role == ChatRole.Tool && m.Content.Contains("class Earlier"));
+
+        // Compared against the user's tree, so the earlier branch's work is offered too.
+        result.Changes.ShouldContain(new TeamFileChange("Lib/Earlier.cs", TeamFileChangeKind.Added));
+        result.TeamBranchKept.ShouldBeTrue();
+        File.Exists(Path.Combine(_repo.RepositoryRoot, "Lib", "Earlier.cs")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ARunStartedFromABranchThatConflictsWithTheWorkingTree_IsRefusedBeforeAnythingIsCreated()
+    {
+        CreateEarlierBranch("earlier", "Lib/Class1.cs", "public class Class1\r\n{\r\n    public int Value => 2;\r\n}\r\n");
+        File.WriteAllText(
+            Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs"),
+            "public class Class1\r\n{\r\n    public int Value => 3;\r\n}\r\n");
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10));
+
+        var error = await Should.ThrowAsync<InvalidOperationException>(() => RunAsync(run, startFrom: "earlier"));
+
+        error.Message.ShouldContain("Lib/Class1.cs");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "branch", "--list", "ideplusplus/ultra/*").ShouldBeEmpty();
+        _client.Requests.ShouldBeEmpty();
+    }
 
     [Fact]
     public async Task ATeamThatFinishesTheGoal_EndsEarly_WithTheChangeOnTheTeamBranch_AndCleansUp()

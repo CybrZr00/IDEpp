@@ -231,6 +231,37 @@ public sealed class CopilotChatUltraTests : IDisposable
     });
 
     [Fact]
+    public void StartFrom_OffersEarlierTeamBranches_AndARunPickedFromOneCarriesOnFromIt() => RunOnUiThread(async () =>
+    {
+        var earlier = TeamGitWorkspace.GetTeamBranchName("earlier");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "-c", earlier);
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Earlier.cs"), "public class Earlier { }\n");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "an earlier run's work");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "main");
+        _http.Script = n => n == 1 ? ToolCall(TeamTools.DoneToolName, new { summary = "already there" }) : Text("done");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+
+        await viewModel.RefreshUltraStartOptionsAsync();
+        viewModel.UltraStartOptions.ShouldBe([CopilotChatPaneViewModel.WorkingTreeStartOption, earlier]);
+        viewModel.UltraStartFrom.ShouldBe(CopilotChatPaneViewModel.WorkingTreeStartOption);
+
+        viewModel.UltraStartFrom = earlier;
+        viewModel.InputText = "Carry on.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        // The body is JSON, which escapes the backticks around the branch name.
+        _http.FirstRequestBody.ShouldContain("carries on from");
+        _http.FirstRequestBody.ShouldContain(earlier);
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem().Header.ShouldContain($"carrying on from {earlier}");
+        viewModel.Messages.OfType<EditProposalViewModel>().ShouldHaveSingleItem().FilePath.Replace('\\', '/').ShouldBe("Lib/Earlier.cs");
+        // This run's own team branch is now on offer for the next one, newest first.
+        viewModel.UltraStartOptions.Count.ShouldBe(3);
+        viewModel.UltraStartOptions[2].ShouldBe(earlier);
+    });
+
+    [Fact]
     public void ComposeTeamGoal_CarriesTheRecentConversation_CappedAndLabelled()
     {
         var earlier = new List<CommunityToolkit.Mvvm.ComponentModel.ObservableObject>
