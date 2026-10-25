@@ -103,6 +103,20 @@ public sealed class OpenRouterChatClient : IChatClient
         }
     }
 
+    /// <summary>
+    /// OpenRouter's automatic prompt caching for Anthropic models: one top-level marker, which it
+    /// places on the last cacheable block and moves forward as the conversation grows. An agent loop
+    /// resends its whole history on every step, so every step after the first reads the earlier part
+    /// back from the cache at a fraction of the price - and an Ultra team does that for every worker.
+    /// Other providers cache matching prefixes on their own (OpenAI, DeepSeek) or ignore the field, so
+    /// it is only set where it does something; elsewhere it goes as JSON null, which OpenRouter treats
+    /// as absent - the same as <c>reasoning</c> at effort None.
+    /// </summary>
+    public static object? CacheControlFor(string model) =>
+        model.TrimStart('~').StartsWith("anthropic/", StringComparison.OrdinalIgnoreCase)
+            ? new { type = "ephemeral" }
+            : null;
+
     /// <summary>Split out from the HTTP call so the response-shape handling is unit-testable.</summary>
     public static IReadOnlyList<string> ParseModelIds(string json, bool toolCapableOnly)
     {
@@ -149,6 +163,7 @@ public sealed class OpenRouterChatClient : IChatClient
             tools = tools is { Count: > 0 } ? tools.Select(OpenAiCompatibleChat.ToToolSchema) : null,
             tool_choice = OpenAiCompatibleChat.ToToolChoice(tools),
             reasoning = OpenAiCompatibleChat.ToReasoningParameter(effort),
+            cache_control = CacheControlFor(model),
         });
 
         try

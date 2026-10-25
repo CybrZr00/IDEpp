@@ -30,6 +30,21 @@ public class SseStreamEndingTests
         return events;
     }
 
+    /// <summary>How much of a prompt came from the provider's cache, in both shapes seen: OpenAI's
+    /// (which OpenRouter uses for every provider) and DeepSeek's own.</summary>
+    [Theory]
+    [InlineData("""{"prompt_tokens":1000,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":800}}""", 800)]
+    [InlineData("""{"prompt_tokens":1000,"completion_tokens":50,"prompt_cache_hit_tokens":600,"prompt_cache_miss_tokens":400}""", 600)]
+    [InlineData("""{"prompt_tokens":1000,"completion_tokens":50}""", 0)]
+    public async Task Usage_ReportsCachedPromptTokens(string usage, int cached)
+    {
+        var events = await Read(Sse(TextChunk, StopChunk, $$"""data: {"choices":[],"usage":{{usage}}}""", "data: [DONE]"));
+
+        var reported = events.OfType<UsageReceived>().ShouldHaveSingleItem();
+        reported.PromptTokens.ShouldBe(1000);
+        reported.CachedPromptTokens.ShouldBe(cached);
+    }
+
     [Fact]
     public async Task ACompleteReply_ProducesNoError()
     {

@@ -223,7 +223,11 @@ public static class OpenAiCompatibleChat
         {
             yield return new UsageReceived(
                 usage["prompt_tokens"]?.GetValue<int>() ?? 0,
-                usage["completion_tokens"]?.GetValue<int>() ?? 0);
+                usage["completion_tokens"]?.GetValue<int>() ?? 0,
+                // OpenAI's shape (OpenRouter reports every provider in it), then DeepSeek's own field.
+                usage["prompt_tokens_details"]?["cached_tokens"]?.GetValue<int>()
+                ?? usage["prompt_cache_hit_tokens"]?.GetValue<int>()
+                ?? 0);
         }
 
         // The usage-bearing chunk (see above) carries an empty choices array - JsonArray's indexer

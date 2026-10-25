@@ -155,6 +155,26 @@ public class OpenRouterChatClientTests
         handler.LastRequestBody.ShouldNotBeNull().ShouldContain("\"tool_choice\":\"auto\"");
     }
 
+    /// <summary>An agent loop resends its whole history each step; with the marker, Anthropic serves
+    /// the earlier part from its cache. Other models cache on their own, so they get no marker.</summary>
+    [Theory]
+    [InlineData("anthropic/claude-sonnet-4.5", true)]
+    [InlineData("~anthropic/claude-sonnet-latest", true)]
+    [InlineData("openai/gpt-5", false)]
+    [InlineData("deepseek/deepseek-chat", false)]
+    public async Task StreamChatAsync_AsksAnthropicModelsToCacheThePrompt(string model, bool cached)
+    {
+        var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, "data: [DONE]\n\n");
+        var client = new OpenRouterChatClient(new HttpClient(handler), NewSettingsStoreWithApiKey());
+
+        await foreach (var _ in client.StreamChatAsync(OneUserMessage, model))
+        {
+        }
+
+        handler.LastRequestBody.ShouldNotBeNull().ShouldContain(
+            cached ? "\"cache_control\":{\"type\":\"ephemeral\"}" : "\"cache_control\":null");
+    }
+
     [Fact]
     public async Task StreamChatAsync_WithNoTools_SendsNullToolChoice()
     {
