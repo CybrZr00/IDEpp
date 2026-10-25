@@ -61,6 +61,35 @@ public class OpenAiCompatibleChatTests
         json.GetProperty("content").GetString().ShouldBe("Let me check that for you.");
     }
 
+    [Fact]
+    public void ToReasoningParameter_None_OmitsTheField()
+    {
+        OpenAiCompatibleChat.ToReasoningParameter(ChatEffort.None).ShouldBeNull();
+    }
+
+    /// <summary>Every value but None has to send something: the switch falls through to null, so a
+    /// newly added effort that nobody mapped would otherwise quietly send no reasoning at all.</summary>
+    [Theory]
+    [InlineData(ChatEffort.Low, "low")]
+    [InlineData(ChatEffort.Medium, "medium")]
+    [InlineData(ChatEffort.High, "high")]
+    [InlineData(ChatEffort.Ultra, "high")]
+    public void ToReasoningParameter_SendsTheMappedEffort(ChatEffort effort, string expected)
+    {
+        var json = Serialize(OpenAiCompatibleChat.ToReasoningParameter(effort)!);
+
+        json.GetProperty("effort").GetString().ShouldBe(expected);
+    }
+
+    [Fact]
+    public void ToReasoningParameter_EveryEffortButNoneIsMapped()
+    {
+        foreach (var effort in Enum.GetValues<ChatEffort>().Where(e => e != ChatEffort.None))
+        {
+            OpenAiCompatibleChat.ToReasoningParameter(effort).ShouldNotBeNull($"{effort} has no reasoning mapping");
+        }
+    }
+
     private static JsonElement Serialize(object message) =>
         JsonDocument.Parse(JsonSerializer.Serialize(message)).RootElement;
 }

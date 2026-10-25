@@ -43,13 +43,14 @@ public static class OpenAiCompatibleChat
 
     /// <summary>
     /// Null (rather than an empty/default object) when effort is None, so the request body omits
-    /// the field entirely instead of sending an opinion the user never expressed.
+    /// the field entirely instead of sending an opinion the user never expressed. Ultra is High on
+    /// the wire - what makes it Ultra is how many workers send requests, not any one request.
     /// </summary>
     public static object? ToReasoningParameter(ChatEffort effort) => effort switch
     {
         ChatEffort.Low => new { effort = "low" },
         ChatEffort.Medium => new { effort = "medium" },
-        ChatEffort.High => new { effort = "high" },
+        ChatEffort.High or ChatEffort.Ultra => new { effort = "high" },
         _ => null,
     };
 

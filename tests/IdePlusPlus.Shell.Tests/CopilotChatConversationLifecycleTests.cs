@@ -168,6 +168,21 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         HistoryText(_directoryB).ShouldNotContain("Rename Foo");
     });
 
+    /// <summary>Ultra was appended to ChatEffort rather than inserted, so it has to survive the same
+    /// name-based save/restore the other levels do - and be offered in the picker at all.</summary>
+    [Fact]
+    public void UltraEffort_IsOfferedAndSurvivesARestart() => RunOnUiThread(() =>
+    {
+        var first = CreateViewModel();
+        first.AvailableEfforts.ShouldContain(ChatEffort.Ultra);
+        first.SelectedEffort = ChatEffort.Ultra;
+
+        var second = CreateViewModel();
+
+        second.SelectedEffort.ShouldBe(ChatEffort.Ultra);
+        return Task.CompletedTask;
+    });
+
     /// <summary>A turn that doesn't stop when asked (a tool ignoring cancellation) is cut loose at the
     /// switch, and whatever it does afterwards reaches neither the new solution's conversation nor its
     /// saved history.</summary>

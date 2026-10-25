@@ -12,4 +12,13 @@ public enum ChatEffort
     Low,
     Medium,
     High,
+
+    /// <summary>
+    /// High reasoning on every request, and the chat pane runs a send as an Ultra team - several
+    /// workers in their own git worktrees, coordinating through a shared board (see
+    /// IdePlusPlus.Copilot.Core.Team). Last so a persisted "ChatEffort" setting written before it
+    /// existed still parses to the same value. Anywhere that only sends one request - sub-agents,
+    /// Review Last Change - treats it as High.
+    /// </summary>
+    Ultra,
 }

@@ -312,7 +312,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio];
 
-    public IReadOnlyList<ChatEffort> AvailableEfforts { get; } = [ChatEffort.None, ChatEffort.Low, ChatEffort.Medium, ChatEffort.High];
+    public IReadOnlyList<ChatEffort> AvailableEfforts { get; } =
+        [ChatEffort.None, ChatEffort.Low, ChatEffort.Medium, ChatEffort.High, ChatEffort.Ultra];
 
     [ObservableProperty]
     private string selectedProvider;
