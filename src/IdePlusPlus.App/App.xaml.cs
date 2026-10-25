@@ -373,6 +373,7 @@ public partial class App : Application
         services.AddSingleton(sp => new OpenRouterChatClient(modelHttpClient, sp.GetRequiredService<SecureSettingsStore>()));
         services.AddSingleton(sp => new LmStudioChatClient(
             modelHttpClient, sp.GetRequiredService<AppSettingsStore>(), sp.GetRequiredService<SecureSettingsStore>()));
+        services.AddSingleton(sp => new DeepSeekChatClient(modelHttpClient, sp.GetRequiredService<SecureSettingsStore>()));
         services.AddSingleton<McpServerConfigStore>();
         services.AddSingleton<McpProjectTrustStore>();
         services.AddSingleton<HookService>();

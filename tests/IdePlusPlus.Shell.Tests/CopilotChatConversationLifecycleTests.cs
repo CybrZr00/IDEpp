@@ -4,6 +4,7 @@ using System.Text;
 using System.Windows.Threading;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
@@ -103,6 +104,7 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         return new CopilotChatPaneViewModel(
             new OpenRouterChatClient(httpClient, secrets),
             new LmStudioChatClient(httpClient, appSettings, secrets),
+            new DeepSeekChatClient(httpClient, secrets),
             appSettings,
             editService,
             new ProjectMemoryStore(),
@@ -180,6 +182,27 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var second = CreateViewModel();
 
         second.SelectedEffort.ShouldBe(ChatEffort.Ultra);
+        return Task.CompletedTask;
+    });
+
+    [Fact]
+    public void DeepSeek_IsOfferedAsAProvider_WithItsOwnDefaultModel_AndIsRemembered() => RunOnUiThread(() =>
+    {
+        var first = CreateViewModel();
+        first.AvailableProviders.ShouldContain(CopilotChatPaneViewModel.ProviderDeepSeek);
+
+        first.SelectedProvider = CopilotChatPaneViewModel.ProviderDeepSeek;
+        first.SelectedModel.ShouldBe(DeepSeekChatClient.DefaultModel);
+        first.SelectedModel = "deepseek-v4-pro";
+
+        // Switching away and back restores DeepSeek's own model, not OpenRouter's.
+        first.SelectedProvider = CopilotChatPaneViewModel.ProviderOpenRouter;
+        first.SelectedProvider = CopilotChatPaneViewModel.ProviderDeepSeek;
+        first.SelectedModel.ShouldBe("deepseek-v4-pro");
+
+        var second = CreateViewModel();
+        second.SelectedProvider.ShouldBe(CopilotChatPaneViewModel.ProviderDeepSeek);
+        second.SelectedModel.ShouldBe("deepseek-v4-pro");
         return Task.CompletedTask;
     });
 

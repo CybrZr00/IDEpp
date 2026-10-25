@@ -4,6 +4,7 @@ using System.Text;
 using System.Windows.Threading;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
@@ -219,6 +220,7 @@ public sealed class CopilotChatTurnEndingTests : IDisposable
         return new CopilotChatPaneViewModel(
             new OpenRouterChatClient(httpClient, secrets),
             new LmStudioChatClient(httpClient, appSettings, secrets),
+            new DeepSeekChatClient(httpClient, secrets),
             appSettings,
             editService,
             new ProjectMemoryStore(),

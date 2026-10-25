@@ -140,7 +140,7 @@ public sealed partial class CopilotChatPaneViewModel
                     AreShellCommandsEnabled,
                     _currentConfiguration?.Invoke() ?? "Debug",
                     ChatEffort.Ultra);
-                IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+                IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();
                 TeamRunViewModel? runCard = null;
                 var run = new UltraTeamRun(

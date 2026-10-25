@@ -101,14 +101,15 @@ public sealed class HeadlessAgentLoop
             {
                 // Kept in the history too, so a caller continuing the conversation sends the model its
                 // own last reply rather than a gap where it should be.
-                history.Add(new ChatMessage(ChatRole.Assistant, turn.Text));
+                history.Add(new ChatMessage(ChatRole.Assistant, turn.Text, ReasoningContent: turn.Reasoning));
                 return new HeadlessRunResult(finalText, iteration + 1, toolCallCount, HitIterationCap: false, promptTokens, completionTokens);
             }
 
             history.Add(new ChatMessage(
                 ChatRole.Assistant,
                 turn.Text,
-                ToolCalls: turn.Calls.Select(c => new ChatToolCall(c.Id, c.Name, c.ArgumentsJson)).ToList()));
+                ToolCalls: turn.Calls.Select(c => new ChatToolCall(c.Id, c.Name, c.ArgumentsJson)).ToList(),
+                ReasoningContent: turn.Reasoning));
 
             foreach (var call in turn.Calls)
             {
@@ -142,6 +143,7 @@ public sealed class HeadlessAgentLoop
     private async Task<TurnResult> StreamOneTurnAsync(List<ChatMessage> history, CancellationToken cancellationToken)
     {
         var text = new StringBuilder();
+        var reasoning = new StringBuilder();
         var callsByIndex = new Dictionary<int, PendingCall>();
         var promptTokens = 0;
         var completionTokens = 0;
@@ -153,6 +155,10 @@ public sealed class HeadlessAgentLoop
             {
                 case TextDelta delta:
                     text.Append(delta.Text);
+                    break;
+
+                case ReasoningDelta reasoningDelta:
+                    reasoning.Append(reasoningDelta.Text);
                     break;
 
                 case ToolCallDelta toolCallDelta:
@@ -199,10 +205,12 @@ public sealed class HeadlessAgentLoop
             .Select(c => new ResolvedCall(c.EffectiveId, c.Name!, c.Arguments.ToString()))
             .ToList();
 
-        return new TurnResult(text.ToString(), calls, promptTokens, completionTokens);
+        return new TurnResult(
+            text.ToString(), reasoning.Length == 0 ? null : reasoning.ToString(), calls, promptTokens, completionTokens);
     }
 
-    private sealed record TurnResult(string Text, List<ResolvedCall> Calls, int PromptTokens, int CompletionTokens);
+    private sealed record TurnResult(
+        string Text, string? Reasoning, List<ResolvedCall> Calls, int PromptTokens, int CompletionTokens);
 
     private sealed record ResolvedCall(string Id, string Name, string ArgumentsJson);
 

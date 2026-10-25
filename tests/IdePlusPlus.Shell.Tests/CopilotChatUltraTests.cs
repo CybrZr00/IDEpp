@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows.Threading;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
@@ -268,6 +269,7 @@ public sealed class CopilotChatUltraTests : IDisposable
         var viewModel = new CopilotChatPaneViewModel(
             new OpenRouterChatClient(httpClient, secrets),
             new LmStudioChatClient(httpClient, appSettings, secrets),
+            new DeepSeekChatClient(httpClient, secrets),
             appSettings,
             editService,
             new ProjectMemoryStore(),

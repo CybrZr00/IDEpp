@@ -175,6 +175,23 @@ public class HeadlessAgentLoopTests
         lastRequest[4].Content.ShouldBe("first done");
     }
 
+    /// <summary>DeepSeek in thinking mode refuses a tool-using request whose earlier assistant
+    /// messages have lost their reasoning, so the loop keeps it with each one.</summary>
+    [Fact]
+    public async Task RunAsync_KeepsEachAssistantMessagesReasoningInTheHistory()
+    {
+        var client = new FakeChatClient(
+            [new ReasoningDelta("I should "), new ReasoningDelta("read it"), ToolCall(0, "call-1", "read_file", "{}")],
+            [new ReasoningDelta("done"), new TextDelta("It is empty.")]);
+        var loop = new HeadlessAgentLoop(client, "model-x", ChatEffort.High, [], (_, _, _) => Task.FromResult((false, "class Foo {}")));
+        var history = new List<ChatMessage> { new(ChatRole.System, "system"), new(ChatRole.User, "look") };
+
+        await loop.RunAsync(history, maxIterations: 5, CancellationToken.None);
+
+        client.Requests[1].Single(m => m.Role == ChatRole.Assistant).ReasoningContent.ShouldBe("I should read it");
+        history[^1].ReasoningContent.ShouldBe("done");
+    }
+
     [Fact]
     public async Task RunAsync_AppendsDrainedNoticesToEachToolResult()
     {

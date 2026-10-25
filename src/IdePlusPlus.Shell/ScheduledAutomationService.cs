@@ -1,4 +1,5 @@
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
@@ -42,6 +43,7 @@ public sealed class ScheduledAutomationService : IDisposable
     private readonly ScheduleStore _scheduleStore;
     private readonly OpenRouterChatClient _openRouterClient;
     private readonly LmStudioChatClient _lmStudioClient;
+    private readonly DeepSeekChatClient _deepSeekClient;
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly Timer _timer;
 
@@ -66,12 +68,14 @@ public sealed class ScheduledAutomationService : IDisposable
         ScheduleStore scheduleStore,
         OpenRouterChatClient openRouterClient,
         LmStudioChatClient lmStudioClient,
+        DeepSeekChatClient deepSeekClient,
         ReadOnlyToolDispatcher readOnlyToolDispatcher)
     {
         _appSettingsStore = appSettingsStore;
         _scheduleStore = scheduleStore;
         _openRouterClient = openRouterClient;
         _lmStudioClient = lmStudioClient;
+        _deepSeekClient = deepSeekClient;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
         _timer = new Timer(_ => _ = TickAsync(), null, TickInterval, TickInterval);
     }
@@ -194,7 +198,12 @@ public sealed class ScheduledAutomationService : IDisposable
 
     private async Task RunScheduleAsync(string solutionDirectory, ScheduleDefinition schedule, CancellationToken cancellationToken)
     {
-        IChatClient client = schedule.Provider == CopilotChatPaneViewModel.ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+        IChatClient client = schedule.Provider switch
+        {
+            CopilotChatPaneViewModel.ProviderLmStudio => _lmStudioClient,
+            CopilotChatPaneViewModel.ProviderDeepSeek => _deepSeekClient,
+            _ => _openRouterClient,
+        };
         var loop = new HeadlessAgentLoop(
             client,
             schedule.Model,

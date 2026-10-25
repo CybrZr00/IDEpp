@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
@@ -37,10 +38,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     // second pair of magic strings that could drift out of sync with these.
     public const string ProviderOpenRouter = "OpenRouter";
     public const string ProviderLmStudio = "LM Studio";
+    public const string ProviderDeepSeek = "DeepSeek";
 
     private const string ProviderSettingKey = "ChatProvider";
     private const string OpenRouterModelSettingKey = "OpenRouterChatModel";
     private const string LmStudioModelSettingKey = "LmStudioChatModel";
+    private const string DeepSeekModelSettingKey = "DeepSeekChatModel";
     private const string EffortSettingKey = "ChatEffort";
     private const string AutoModeSettingKey = "ChatAutoMode";
     private const string ShellCommandsSettingKey = "ChatShellCommands";
@@ -169,6 +172,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private readonly OpenRouterChatClient _openRouterClient;
     private readonly LmStudioChatClient _lmStudioClient;
+    private readonly DeepSeekChatClient _deepSeekClient;
     private readonly AppSettingsStore _appSettingsStore;
     private readonly EditApplicationService _editApplicationService;
     private readonly ProjectMemoryStore _projectMemoryStore;
@@ -239,6 +243,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     public CopilotChatPaneViewModel(
         OpenRouterChatClient openRouterClient,
         LmStudioChatClient lmStudioClient,
+        DeepSeekChatClient deepSeekClient,
         AppSettingsStore appSettingsStore,
         EditApplicationService editApplicationService,
         ProjectMemoryStore projectMemoryStore,
@@ -261,6 +266,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         _openRouterClient = openRouterClient;
         _lmStudioClient = lmStudioClient;
+        _deepSeekClient = deepSeekClient;
         _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
         _workspaceFileReader = workspaceFileReader;
@@ -283,7 +289,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
         Messages.CollectionChanged += (_, _) => NewConversationCommand.NotifyCanExecuteChanged();
 
-        selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is ProviderLmStudio ? ProviderLmStudio : ProviderOpenRouter;
+        selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is { } savedProvider && AvailableProviders.Contains(savedProvider)
+            ? savedProvider
+            : ProviderOpenRouter;
         selectedModel = ModelSettingFor(selectedProvider) ?? DefaultModelFor(selectedProvider);
         selectedEffort = Enum.TryParse<ChatEffort>(_appSettingsStore.Get(EffortSettingKey), out var savedEffort)
             ? savedEffort
@@ -310,7 +318,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// longer existed on OpenRouter at all, so picking it could only fail).</summary>
     public ObservableCollection<string> AvailableModels { get; }
 
-    public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio];
+    public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio, ProviderDeepSeek];
+
+    /// <summary>The chat client for the selected provider - the one place that maps a provider name to
+    /// a client, so a new provider cannot be wired into some calls and not others.</summary>
+    private IChatClient CurrentChatClient => SelectedProvider switch
+    {
+        ProviderLmStudio => _lmStudioClient,
+        ProviderDeepSeek => _deepSeekClient,
+        _ => _openRouterClient,
+    };
 
     public IReadOnlyList<ChatEffort> AvailableEfforts { get; } =
         [ChatEffort.None, ChatEffort.Low, ChatEffort.Medium, ChatEffort.High, ChatEffort.Ultra];
@@ -728,7 +745,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             switch (message)
             {
                 case ChatMessageViewModel chatMessage:
-                    history.Add(new ChatMessage(chatMessage.Role, chatMessage.Text));
+                    history.Add(new ChatMessage(chatMessage.Role, chatMessage.Text, ReasoningContent: ReasoningOf(chatMessage)));
                     break;
 
                 case EditProposalViewModel { IsComplete: true } proposal:
@@ -751,6 +768,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         return history;
     }
+
+    /// <summary>Kept with the message so a provider that needs earlier reasoning sent back (DeepSeek
+    /// in thinking mode) gets it; the others' clients leave it out of the request.</summary>
+    private static string? ReasoningOf(ChatMessageViewModel message) =>
+        message.HasReasoning ? message.ReasoningText : null;
 
     /// <summary>The solution's test projects, so run_tests can default to all of them. Detected
     /// during solution load (see TestProjectDetector); the chat pane never sees the solution tree
@@ -1096,7 +1118,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                             p.ToolCallId, ProposeEditTool.ToolName, p.ArgumentsJson ?? "{}")))
                         .ToList();
 
-                    history.Add(new ChatMessage(ChatRole.Assistant, assistantMessage.Text, ToolCalls: toolCalls));
+                    history.Add(new ChatMessage(
+                        ChatRole.Assistant, assistantMessage.Text, ToolCalls: toolCalls, ReasoningContent: ReasoningOf(assistantMessage)));
 
                     foreach (var call in result.Calls)
                     {
@@ -1941,7 +1964,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         // Read once: the sub-agents run on the thread pool and outlive any single check of the field.
         var solutionDirectory = _solutionDirectory;
-        IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+        IChatClient client = CurrentChatClient;
         using var concurrencyLimit = new SemaphoreSlim(SubAgentTools.MaxConcurrency);
 
         var runs = tasks.Select(async task =>
@@ -2032,7 +2055,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
         tools.AddRange(_pluginChatToolRegistry.GetToolDefinitions());
 
-        IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+        IChatClient client = CurrentChatClient;
 
         await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, SelectedEffort, turn.Token))
         {
@@ -2597,7 +2620,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     + $"--- DIFF TO REVIEW ---\n{ToolReports.Cap(diff, GitTools.MaxOutputChars, "diff")}"),
             };
 
-            IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+            IChatClient client = CurrentChatClient;
 
             await foreach (var streamEvent in client.StreamChatAsync(
                 reviewHistory, SelectedModel, tools: null, SelectedEffort, turn.Token))
@@ -2706,10 +2729,21 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
-    private string? ModelSettingFor(string provider) =>
-        _appSettingsStore.Get(provider == ProviderLmStudio ? LmStudioModelSettingKey : OpenRouterModelSettingKey);
+    private string? ModelSettingFor(string provider) => _appSettingsStore.Get(ModelSettingKeyFor(provider));
 
-    private static string DefaultModelFor(string provider) => provider == ProviderLmStudio ? "" : "anthropic/claude-sonnet-4.5";
+    private static string ModelSettingKeyFor(string provider) => provider switch
+    {
+        ProviderLmStudio => LmStudioModelSettingKey,
+        ProviderDeepSeek => DeepSeekModelSettingKey,
+        _ => OpenRouterModelSettingKey,
+    };
+
+    private static string DefaultModelFor(string provider) => provider switch
+    {
+        ProviderLmStudio => "",
+        ProviderDeepSeek => DeepSeekChatClient.DefaultModel,
+        _ => "anthropic/claude-sonnet-4.5",
+    };
 
     /// <summary>
     /// Repopulates the model picker from the current provider's /models endpoint. OpenRouter's list
@@ -2728,9 +2762,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         IsRefreshingModels = true;
         try
         {
-            var models = provider == ProviderLmStudio
-                ? await _lmStudioClient.GetAvailableModelsAsync()
-                : await _openRouterClient.GetAvailableModelsAsync();
+            var models = provider switch
+            {
+                ProviderLmStudio => await _lmStudioClient.GetAvailableModelsAsync(),
+                ProviderDeepSeek => await _deepSeekClient.GetAvailableModelsAsync(),
+                _ => await _openRouterClient.GetAvailableModelsAsync(),
+            };
 
             // The user can switch providers while a fetch is in flight; dropping the stale result
             // avoids briefly showing (or auto-selecting) the other provider's models.
@@ -2741,9 +2778,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
             if (models.Count == 0)
             {
-                StatusMessage = provider == ProviderLmStudio
-                    ? "Couldn't reach LM Studio - check the base URL in Tools > Settings and that it's running."
-                    : "Couldn't fetch the model list from OpenRouter - you can still type a model id directly.";
+                StatusMessage = provider switch
+                {
+                    ProviderLmStudio => "Couldn't reach LM Studio - check the base URL in Tools > Settings and that it's running.",
+                    ProviderDeepSeek => "Couldn't fetch DeepSeek's model list - check the DeepSeek API key in Tools > Settings. "
+                                        + "You can still type a model id directly.",
+                    _ => "Couldn't fetch the model list from OpenRouter - you can still type a model id directly.",
+                };
                 return;
             }
 
@@ -2776,7 +2817,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     partial void OnSelectedModelChanged(string value) =>
-        _appSettingsStore.Set(SelectedProvider == ProviderLmStudio ? LmStudioModelSettingKey : OpenRouterModelSettingKey, value);
+        _appSettingsStore.Set(ModelSettingKeyFor(SelectedProvider), value);
 
     partial void OnSelectedEffortChanged(ChatEffort value) => _appSettingsStore.Set(EffortSettingKey, value.ToString());
 
