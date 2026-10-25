@@ -63,6 +63,10 @@ public sealed partial class TeamGitWorkspace
     /// intact. The commit stays unreferenced until the caller points a branch at it. HEAD is resolved
     /// once and used both to seed the index and as the parent, so a commit the user makes mid-snapshot
     /// can't leave the two disagreeing. In a repo with no commits yet, the snapshot has no parent.
+    ///
+    /// Untracked .ideplusplus folders are left out: they hold the IDE's own state (chat history, the
+    /// embeddings index - often megabytes), which is nothing a team should start from or merge, and
+    /// a repository that never thought to ignore them would otherwise copy them into the snapshot.
     /// </summary>
     public async Task<string> CreateSnapshotCommitAsync(string repoRoot, CancellationToken cancellationToken = default)
     {
@@ -79,7 +83,8 @@ public sealed partial class TeamGitWorkspace
                 await RunOrThrowAsync(repoRoot, ["read-tree", head], cancellationToken, environment);
             }
 
-            await RunOrThrowAsync(repoRoot, ["add", "-A"], cancellationToken, environment);
+            await RunOrThrowAsync(
+                repoRoot, ["add", "-A", "--", ".", ":(exclude,glob)**/.ideplusplus/**"], cancellationToken, environment);
             var tree = (await RunOrThrowAsync(repoRoot, ["write-tree"], cancellationToken, environment)).Trim();
 
             List<string> commitTree =

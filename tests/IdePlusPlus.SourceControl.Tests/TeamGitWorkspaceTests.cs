@@ -125,6 +125,23 @@ public sealed class TeamGitWorkspaceTests : IDisposable
         RunGit("status", "--porcelain").Trim().ShouldBe("?? first.txt");
     }
 
+    [Fact]
+    public async Task CreateSnapshotCommitAsync_LeavesOutTheIdesOwnUntrackedStateFolders()
+    {
+        WriteFile("code.cs", "class A { }");
+        RunGit("add", "-A");
+        RunGit("commit", "-m", "Initial commit");
+        Directory.CreateDirectory(Path.Combine(_repositoryDirectory, ".ideplusplus", "copilot"));
+        Directory.CreateDirectory(Path.Combine(_repositoryDirectory, "src", "App", ".ideplusplus", "copilot"));
+        WriteFile(".ideplusplus/copilot/chat-history.json", "[]");
+        WriteFile("src/App/.ideplusplus/copilot/embeddings.json", "{}");
+        WriteFile("new.cs", "class B { }");
+
+        var snapshot = await _workspace.CreateSnapshotCommitAsync(_repositoryDirectory);
+
+        TreeFiles(snapshot).ShouldBe(["code.cs", "new.cs"], ignoreOrder: true);
+    }
+
     // --- Worktrees, commits and merges between workers ---
 
     [Fact]
