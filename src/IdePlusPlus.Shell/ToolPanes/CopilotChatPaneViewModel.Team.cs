@@ -160,9 +160,8 @@ public sealed partial class CopilotChatPaneViewModel
                         }
                     }).Task.Unwrap());
 
-                var teamBranch = TeamGitWorkspace.GetTeamBranchName(run.RunId);
                 card = new TeamRunViewModel(
-                    run, SelectedProvider == ProviderLmStudio, () => DiscardTeamBranchAsync(repositoryRoot, teamBranch));
+                    run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches));
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
@@ -354,7 +353,9 @@ public sealed partial class CopilotChatPaneViewModel
         var summaries = result.Board.Where(e => e.Type == TeamBoardEntryType.PatchSummary).ToList();
         if (summaries.Count > 0)
         {
-            text.Append("\nWhat the workers merged:\n");
+            // Their own PATCH_SUMMARY entries: what each worker said it did, which on a run whose
+            // merge gate kept refusing is not the same as what reached the team branch.
+            text.Append("\nWhat the workers reported:\n");
             foreach (var entry in summaries)
             {
                 text.Append($"- {entry.Author}: {entry.Text}\n");
@@ -368,6 +369,22 @@ public sealed partial class CopilotChatPaneViewModel
             {
                 text.Append($"- {line}\n");
             }
+        }
+
+        if (result.KeptWorkerBranches.Count > 0)
+        {
+            text.Append("\nWork that never reached the team branch is kept on these worker branches (nothing in "
+                        + "them is offered for review above):\n");
+            foreach (var branch in result.KeptWorkerBranches)
+            {
+                text.Append($"- `{branch}`\n");
+            }
+        }
+
+        if (result.TeamBranchKept)
+        {
+            text.Append($"\nTo carry on from this run, choose `{result.TeamBranch}` under Start from before sending the "
+                        + "next Ultra message.\n");
         }
 
         text.Append("\nWorkers:\n");
@@ -384,10 +401,20 @@ public sealed partial class CopilotChatPaneViewModel
     private static bool SameText(string a, string b) =>
         string.Equals(a.Replace("\r\n", "\n"), b.Replace("\r\n", "\n"), StringComparison.Ordinal);
 
-    private async Task DiscardTeamBranchAsync(string repositoryRoot, string teamBranch)
+    private async Task DeleteRunBranchesAsync(string repositoryRoot, IReadOnlyList<string> branches)
     {
-        var result = await _teamGit.DeleteBranchAsync(repositoryRoot, teamBranch);
-        StatusMessage = result.Success ? $"Deleted {teamBranch}." : $"Could not delete {teamBranch}: {result.Output}";
+        var failed = new List<string>();
+        foreach (var branch in branches)
+        {
+            if (!(await _teamGit.DeleteBranchAsync(repositoryRoot, branch)).Success)
+            {
+                failed.Add(branch);
+            }
+        }
+
+        StatusMessage = failed.Count == 0
+            ? $"Deleted {branches.Count} branch{(branches.Count == 1 ? "" : "es")} from the Ultra run."
+            : $"Could not delete: {string.Join(", ", failed)}.";
     }
 
     /// <summary>What one Ultra run's workers have been allowed to run: exact command lines, or -

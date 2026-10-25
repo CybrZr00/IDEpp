@@ -32,12 +32,15 @@ public sealed partial class TeamRunViewModel : ObservableObject
 
     private readonly UltraTeamRun _run;
     private readonly DispatcherTimer _timer;
-    private readonly Func<Task>? _discardBranch;
+    private readonly Func<IReadOnlyList<string>, Task>? _discardBranches;
+    private IReadOnlyList<string> _keptBranches = [];
 
-    public TeamRunViewModel(UltraTeamRun run, bool isLocalProvider, Func<Task>? discardBranch)
+    /// <param name="discardBranches">Deletes the given branches - the run's team branch and any kept
+    /// worker branches - once the user has finished with them. Null hides the button.</param>
+    public TeamRunViewModel(UltraTeamRun run, bool isLocalProvider, Func<IReadOnlyList<string>, Task>? discardBranches)
     {
         _run = run;
-        _discardBranch = discardBranch;
+        _discardBranches = discardBranches;
         Workers = new ObservableCollection<TeamWorkerRowViewModel>(run.Workers.Select(w => new TeamWorkerRowViewModel(w.Name)));
         Header = $"⚡ Ultra team - {run.Workers.Count} worker{(run.Workers.Count == 1 ? "" : "s")}";
         LocalProviderWarning = isLocalProvider
@@ -72,9 +75,11 @@ public sealed partial class TeamRunViewModel : ObservableObject
     [ObservableProperty]
     private string? outcomeText;
 
+    /// <summary>What the run left on branches - the team branch, and worker branches holding work
+    /// that never reached it - or null once nothing is left.</summary>
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(DiscardBranchCommand))]
-    private string? keptBranch;
+    [NotifyCanExecuteChangedFor(nameof(DiscardBranchesCommand))]
+    private string? keptBranchesText;
 
     /// <summary>Set while the run's time is up and it waits for the user: keep going for another
     /// round, or finish and review what was merged.</summary>
@@ -131,7 +136,13 @@ public sealed partial class TeamRunViewModel : ObservableObject
             UltraTeamEndReason.Cancelled => "Stopped.",
             _ => "Stopped - no worker was still making progress.",
         };
-        KeptBranch = result.TeamBranchKept && _discardBranch is not null ? result.TeamBranch : null;
+        _keptBranches = [.. result.TeamBranchKept ? [result.TeamBranch] : Array.Empty<string>(), .. result.KeptWorkerBranches];
+        KeptBranchesText = _keptBranches.Count == 0 || _discardBranches is null
+            ? null
+            : result.KeptWorkerBranches.Count == 0
+                ? $"Kept: {result.TeamBranch}"
+                : $"Kept: {(result.TeamBranchKept ? "the team branch and " : "")}{result.KeptWorkerBranches.Count} worker "
+                  + $"branch{(result.KeptWorkerBranches.Count == 1 ? "" : "es")} with unmerged work";
     }
 
     public void Abandon(string why)
@@ -141,19 +152,19 @@ public sealed partial class TeamRunViewModel : ObservableObject
         OutcomeText = why;
     }
 
-    private bool CanDiscardBranch() => KeptBranch is not null;
+    private bool CanDiscardBranches() => KeptBranchesText is not null;
 
-    [RelayCommand(CanExecute = nameof(CanDiscardBranch))]
-    private async Task DiscardBranchAsync()
+    [RelayCommand(CanExecute = nameof(CanDiscardBranches))]
+    private async Task DiscardBranchesAsync()
     {
-        if (_discardBranch is null)
+        if (_discardBranches is null)
         {
             return;
         }
 
-        await _discardBranch();
-        OutcomeText += " Team branch deleted.";
-        KeptBranch = null;
+        await _discardBranches(_keptBranches);
+        OutcomeText += " The run's branches were deleted.";
+        KeptBranchesText = null;
     }
 
     private void Refresh()

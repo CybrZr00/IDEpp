@@ -44,7 +44,8 @@ public enum UltraTeamEndReason
 }
 
 /// <summary>What a finished run leaves behind. The team branch is kept (when anything was merged)
-/// until the result is applied or discarded; worker worktrees and branches are already gone.</summary>
+/// until the result is applied or discarded. Worker worktrees are gone; a worker's branch is gone
+/// too unless it held work the team branch does not - those are listed in KeptWorkerBranches.</summary>
 public sealed record UltraTeamResult(
     string RunId,
     string RepositoryRoot,
@@ -56,7 +57,8 @@ public sealed record UltraTeamResult(
     IReadOnlyList<TeamWorkerState> Workers,
     IReadOnlyList<TeamBoardEntry> Board,
     int PromptTokens,
-    int CompletionTokens);
+    int CompletionTokens,
+    IReadOnlyList<string> KeptWorkerBranches);
 
 /// <summary>
 /// Runs one Ultra team: snapshots the user's working tree, gives each worker its own worktree and
@@ -75,6 +77,9 @@ public sealed record UltraTeamResult(
 public sealed class UltraTeamRun
 {
     private const int MaxConsecutiveIdleCycles = 3;
+
+    private const string UnfinishedWorkCommitMessage =
+        "Uncommitted work when the Ultra run ended - kept so it is not lost; unverified";
 
     private readonly IChatClient _client;
     private readonly string _model;
@@ -184,7 +189,8 @@ public sealed class UltraTeamRun
         var snapshot = await _teamGit.CreateSnapshotCommitAsync(repositoryRoot, cancellationToken);
         EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, snapshot, cancellationToken), "create the team branch");
 
-        var created = new List<(string Worktree, string Branch)>();
+        var created = new List<(string Worktree, string Branch, string Author)>();
+        var keptWorkerBranches = new List<string>();
         UltraTeamEndReason endReason;
         try
         {
@@ -200,7 +206,8 @@ public sealed class UltraTeamRun
                 EnsureSucceeded(
                     await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, snapshot, cancellationToken),
                     $"create {state.Name}'s worktree");
-                created.Add((worktree, branch));
+                var author = $"IDE++ Ultra {state.Name}";
+                created.Add((worktree, branch, author));
 
                 var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, solutionRelativeDirectory));
                 var context = new TeamWorkerContext(
@@ -211,7 +218,7 @@ public sealed class UltraTeamRun
                     Path.Combine(solutionDirectory, Path.GetFileName(solutionPath)),
                     testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
                     teamBranch,
-                    $"IDE++ Ultra {state.Name}");
+                    author);
                 dispatchers.Add(new TeamToolDispatcher(
                     context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, buildSlots,
                     _options.Configuration, _runCommand));
@@ -223,10 +230,18 @@ public sealed class UltraTeamRun
         {
             // Not the run's token: a cancelled run is exactly the one whose worktrees most need
             // removing, and a stray worktree keeps its branch checked out until someone prunes it.
-            foreach (var (worktree, branch) in created)
+            foreach (var (worktree, branch, author) in created)
             {
+                var keep = await PreserveUnmergedWorkAsync(repositoryRoot, worktree, author, teamBranch);
                 await _teamGit.RemoveWorktreeAsync(repositoryRoot, worktree, CancellationToken.None);
-                await _teamGit.DeleteBranchAsync(repositoryRoot, branch, CancellationToken.None);
+                if (keep)
+                {
+                    keptWorkerBranches.Add(branch);
+                }
+                else
+                {
+                    await _teamGit.DeleteBranchAsync(repositoryRoot, branch, CancellationToken.None);
+                }
             }
 
             foreach (var worker in Workers.Where(w => w.Phase == TeamWorkerPhase.Working || w.Phase == TeamWorkerPhase.Waiting))
@@ -246,7 +261,32 @@ public sealed class UltraTeamRun
 
         return new UltraTeamResult(
             RunId, repositoryRoot, snapshot, teamBranch, keepBranch, changes, endReason,
-            Workers, Board.Snapshot(), PromptTokens, CompletionTokens);
+            Workers, Board.Snapshot(), PromptTokens, CompletionTokens, keptWorkerBranches);
+    }
+
+    /// <summary>
+    /// Whether a worker's branch holds work the team branch does not, after first committing any
+    /// edits it left uncommitted. Deleting every worker branch at the end used to throw away whatever
+    /// had not been merged - and on a run whose merge gate never passed, that was all of it, with only
+    /// git's unreachable objects left to recover it from.
+    /// </summary>
+    private async Task<bool> PreserveUnmergedWorkAsync(string repositoryRoot, string worktree, string author, string teamBranch)
+    {
+        try
+        {
+            if (await _teamGit.HasUncommittedChangesAsync(worktree, CancellationToken.None))
+            {
+                await _teamGit.CommitAllAsync(worktree, UnfinishedWorkCommitMessage, author, CancellationToken.None);
+            }
+
+            var head = await _teamGit.GetHeadAsync(worktree, CancellationToken.None);
+            return !await _teamGit.IsAncestorAsync(repositoryRoot, head, teamBranch, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Could not tell. Keeping a branch costs nothing; deleting one that held work loses it.
+            return true;
+        }
     }
 
     /// <summary>

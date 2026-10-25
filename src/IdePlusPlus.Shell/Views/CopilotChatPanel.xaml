@@ -211,13 +211,19 @@
                                FontStyle="Italic"
                                TextWrapping="Wrap"
                                Visibility="{Binding OutcomeText, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
-                    <Button Content="Delete team branch"
-                            Command="{Binding DiscardBranchCommand}"
+                    <TextBlock Text="{Binding KeptBranchesText}"
+                               FontSize="10"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
+                               Visibility="{Binding KeptBranchesText, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}" />
+                    <Button Content="Delete this run's branches"
+                            Command="{Binding DiscardBranchesCommand}"
                             HorizontalAlignment="Left"
                             Margin="0,4,0,0"
                             Padding="8,2"
-                            Visibility="{Binding KeptBranch, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}"
-                            ToolTip="Deletes the branch holding everything the team merged. Review cards already shown keep working." />
+                            Visibility="{Binding KeptBranchesText, Converter={x:Static toolPanes:NullToVisibilityConverter.Instance}}"
+                            ToolTip="Deletes the team branch and any worker branches this run kept. Review cards already shown keep working." />
                 </StackPanel>
             </Border>
         </DataTemplate>

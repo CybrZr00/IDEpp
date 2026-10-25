@@ -81,6 +81,46 @@ public sealed class UltraTeamRunTests : IDisposable
         File.Exists(Path.Combine(UltraRoot, run.RunId, "board.jsonl")).ShouldBeTrue();
     }
 
+    /// <summary>Deleting every worker branch at the end used to throw away whatever had not been
+    /// merged - on a run whose merge gate never passed, all of it.</summary>
+    [Fact]
+    public async Task WorkThatNeverReachedTheTeamBranch_IsKeptOnTheWorkersBranch_CommittedIfItWasNot()
+    {
+        _client
+            .Script("w1",
+                _client.Call(TeamTools.EditFileToolName, new
+                {
+                    file = "Lib/Committed.cs", mode = "whole_file", new_text = "public class Committed { }\n",
+                }),
+                _client.Call(TeamTools.CommitToolName, new { message = "committed, never merged" }),
+                _client.Call(TeamTools.DoneToolName, new { summary = "stopping" }),
+                _client.Call(TeamTools.DoneToolName, new { summary = "stopping" }))
+            .Script("w2",
+                _client.Call(TeamTools.EditFileToolName, new
+                {
+                    file = "Lib/Uncommitted.cs", mode = "whole_file", new_text = "public class Uncommitted { }\n",
+                }),
+                _client.Call(TeamTools.DoneToolName, new { summary = "stopping" }),
+                _client.Call(TeamTools.DoneToolName, new { summary = "stopping" }))
+            .Script("w3", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var run = CreateRun(workers: 3, budget: TimeSpan.FromMinutes(10));
+
+        var result = await RunAsync(run);
+
+        var w1 = TeamGitWorkspace.GetWorkerBranchName(run.RunId, 1);
+        var w2 = TeamGitWorkspace.GetWorkerBranchName(run.RunId, 2);
+        result.KeptWorkerBranches.ShouldBe([w1, w2], ignoreOrder: true);
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "show", $"{w1}:Lib/Committed.cs").ShouldContain("Committed");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "show", $"{w2}:Lib/Uncommitted.cs").ShouldContain("Uncommitted");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "log", "-1", "--format=%s", w2).ShouldContain("Uncommitted work");
+
+        // w3 had nothing of its own, so its branch is gone; nothing was merged, so the team branch is too.
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "branch", "--list", TeamGitWorkspace.GetWorkerBranchName(run.RunId, 3))
+            .ShouldBeEmpty();
+        result.TeamBranchKept.ShouldBeFalse();
+        Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
+    }
+
     [Fact]
     public async Task EachWorkerIsToldWhoItIs_AndSeesTheGoalAndTheBoard()
     {
@@ -199,7 +239,7 @@ public sealed class UltraTeamRunTests : IDisposable
     [Fact]
     public async Task TheCard_AsksToContinue_AndAnswersWithTheButtonPressed()
     {
-        var card = new TeamRunViewModel(CreateRun(workers: 1, budget: TimeSpan.FromMinutes(30)), isLocalProvider: false, discardBranch: null);
+        var card = new TeamRunViewModel(CreateRun(workers: 1, budget: TimeSpan.FromMinutes(30)), isLocalProvider: false, discardBranches: null);
 
         var keepGoing = card.AskToContinueAsync(TimeSpan.FromMinutes(30), CancellationToken.None);
         card.IsAwaitingContinue.ShouldBeTrue();

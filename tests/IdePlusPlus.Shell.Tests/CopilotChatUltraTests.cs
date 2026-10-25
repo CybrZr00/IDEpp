@@ -111,7 +111,7 @@ public sealed class CopilotChatUltraTests : IDisposable
         viewModel.IsStreaming.ShouldBeFalse();
         var card = viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem();
         card.IsRunning.ShouldBeFalse();
-        card.KeptBranch.ShouldNotBeNull();
+        card.KeptBranchesText.ShouldNotBeNull();
 
         var summary = viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text;
         summary.ShouldContain("**Ultra team** - finished");
