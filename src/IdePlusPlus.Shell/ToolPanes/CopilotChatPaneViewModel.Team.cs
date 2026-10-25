@@ -134,9 +134,11 @@ public sealed partial class CopilotChatPaneViewModel
                     _currentConfiguration?.Invoke() ?? "Debug",
                     ChatEffort.Ultra);
                 IChatClient client = SelectedProvider == ProviderLmStudio ? _lmStudioClient : _openRouterClient;
+                var teamApprovals = new HashSet<string>(StringComparer.Ordinal);
                 var run = new UltraTeamRun(
                     client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit,
-                    TimeProvider.System, UltraRootDirectory, RunTeamShellCommandAsync);
+                    TimeProvider.System, UltraRootDirectory,
+                    (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct));
 
                 var teamBranch = TeamGitWorkspace.GetTeamBranchName(run.RunId);
                 card = new TeamRunViewModel(
@@ -366,18 +368,27 @@ public sealed partial class CopilotChatPaneViewModel
     }
 
     /// <summary>
-    /// run_command for Ultra workers. The approval is the same one the single agent uses - same
-    /// dialog, same per-command memory, so approving a command once covers every worker - but it is
-    /// reached from worker threads, so it is marshalled onto the UI thread and serialized.
+    /// run_command for Ultra workers: the single agent's approval dialog, marshalled onto the UI
+    /// thread from worker threads and serialized, but with the run's own approval set.
+    ///
+    /// Not the session's: the same command line is a different command in a worktree, whose files -
+    /// including any script the command runs - the team writes without review. An approval from the
+    /// user's own checkout must not carry into a run, nor one from a run back out of it. Within a run
+    /// one approval covers every worker, as the user chose, and the prompt says so - including that it
+    /// holds after workers change files the command reads.
     /// </summary>
     private async Task<(bool IsError, string Text)> RunTeamShellCommandAsync(
-        string command, string reason, string workingDirectory, CancellationToken cancellationToken)
+        string command, string reason, string workingDirectory, HashSet<string> runApprovals, CancellationToken cancellationToken)
     {
+        var promptReason = $"{reason}\n\nRuns in an Ultra worker's own worktree ({workingDirectory}), whose files the "
+                           + "team may have changed. Approving lets every worker in this run use this exact command "
+                           + "until the run ends - even after they change files it reads.";
         string? refusal;
         await _teamShellApprovals.WaitAsync(cancellationToken);
         try
         {
-            refusal = await _dispatcher.InvokeAsync(() => ApproveShellCommandAsync(command, reason)).Task.Unwrap();
+            refusal = await _dispatcher.InvokeAsync(
+                () => ApproveShellCommandAsync(command, promptReason, runApprovals)).Task.Unwrap();
         }
         finally
         {

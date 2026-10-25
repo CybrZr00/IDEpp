@@ -1736,7 +1736,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return (true, "No solution is open, so there is no directory to run a command in.");
         }
 
-        if (await ApproveShellCommandAsync(command, reason) is { } refusal)
+        if (await ApproveShellCommandAsync(command, reason, _approvedCommands) is { } refusal)
         {
             return (true, refusal);
         }
@@ -1744,17 +1744,17 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         return await RunApprovedShellCommandAsync(command, _solutionDirectory, cancellationToken);
     }
 
-    /// <summary>Null once the user has approved this exact command line, now or earlier this
-    /// session; otherwise the refusal to hand back to the model. UI thread only - it owns
-    /// _approvedCommands and shows the prompt.</summary>
-    private async Task<string?> ApproveShellCommandAsync(string command, string? reason)
+    /// <summary>Null once the user has approved this exact command line, now or earlier, in
+    /// <paramref name="approved"/>; otherwise the refusal to hand back to the model. UI thread only -
+    /// it reads and writes the approval set and shows the prompt.</summary>
+    private async Task<string?> ApproveShellCommandAsync(string command, string? reason, HashSet<string> approved)
     {
         if (!AreShellCommandsEnabled)
         {
             return "Shell commands are turned off. The user can enable them in the Copilot Chat pane.";
         }
 
-        if (_approvedCommands.Contains(command))
+        if (approved.Contains(command))
         {
             return null;
         }
@@ -1771,7 +1771,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                    + "wanted it for instead.";
         }
 
-        _approvedCommands.Add(command);
+        approved.Add(command);
         return null;
     }
 

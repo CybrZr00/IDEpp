@@ -159,6 +159,43 @@ public sealed class CopilotChatUltraTests : IDisposable
         }
     });
 
+    /// <summary>The same command line is a different command in a worktree the team has been
+    /// writing to, so an approval from the user's own session does not carry into a run - while
+    /// inside the run one approval covers it, as the user chose.</summary>
+    [Fact]
+    public void ShellApprovals_FromTheUsersSession_DoNotCarryIntoATeamRun() => RunOnUiThread(async () =>
+    {
+        var run = new { command = "echo hi", reason = "check" };
+        string[] script =
+        [
+            ToolCall("run_command", run),
+            Text("ok"),
+            ToolCall("run_command", run),
+            ToolCall("run_command", run),
+            ToolCall(TeamTools.DoneToolName, new { summary = "nothing to change" }),
+        ];
+        _http.Script = n => n <= script.Length ? script[n - 1] : Text("done");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.AreShellCommandsEnabled = true;
+        var prompts = new List<string>();
+        viewModel.ShellCommandApprovalPrompt = (_, reason) =>
+        {
+            prompts.Add(reason);
+            return Task.FromResult(true);
+        };
+
+        viewModel.SelectedEffort = ChatEffort.High;
+        viewModel.InputText = "Say hi.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.InputText = "Say hi as a team.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        prompts.Count.ShouldBe(2);
+        prompts[1].ShouldStartWith("[Ultra w1] check");
+        prompts[1].ShouldContain("worktree");
+    });
+
     [Fact]
     public void ComposeTeamGoal_CarriesTheRecentConversation_CappedAndLabelled()
     {
