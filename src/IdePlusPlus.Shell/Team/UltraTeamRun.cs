@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.SourceControl;
@@ -16,6 +17,22 @@ public sealed record UltraTeamOptions(
     /// <summary>How long after one worker starts the next does. Agensh staggers starts so the first
     /// workers can put claims on the board before everyone picks at once.</summary>
     public TimeSpan StaggerDelay { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>However big the team, starts are spread over no more than this - at five seconds
+    /// apart a 64-worker team's last worker would otherwise wait over five minutes.</summary>
+    public TimeSpan MaxTotalStagger { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>How many model requests the whole team may have in flight at once; the rest wait
+    /// their turn. A big team otherwise sends every worker's request at the same moment, which a
+    /// provider answers with rate limits and a local model server with a queue it cannot hold.</summary>
+    public int MaxConcurrentModelRequests { get; init; } = 16;
+
+    /// <summary>A request refused for rate limiting (or an overloaded provider) is retried this many
+    /// times, backing off from <see cref="RateLimitBackoff"/>, before the worker sees the error -
+    /// three such errors in a row stop a worker, and a burst can hit many workers at once.</summary>
+    public int RateLimitRetries { get; init; } = 5;
+
+    public TimeSpan RateLimitBackoff { get; init; } = TimeSpan.FromSeconds(2);
 
     /// <summary>How long workers get to finish their current step once time is up, before they are
     /// cancelled outright.</summary>
@@ -147,7 +164,7 @@ public sealed class UltraTeamRun
         Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand,
         Func<CancellationToken, Task<bool>>? askToContinue = null)
     {
-        _client = new UsageCountingChatClient(client, this);
+        _client = new UsageCountingChatClient(new ThrottlingChatClient(client, options, time), this);
         _askToContinue = askToContinue;
         _model = model;
         _options = options;
@@ -594,10 +611,15 @@ public sealed class UltraTeamRun
 
     private static string Cap(string text, int max) => text.Length <= max ? text : text[..max] + " [...]";
 
+    /// <summary>The gap between one worker's start and the next: the configured delay, shrunk so the
+    /// last of <paramref name="workers"/> starts within <paramref name="maxTotal"/>.</summary>
+    internal static TimeSpan StaggerStep(TimeSpan delay, TimeSpan maxTotal, int workers) =>
+        workers <= 1 ? TimeSpan.Zero : TimeSpan.FromTicks(Math.Min(delay.Ticks, maxTotal.Ticks / (workers - 1)));
+
     private async Task RunWorkerAsync(
         string goal, TeamWorkerState state, TeamToolDispatcher dispatcher, int index, CancellationToken cancellationToken)
     {
-        await Task.Delay(_options.StaggerDelay * index, _time, cancellationToken);
+        await Task.Delay(StaggerStep(_options.StaggerDelay, _options.MaxTotalStagger, Workers.Count) * index, _time, cancellationToken);
         state.Phase = TeamWorkerPhase.Working;
         OnChanged();
 
@@ -711,6 +733,75 @@ public sealed class UltraTeamRun
     }
 
     private void OnChanged() => Changed?.Invoke();
+
+    /// <summary>
+    /// The team's share of the provider: at most <see cref="UltraTeamOptions.MaxConcurrentModelRequests"/>
+    /// requests in flight, and a request refused for rate limiting retried with backoff instead of
+    /// handed to the worker as a failed step.
+    ///
+    /// A retry is only safe because the refusal is the stream's first and only event - nothing has
+    /// reached the worker yet. The slot is given back while backing off, so one rate-limited worker
+    /// does not hold up the others that might get through.
+    /// </summary>
+    private sealed class ThrottlingChatClient(IChatClient inner, UltraTeamOptions options, TimeProvider time) : IChatClient
+    {
+        private static readonly Regex RateLimited = new(@"\b(429|503|529)\b|rate.?limit|overloaded", RegexOptions.IgnoreCase);
+
+        private readonly SemaphoreSlim _slots = new(Math.Max(1, options.MaxConcurrentModelRequests));
+
+        public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
+            IReadOnlyList<ChatMessage> messages,
+            string model,
+            IReadOnlyList<ToolDefinition>? tools = null,
+            ChatEffort effort = ChatEffort.None,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                await _slots.WaitAsync(cancellationToken);
+                var released = false;
+                try
+                {
+                    await using var events = inner.StreamChatAsync(messages, model, tools, effort, cancellationToken)
+                        .GetAsyncEnumerator(cancellationToken);
+                    if (!await events.MoveNextAsync())
+                    {
+                        yield break;
+                    }
+
+                    if (events.Current is StreamError error && RateLimited.IsMatch(error.Message) && attempt < options.RateLimitRetries)
+                    {
+                        _slots.Release();
+                        released = true;
+                        await Task.Delay(Backoff(attempt), time, cancellationToken);
+                        continue;
+                    }
+
+                    yield return events.Current;
+                    while (await events.MoveNextAsync())
+                    {
+                        yield return events.Current;
+                    }
+
+                    yield break;
+                }
+                finally
+                {
+                    if (!released)
+                    {
+                        _slots.Release();
+                    }
+                }
+            }
+        }
+
+        /// <summary>Doubling from the configured base, capped at a minute, with jitter so workers
+        /// refused together do not all come back together.</summary>
+        private TimeSpan Backoff(int attempt) =>
+            TimeSpan.FromMilliseconds(
+                Math.Min(60_000, options.RateLimitBackoff.TotalMilliseconds * Math.Pow(2, attempt))
+                * (0.75 + Random.Shared.NextDouble() * 0.5));
+    }
 
     /// <summary>Adds each response's usage to the run's totals as it arrives, so the status card's
     /// token count moves during a cycle rather than only when one finishes.</summary>

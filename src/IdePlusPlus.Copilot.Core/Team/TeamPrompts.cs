@@ -14,6 +14,16 @@ namespace IdePlusPlus.Copilot.Core.Team;
 /// </summary>
 public static class TeamPrompts
 {
+    /// <summary>
+    /// How much of the channel a cycle's opening carries. Every worker gets every peer's posts, so
+    /// uncapped the opening grows with the team and the team's spend with its square - harmless at 4
+    /// workers, not at 64. The newest posts are the ones kept: the board, not the channel, is where
+    /// anything lasting belongs.
+    /// </summary>
+    public const int MaxChannelPosts = 40;
+
+    public const int MaxChannelChars = 6_000;
+
     public static string WorkerSystemPrompt(
         string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled)
     {
@@ -117,7 +127,13 @@ public static class TeamPrompts
         }
 
         message.Append(channel.Count == 0 ? "\nChannel: nothing new.\n" : "\nChannel since your last cycle:\n");
-        foreach (var post in channel)
+        var shown = LatestWithin(channel, MaxChannelPosts, MaxChannelChars);
+        if (shown.Count < channel.Count)
+        {
+            message.Append($"  ({channel.Count - shown.Count} earlier posts not shown - the board has what matters)\n");
+        }
+
+        foreach (var post in shown)
         {
             message.Append($"  {post.From}: {post.Text}\n");
         }
@@ -163,4 +179,23 @@ public static class TeamPrompts
         span.TotalMinutes >= 1 ? $"{(int)Math.Ceiling(span.TotalMinutes)} min" : "under a minute";
 
     private static string Cap(string text, int max) => text.Length <= max ? text : text[..max] + " [...]";
+
+    private static List<TeamMessage> LatestWithin(IReadOnlyList<TeamMessage> posts, int maxPosts, int maxChars)
+    {
+        var kept = new List<TeamMessage>();
+        var chars = 0;
+        for (var i = posts.Count - 1; i >= 0 && kept.Count < maxPosts; i--)
+        {
+            chars += posts[i].From.Length + posts[i].Text.Length;
+            if (chars > maxChars && kept.Count > 0)
+            {
+                break;
+            }
+
+            kept.Add(posts[i]);
+        }
+
+        kept.Reverse();
+        return kept;
+    }
 }

@@ -48,6 +48,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
         ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraWorkerCount(_appSettingsStore);
         ultraTimeBudgetMinutes = CopilotChatPaneViewModel.ReadUltraTimeBudgetMinutes(_appSettingsStore);
+        ultraConcurrentRequests = CopilotChatPaneViewModel.ReadUltraConcurrentRequests(_appSettingsStore);
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -113,6 +114,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraTimeBudgetMinutes;
+
+    [ObservableProperty]
+    private int ultraConcurrentRequests;
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -195,9 +199,12 @@ public sealed partial class SettingsViewModel : ObservableObject
             UltraTimeBudgetMinutes,
             CopilotChatPaneViewModel.MinUltraTimeBudgetMinutes,
             CopilotChatPaneViewModel.MaxUltraTimeBudgetMinutes);
+        UltraConcurrentRequests = Math.Clamp(UltraConcurrentRequests, 1, CopilotChatPaneViewModel.MaxUltraWorkerCount);
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
-        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers, up to {UltraTimeBudgetMinutes} minutes.";
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConcurrentRequestsSettingKey, UltraConcurrentRequests.ToString());
+        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers, up to {UltraTimeBudgetMinutes} minutes, "
+                        + $"{UltraConcurrentRequests} model requests at a time.";
     }
 
     [RelayCommand]

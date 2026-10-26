@@ -20,15 +20,19 @@ public sealed class UltraTeamRunTests : IDisposable
     /// <summary>Preflight is off unless a test is about it: most of these never build, and a real
     /// dotnet build per test would only make them slow.</summary>
     private UltraTeamRun CreateRun(
-        int workers, TimeSpan budget, Func<CancellationToken, Task<bool>>? askToContinue = null, bool preflight = false) => new(
+        int workers,
+        TimeSpan budget,
+        Func<CancellationToken, Task<bool>>? askToContinue = null,
+        bool preflight = false,
+        Func<UltraTeamOptions, UltraTeamOptions>? configure = null) => new(
         _client,
         "model-x",
-        new UltraTeamOptions(workers, budget, ShellCommandsEnabled: false, "Debug", ChatEffort.Ultra)
+        (configure ?? (o => o))(new UltraTeamOptions(workers, budget, ShellCommandsEnabled: false, "Debug", ChatEffort.Ultra)
         {
             StaggerDelay = TimeSpan.Zero,
             HardStopGrace = TimeSpan.FromSeconds(5),
             PreflightBuild = preflight,
-        },
+        }),
         _repo.ReadOnlyTools,
         new GitService(),
         _repo.TeamGit,
@@ -59,6 +63,71 @@ public sealed class UltraTeamRunTests : IDisposable
         TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
         TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "earlier work");
         TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "main");
+    }
+
+    [Fact]
+    public async Task ModelRequests_NeverExceedTheTeamsLimit_HoweverManyWorkersThereAre()
+    {
+        foreach (var worker in new[] { "w1", "w2", "w3", "w4" })
+        {
+            _client.Script(worker, _client.Call(TeamTools.BoardReadToolName), _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        }
+
+        _client.DelayPerReply = TimeSpan.FromMilliseconds(40);
+        var run = CreateRun(workers: 4, budget: TimeSpan.FromMinutes(10), configure: o => o with { MaxConcurrentModelRequests = 2 });
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        _client.MaxInFlight.ShouldBe(2);
+    }
+
+    /// <summary>Three failed steps in a row stop a worker, and a rate-limit burst hits many workers at
+    /// once - so a refusal that arrived before any output is retried, not shown to the worker.</summary>
+    [Fact]
+    public async Task ARateLimitedRequest_IsRetriedWithBackoff_InsteadOfFailingTheWorkersStep()
+    {
+        _client.Script("w1",
+            [new StreamError("OpenRouter returned 429: rate limited, slow down")],
+            [new StreamError("OpenRouter returned 429: rate limited, slow down")],
+            _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), configure: o => o with { RateLimitBackoff = TimeSpan.FromMilliseconds(5) });
+
+        var result = await RunAsync(run);
+
+        result.Workers.ShouldHaveSingleItem().IsDone.ShouldBeTrue();
+        _client.Requests.Count.ShouldBe(3);
+        _client.Requests.ShouldAllBe(r => r.Messages.All(m => !m.Content.Contains("[error")));
+    }
+
+    [Fact]
+    public async Task ARateLimitThatOutlastsTheRetries_ReachesTheWorkerAsAnError()
+    {
+        _client.WhenScriptEmpty = _ => [new StreamError("OpenRouter returned 429: rate limited")];
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), configure: o => o with
+        {
+            RateLimitBackoff = TimeSpan.FromMilliseconds(1),
+            RateLimitRetries = 2,
+        });
+
+        var result = await RunAsync(run);
+
+        // Three errored cycles in a row, each after its own retries: 3 x (1 + 2) requests.
+        result.Workers.ShouldHaveSingleItem().IsDone.ShouldBeFalse();
+        _client.Requests.Count.ShouldBe(9);
+    }
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(16, 5_000)]
+    [InlineData(25, 5_000)]
+    [InlineData(64, 1_904)]
+    public void StartsAreStaggered_ButTheLastWorkerStartsWithinTwoMinutes(int workers, int expectedStepMs)
+    {
+        var step = UltraTeamRun.StaggerStep(TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2), workers);
+
+        ((int)step.TotalMilliseconds).ShouldBe(expectedStepMs);
+        (step * (workers - 1)).ShouldBeLessThanOrEqualTo(TimeSpan.FromMinutes(2));
     }
 
     [Fact]

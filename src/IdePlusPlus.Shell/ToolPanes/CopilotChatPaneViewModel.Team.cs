@@ -22,8 +22,10 @@ public sealed partial class CopilotChatPaneViewModel
 {
     public const string UltraWorkerCountSettingKey = "UltraWorkerCount";
     public const string UltraTimeBudgetSettingKey = "UltraTimeBudgetMinutes";
+    public const string UltraConcurrentRequestsSettingKey = "UltraMaxConcurrentRequests";
     public const int DefaultUltraWorkerCount = 4;
-    public const int MaxUltraWorkerCount = 16;
+    public const int MaxUltraWorkerCount = 64;
+    public const int DefaultUltraConcurrentRequests = 16;
     public const int DefaultUltraTimeBudgetMinutes = 30;
     public const int MinUltraTimeBudgetMinutes = 5;
     public const int MaxUltraTimeBudgetMinutes = 240;
@@ -115,6 +117,13 @@ public sealed partial class CopilotChatPaneViewModel
         int.TryParse(settings.Get(UltraWorkerCountSettingKey), out var count)
             ? Math.Clamp(count, 1, MaxUltraWorkerCount)
             : DefaultUltraWorkerCount;
+
+    /// <summary>How many model requests a team may have in flight at once - its throttle on the
+    /// provider, however many workers it has.</summary>
+    public static int ReadUltraConcurrentRequests(AppSettingsStore settings) =>
+        int.TryParse(settings.Get(UltraConcurrentRequestsSettingKey), out var requests)
+            ? Math.Clamp(requests, 1, MaxUltraWorkerCount)
+            : DefaultUltraConcurrentRequests;
 
     public static int ReadUltraTimeBudgetMinutes(AppSettingsStore settings) =>
         int.TryParse(settings.Get(UltraTimeBudgetSettingKey), out var minutes)
@@ -223,7 +232,10 @@ public sealed partial class CopilotChatPaneViewModel
                     TimeSpan.FromMinutes(ReadUltraTimeBudgetMinutes(_appSettingsStore)),
                     AreShellCommandsEnabled,
                     _currentConfiguration?.Invoke() ?? "Debug",
-                    ChatEffort.Ultra);
+                    ChatEffort.Ultra)
+                {
+                    MaxConcurrentModelRequests = ReadUltraConcurrentRequests(_appSettingsStore),
+                };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();
                 TeamRunViewModel? runCard = null;

@@ -16,6 +16,11 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
 {
     private readonly ConcurrentDictionary<string, ConcurrentQueue<ChatStreamEvent[]>> _scripts = new();
     private int _callIds;
+    private int _inFlight;
+    private int _maxInFlight;
+
+    /// <summary>The most requests that were ever being answered at the same moment.</summary>
+    public int MaxInFlight => Volatile.Read(ref _maxInFlight);
 
     public ConcurrentQueue<(string Worker, IReadOnlyList<ChatMessage> Messages)> Requests { get; } = new();
 
@@ -49,25 +54,40 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
     {
         var worker = WorkerName().Match(messages[0].Content) is { Success: true } match ? match.Groups[1].Value : "?";
         Requests.Enqueue((worker, [.. messages]));
-
-        if (DelayPerReply > TimeSpan.Zero)
+        var inFlight = Interlocked.Increment(ref _inFlight);
+        int max;
+        while (inFlight > (max = Volatile.Read(ref _maxInFlight)) && Interlocked.CompareExchange(ref _maxInFlight, inFlight, max) != max)
         {
-            await Task.Delay(DelayPerReply, cancellationToken);
         }
 
-        var reply = _scripts.TryGetValue(worker, out var queue) && queue.TryDequeue(out var next)
-            ? next
-            : WhenScriptEmpty(worker);
-
-        foreach (var streamEvent in reply)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await Task.Yield();
-            yield return streamEvent;
-        }
+            if (DelayPerReply > TimeSpan.Zero)
+            {
+                await Task.Delay(DelayPerReply, cancellationToken);
+            }
 
-        yield return new UsageReceived(100, 10);
+            var reply = _scripts.TryGetValue(worker, out var queue) && queue.TryDequeue(out var next)
+                ? next
+                : WhenScriptEmpty(worker);
+
+            foreach (var streamEvent in reply)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Yield();
+                yield return streamEvent;
+            }
+
+            yield return new UsageReceived(UsagePerReply.Prompt, UsagePerReply.Completion);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
     }
+
+    /// <summary>The usage reported after every reply.</summary>
+    public (int Prompt, int Completion) UsagePerReply { get; set; } = (100, 10);
 
     [GeneratedRegex(@"^You are (w\d+),")]
     private static partial Regex WorkerName();
