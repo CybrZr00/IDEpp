@@ -48,6 +48,7 @@ public sealed class TeamToolDispatcher
     private readonly SemaphoreSlim _buildSlots;
     private readonly string _configuration;
     private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
+    private readonly Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? _requestHelp;
     private readonly BuildService _buildService = new();
     private readonly TestRunService _testRunService = new();
 
@@ -61,6 +62,9 @@ public sealed class TeamToolDispatcher
     /// token) - or null when shell commands are off for this run.</param>
     /// <param name="buildTimeout">How long one build may run once it has a build slot - not
     /// counting the wait for the slot. Five minutes unless a test needs it shorter.</param>
+    /// <param name="requestHelp">team_request_help's implementation - (worker, count, reason,
+    /// token), answered by the run - or null when the team cannot grow, which also leaves the tool
+    /// out of what the worker is offered.</param>
     public TeamToolDispatcher(
         TeamWorkerContext context,
         TeamWorkerState state,
@@ -72,8 +76,10 @@ public sealed class TeamToolDispatcher
         SemaphoreSlim buildSlots,
         string configuration,
         Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand,
-        TimeSpan? buildTimeout = null)
+        TimeSpan? buildTimeout = null,
+        Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? requestHelp = null)
     {
+        _requestHelp = requestHelp;
         _buildTimeout = buildTimeout ?? DefaultBuildTimeout;
         _context = context;
         _state = state;
@@ -89,7 +95,7 @@ public sealed class TeamToolDispatcher
 
     /// <summary>The tools this worker is offered - the same list ExecuteAsync routes.</summary>
     public IReadOnlyList<ToolDefinition> Tools =>
-        TeamTools.ForWorker(TeamEditTool.Definition, shellCommandsEnabled: _runCommand is not null);
+        TeamTools.ForWorker(TeamEditTool.Definition, shellCommandsEnabled: _runCommand is not null, canRequestHelp: _requestHelp is not null);
 
     public string? DrainNotices() => TeamNotices.Compose(_context.Name, _board, _bus);
 
@@ -169,6 +175,10 @@ public sealed class TeamToolDispatcher
                 _changedSinceBuild = true;
                 return await _runCommand(
                     command, $"[Ultra {_context.Name}] {Arg("reason") ?? "(no reason given)"}", _context.SolutionDirectory, cancellationToken);
+
+            case TeamTools.RequestHelpToolName when _requestHelp is not null:
+                var count = arguments?["count"] is { } countNode && int.TryParse(countNode.ToString(), out var parsed) ? parsed : 1;
+                return await _requestHelp(_context.Name, count, Arg("reason"), cancellationToken);
 
             case TeamTools.BoardReadToolName:
                 return (false, _board.Read());

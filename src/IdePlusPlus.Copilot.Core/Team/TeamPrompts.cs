@@ -24,8 +24,10 @@ public static class TeamPrompts
 
     public const int MaxChannelChars = 6_000;
 
+    /// <param name="maxTeamSize">In auto mode, how big the team may grow - and so whether the prompt
+    /// explains team_request_help at all; 0 when the team is fixed.</param>
     public static string WorkerSystemPrompt(
-        string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled)
+        string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled, int maxTeamSize = 0)
     {
         var peers = string.Join(", ", team.Where(n => n != workerName));
         var prompt = new StringBuilder($"""
@@ -94,6 +96,21 @@ public static class TeamPrompts
                 run_command runs a PowerShell command in your worktree. The user must approve each distinct
                 command once (for the whole team), which interrupts them - prefer the built-in tools, and reuse a
                 command line a peer already ran rather than a near-copy of it.
+                """);
+        }
+
+        if (maxTeamSize > team.Count)
+        {
+            prompt.Append($"""
+
+
+                The team can grow, up to {maxTeamSize} workers. It started small on purpose: more workers cost more and
+                collide more. If the open work on the board - unclaimed TASKs, plan steps not done - clearly cannot be
+                finished in the time left by the workers there are, call team_request_help with how many more you
+                need (at most {TeamTools.MaxWorkersPerHelpRequest}) and which work they should take. Put that work on the board as TASKs first,
+                so newcomers can claim it. Never ask for help with work you can finish yourself, and don't ask again
+                until newcomers have had time to start. Newcomers join from the team branch and announce themselves
+                on the channel.
                 """);
         }
 

@@ -11,6 +11,26 @@ public class TeamToolsTests
         new(TeamTools.EditFileToolName, "edit", JsonNode.Parse("""{ "type": "object" }""")!);
 
     [Fact]
+    public void ForWorker_OffersRequestHelpOnlyInAutoMode()
+    {
+        TeamTools.ForWorker(EditFile, shellCommandsEnabled: false)
+            .ShouldNotContain(t => t.Name == TeamTools.RequestHelpToolName);
+        TeamTools.ForWorker(EditFile, shellCommandsEnabled: false, canRequestHelp: true)
+            .ShouldContain(t => t.Name == TeamTools.RequestHelpToolName);
+    }
+
+    [Fact]
+    public void WorkerSystemPrompt_ExplainsAskingForHelp_OnlyWhileTheTeamCanStillGrow()
+    {
+        TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false, maxTeamSize: 8)
+            .ShouldContain("The team can grow, up to 8 workers");
+        TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false)
+            .ShouldNotContain("team_request_help");
+        TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false, maxTeamSize: 2)
+            .ShouldNotContain("team_request_help");
+    }
+
+    [Fact]
     public void ForWorker_OffersRunCommandOnlyWhenShellCommandsAreOn()
     {
         TeamTools.ForWorker(EditFile, shellCommandsEnabled: false)

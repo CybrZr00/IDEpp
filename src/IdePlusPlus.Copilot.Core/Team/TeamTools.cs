@@ -24,7 +24,11 @@ public static class TeamTools
     public const string SyncToolName = "team_sync";
     public const string MergeToolName = "team_merge";
     public const string DoneToolName = "team_done";
+    public const string RequestHelpToolName = "team_request_help";
     public const string EditFileToolName = "edit_file";
+
+    /// <summary>Most workers one help request can bring in - the team grows a little at a time.</summary>
+    public const int MaxWorkersPerHelpRequest = 2;
 
     public static readonly ToolDefinition BoardRead = new(
         Name: BoardReadToolName,
@@ -145,6 +149,26 @@ public static class TeamTools
             }
             """)!);
 
+    /// <summary>Only offered in auto mode, where the team starts small and grows when its workers
+    /// judge that the work left will not fit the time left. The runner decides; this only asks.</summary>
+    public static readonly ToolDefinition RequestHelp = new(
+        Name: RequestHelpToolName,
+        Description: "Ask for more workers to join the team. Use it only when the open work on the board - unclaimed " +
+                     "TASKs, plan steps not done - clearly cannot be finished in the time left by the workers there " +
+                     "are. Put that work on the board as TASKs first, so newcomers can claim it. Newcomers start from " +
+                     "the team branch as it is and read the board. The runner may refuse: the team has a size limit, " +
+                     "growth is spaced out, and nobody joins when too little time or budget is left.",
+        ParametersSchema: JsonNode.Parse($$"""
+            {
+              "type": "object",
+              "properties": {
+                "count": { "type": "integer", "minimum": 1, "maximum": {{MaxWorkersPerHelpRequest}}, "description": "How many more workers (1-{{MaxWorkersPerHelpRequest}})." },
+                "reason": { "type": "string", "description": "Which work they should take, and why the team as it is cannot finish it in time." }
+              },
+              "required": ["count", "reason"]
+            }
+            """)!);
+
     public static IReadOnlyList<ToolDefinition> Coordination { get; } =
         [BoardRead, BoardWrite, BoardGrep, BoardUnfold, Post, DirectMessage, Commit, Sync, Merge, Done];
 
@@ -166,13 +190,15 @@ public static class TeamTools
 
     /// <summary>Everything a worker is offered. edit_file's definition comes from the caller because
     /// it shares propose_edit's schema, which lives in IdePlusPlus.Copilot.Diff.</summary>
-    public static IReadOnlyList<ToolDefinition> ForWorker(ToolDefinition editFile, bool shellCommandsEnabled) =>
+    public static IReadOnlyList<ToolDefinition> ForWorker(ToolDefinition editFile, bool shellCommandsEnabled, bool canRequestHelp = false) =>
     [
         .. AllowedExistingTools,
         editFile,
         .. shellCommandsEnabled ? ShellTools.All : [],
         .. Coordination,
+        .. canRequestHelp ? [RequestHelp] : Array.Empty<ToolDefinition>(),
     ];
 
-    public static bool IsCoordinationTool(string toolName) => Coordination.Any(t => t.Name == toolName);
+    public static bool IsCoordinationTool(string toolName) =>
+        toolName == RequestHelpToolName || Coordination.Any(t => t.Name == toolName);
 }

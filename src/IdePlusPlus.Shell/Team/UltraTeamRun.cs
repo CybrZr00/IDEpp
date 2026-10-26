@@ -40,6 +40,25 @@ public sealed record UltraTeamOptions(
     /// nobody to ask whether to keep spending.</summary>
     public long MaxTokens { get; init; }
 
+    /// <summary>Auto mode: the team starts with <see cref="InitialWorkerCount"/> workers, and its
+    /// workers may ask for more (team_request_help) when the work left will not fit the time left -
+    /// up to WorkerCount, at most two at a time, no sooner than <see cref="HelpCooldown"/> after the
+    /// last time it grew, and not once less than <see cref="MinTimeLeftForHelp"/> is left. Off, the
+    /// team is WorkerCount from the start, as before.</summary>
+    public bool AutoScale { get; init; }
+
+    public int InitialWorkerCount { get; init; } = 2;
+
+    public TimeSpan HelpCooldown { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>A newcomer needs time to read in, build and merge before it is any use; less than
+    /// this left (or a quarter of the round, if that is shorter) and help is refused.</summary>
+    public TimeSpan MinTimeLeftForHelp { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Free bytes on the drive holding the given path - the real drive unless a test says
+    /// otherwise.</summary>
+    public Func<string, long>? FreeDiskSpace { get; init; }
+
     /// <summary>How long workers get to finish their current step once time is up, before they are
     /// cancelled outright.</summary>
     public TimeSpan HardStopGrace { get; init; } = TimeSpan.FromMinutes(2);
@@ -79,6 +98,11 @@ public sealed class UltraTeamPreflightException(string report)
 {
     public string Report { get; } = report;
 }
+
+/// <summary>The run did not start, or stopped before any worker did: the team's worktrees would not
+/// fit on the disk. Every worktree is a full checkout plus its own build output, so a big team on a
+/// big solution adds up quickly.</summary>
+public sealed class UltraTeamDiskSpaceException(string message) : InvalidOperationException(message);
 
 public enum UltraTeamEndReason
 {
@@ -154,6 +178,38 @@ public sealed class UltraTeamRun
     private DateTimeOffset _startedAt;
     private DateTimeOffset _roundStartedAt;
 
+    /// <summary>Guards the team itself - workers, their dispatchers and worktrees, and the current
+    /// round's worker tasks - which auto mode adds to from a worker's tool call mid-round.</summary>
+    private readonly object _teamLock = new();
+    private readonly List<TeamWorkerState> _workers = [];
+    private readonly List<TeamToolDispatcher> _dispatchers = [];
+    private readonly List<(string Worktree, string Branch, string Author)> _worktrees = [];
+    private List<Task>? _roundTasks;
+    private CancellationToken _roundToken;
+
+    /// <summary>One growth at a time, and when the last one was.</summary>
+    private readonly SemaphoreSlim _growing = new(1, 1);
+    private DateTimeOffset _lastGrowth = DateTimeOffset.MinValue;
+
+    // Set once RunAsync knows them, for creating a worker - at the start, or when the team grows.
+    private string _goal = "";
+    private string _solutionPath = "";
+    private string _solutionRelativeDirectory = "";
+    private IReadOnlyList<string> _testProjectPaths = [];
+    private SemaphoreSlim? _buildSlots;
+
+    /// <summary>What one worktree takes on disk: a checkout before anything is built in it, and a
+    /// guess at it with build output until the preflight build measures the real thing.</summary>
+    private long _checkoutBytes;
+    private long _worktreeBytes;
+
+    /// <summary>Kept free beyond what the worktrees need, for everything else on the machine.</summary>
+    private const long DiskHeadroomBytes = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>A worktree's size with build output, as a multiple of its checkout, until one is
+    /// measured: generous, since running out of disk mid-run is worse than refusing at the start.</summary>
+    private const int BuildOutputFactor = 4;
+
     /// <param name="ultraRootDirectory">Where run folders go - outside any repository, so worktrees
     /// never show up in the user's status, file list or index.</param>
     /// <param name="runCommand">run_command for workers, or null. Only used when the options allow
@@ -188,8 +244,11 @@ public sealed class UltraTeamRun
         _runDirectory = Path.Combine(ultraRootDirectory, RunId);
         Directory.CreateDirectory(_runDirectory);
 
-        var names = Enumerable.Range(1, Math.Max(1, options.WorkerCount)).Select(n => $"w{n}").ToList();
-        Workers = names.Select(n => new TeamWorkerState(n)).ToList();
+        var startingWorkers = options.AutoScale
+            ? Math.Clamp(options.InitialWorkerCount, 1, Math.Max(1, options.WorkerCount))
+            : Math.Max(1, options.WorkerCount);
+        var names = Enumerable.Range(1, startingWorkers).Select(n => $"w{n}").ToList();
+        _workers.AddRange(names.Select(n => new TeamWorkerState(n)));
         Board = new TeamBoard(time, options.ClaimLifetime, Path.Combine(_runDirectory, "board.jsonl"));
         Bus = new TeamMessageBus(time, names);
         Board.EntryAdded += _ => OnChanged();
@@ -202,7 +261,23 @@ public sealed class UltraTeamRun
 
     public TeamMessageBus Bus { get; }
 
-    public IReadOnlyList<TeamWorkerState> Workers { get; }
+    /// <summary>The team so far, in the order its workers joined. Fixed for an ordinary run; in auto
+    /// mode it grows while the run goes on, so this is a copy of the moment it was read.</summary>
+    public IReadOnlyList<TeamWorkerState> Workers
+    {
+        get
+        {
+            lock (_teamLock)
+            {
+                return [.. _workers];
+            }
+        }
+    }
+
+    /// <summary>How big the team may get - its size from the start, unless it is in auto mode.</summary>
+    public int MaxWorkers => _options.AutoScale ? Math.Max(1, _options.WorkerCount) : Workers.Count;
+
+    public bool IsAutoScaling => _options.AutoScale;
 
     /// <summary>The length of one round - the whole run, unless the user continues it.</summary>
     public TimeSpan TimeBudget => _options.TimeBudget;
@@ -311,44 +386,30 @@ public sealed class UltraTeamRun
         }
 
         SeedBacklog(backlog);
+        _goal = goal;
+        _solutionPath = solutionPath;
+        _solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
+        _testProjectPaths = testProjectPaths;
+
+        // Before anything exists: a team whose worktrees would not fit is refused while there is
+        // nothing to clean up. A guess - the preflight below measures a real worktree.
+        _checkoutBytes = await _teamGit.GetTreeSizeAsync(repositoryRoot, start, cancellationToken);
+        _worktreeBytes = _checkoutBytes * BuildOutputFactor;
+        EnsureDiskSpace(Workers.Count, _worktreeBytes, "the team's worktrees");
 
         EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, start, cancellationToken), "create the team branch");
 
-        var created = new List<(string Worktree, string Branch, string Author)>();
         var keptWorkerBranches = new List<string>();
         UltraTeamEndReason endReason;
         try
         {
             try
             {
-                var solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
-                var dispatchers = new List<TeamToolDispatcher>();
                 using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
-
-                for (var i = 0; i < Workers.Count; i++)
+                _buildSlots = buildSlots;
+                foreach (var state in Workers)
                 {
-                    var state = Workers[i];
-                    var worktree = Path.Combine(_runDirectory, state.Name);
-                    var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, i + 1);
-                    EnsureSucceeded(
-                        await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, start, cancellationToken),
-                        $"create {state.Name}'s worktree");
-                    var author = $"IDE++ Ultra {state.Name}";
-                    created.Add((worktree, branch, author));
-
-                    var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, solutionRelativeDirectory));
-                    var context = new TeamWorkerContext(
-                        state.Name,
-                        repositoryRoot,
-                        worktree,
-                        solutionDirectory,
-                        Path.Combine(solutionDirectory, Path.GetFileName(solutionPath)),
-                        testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
-                        teamBranch,
-                        author);
-                    dispatchers.Add(new TeamToolDispatcher(
-                        context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, buildSlots,
-                        _options.Configuration, _runCommand));
+                    await CreateWorkerAsync(state, start, cancellationToken);
                 }
 
                 // The one check that would have saved three whole 16-worker runs whose every merge-gate
@@ -358,20 +419,36 @@ public sealed class UltraTeamRun
                 {
                     IsCheckingBuild = true;
                     OnChanged();
-                    var (built, report) = await dispatchers[0].PreflightBuildAsync(cancellationToken);
+                    TeamToolDispatcher first;
+                    lock (_teamLock)
+                    {
+                        first = _dispatchers[0];
+                    }
+
+                    var (built, report) = await first.PreflightBuildAsync(cancellationToken);
                     IsCheckingBuild = false;
                     if (!built)
                     {
                         throw new UltraTeamPreflightException(report);
                     }
+
+                    // A built worktree is the real size; every other one will grow to it as it builds.
+                    _worktreeBytes = Math.Max(_checkoutBytes, DirectorySize(Path.Combine(_runDirectory, Workers[0].Name)));
+                    EnsureDiskSpace(Workers.Count - 1, Math.Max(0, _worktreeBytes - _checkoutBytes), "the team's builds");
                 }
 
-                endReason = await RunWorkersAsync(goal, dispatchers, cancellationToken);
+                endReason = await RunWorkersAsync(goal, cancellationToken);
             }
             finally
             {
                 // Not the run's token: a cancelled run is exactly the one whose worktrees most need
                 // removing, and a stray worktree keeps its branch checked out until someone prunes it.
+                List<(string Worktree, string Branch, string Author)> created;
+                lock (_teamLock)
+                {
+                    created = [.. _worktrees];
+                }
+
                 foreach (var (worktree, branch, author) in created)
                 {
                     var keep = await PreserveUnmergedWorkAsync(repositoryRoot, worktree, author, teamBranch);
@@ -392,10 +469,11 @@ public sealed class UltraTeamRun
                 }
 
                 IsCheckingBuild = false;
+                _buildSlots = null;
                 OnChanged();
             }
         }
-        catch (UltraTeamPreflightException)
+        catch (Exception ex) when (ex is UltraTeamPreflightException or UltraTeamDiskSpaceException)
         {
             // Nothing was done, so nothing is kept: the team branch only marks where it would have started.
             await _teamGit.DeleteBranchAsync(repositoryRoot, teamBranch, CancellationToken.None);
@@ -412,6 +490,190 @@ public sealed class UltraTeamRun
         return new UltraTeamResult(
             RunId, repositoryRoot, snapshot, teamBranch, keepBranch, changes, endReason,
             Workers, Board.Snapshot(), PromptTokens, CompletionTokens, keptWorkerBranches);
+    }
+
+    /// <summary>
+    /// Gives <paramref name="state"/> its worktree at <paramref name="startCommit"/>, its branch and
+    /// its dispatcher, and adds it to the team - for the workers a run starts with, and for each one
+    /// auto mode adds later.
+    /// </summary>
+    private async Task<TeamToolDispatcher> CreateWorkerAsync(TeamWorkerState state, string startCommit, CancellationToken cancellationToken)
+    {
+        var repositoryRoot = _repositoryRoot!;
+        var worktree = Path.Combine(_runDirectory, state.Name);
+        var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, int.Parse(state.Name[1..]));
+        EnsureSucceeded(
+            await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, startCommit, cancellationToken),
+            $"create {state.Name}'s worktree");
+        var author = $"IDE++ Ultra {state.Name}";
+
+        var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, _solutionRelativeDirectory));
+        var context = new TeamWorkerContext(
+            state.Name,
+            repositoryRoot,
+            worktree,
+            solutionDirectory,
+            Path.Combine(solutionDirectory, Path.GetFileName(_solutionPath)),
+            _testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
+            _teamBranch!,
+            author);
+        var dispatcher = new TeamToolDispatcher(
+            context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, _buildSlots!,
+            _options.Configuration, _runCommand,
+            requestHelp: _options.AutoScale ? RequestHelpAsync : null);
+
+        lock (_teamLock)
+        {
+            _worktrees.Add((worktree, branch, author));
+            if (!_workers.Contains(state))
+            {
+                _workers.Add(state);
+            }
+
+            _dispatchers.Add(dispatcher);
+        }
+
+        return dispatcher;
+    }
+
+    /// <summary>
+    /// team_request_help: auto mode's answer to a worker who judges the work left will not fit the
+    /// time left. The worker decides it needs help; the runner decides whether it gets it, and refuses
+    /// - saying why, so the worker plans with the team it has - when the team is at its limit, grew
+    /// too recently for newcomers to have started, has too little time or token budget left for a
+    /// newcomer to be any use, or the disk will not take another worktree.
+    ///
+    /// Newcomers start from the team branch as it is now, not where the run began - they get what
+    /// the team has merged - and join the current round at once.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RequestHelpAsync(
+        string requester, int requested, string? reason, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return (true, "Say which work the new workers should take, and why the team as it is cannot finish it in time.");
+        }
+
+        await _growing.WaitAsync(cancellationToken);
+        try
+        {
+            var size = Workers.Count;
+            var now = _time.GetUtcNow();
+            var minTimeLeft = TimeSpan.FromTicks(Math.Min(_options.MinTimeLeftForHelp.Ticks, _options.TimeBudget.Ticks / 4));
+            if (size >= MaxWorkers)
+            {
+                return (true, $"Refused: the team is at its limit of {MaxWorkers} workers. Share out the remaining work "
+                              + "among the team as it is - put it on the board as TASKs.");
+            }
+
+            if (now - _lastGrowth < _options.HelpCooldown)
+            {
+                var wait = _options.HelpCooldown - (now - _lastGrowth);
+                return (true, $"Refused for now: the team grew {(int)(now - _lastGrowth).TotalSeconds}s ago and the newcomers "
+                              + $"are still starting. If it is still needed, ask again in {(int)Math.Ceiling(wait.TotalSeconds)}s.");
+            }
+
+            if (RoundOver || TimeLeft < minTimeLeft)
+            {
+                return (true, "Refused: too little time is left for a newcomer to read in, build and merge anything. "
+                              + "Finish with the team as it is.");
+            }
+
+            if (_options.MaxTokens > 0 && (long)PromptTokens + CompletionTokens >= _options.MaxTokens * 3 / 4)
+            {
+                return (true, "Refused: most of the token budget is spent, and every newcomer spends it faster. Finish "
+                              + "with the team as it is.");
+            }
+
+            var grant = Math.Min(Math.Clamp(requested, 1, TeamTools.MaxWorkersPerHelpRequest), MaxWorkers - size);
+            if (DiskShortfall(grant, _worktreeBytes) is { } shortfall)
+            {
+                return (true, $"Refused: the disk will not take {grant} more worktree(s) - {shortfall}. Finish with the "
+                              + "team as it is.");
+            }
+
+            var teamHead = await _teamGit.ResolveRefAsync(_repositoryRoot!, _teamBranch!, cancellationToken)
+                           ?? throw new InvalidOperationException("The team branch is gone.");
+            var joined = new List<string>();
+            for (var i = 0; i < grant; i++)
+            {
+                var state = new TeamWorkerState($"w{size + i + 1}");
+                var dispatcher = await CreateWorkerAsync(state, teamHead, cancellationToken);
+                Bus.AddMember(state.Name);
+                joined.Add(state.Name);
+
+                // The requester is still in this round, so the round is not over and cannot end until
+                // this returns.
+                CancellationToken roundToken;
+                lock (_teamLock)
+                {
+                    roundToken = _roundToken;
+                }
+
+                var task = RunWorkerAsync(_goal, state, dispatcher, 0, roundToken);
+                lock (_teamLock)
+                {
+                    _roundTasks?.Add(task);
+                }
+            }
+
+            _lastGrowth = _time.GetUtcNow();
+            var names = string.Join(", ", joined);
+            Bus.Post(TeamMessageBus.RunnerName, $"{names} joined the team at {requester}'s request: {Cap(reason.Trim(), 300)}");
+            OnChanged();
+            return (false, $"Granted: {names} {(joined.Count == 1 ? "is" : "are")} joining now, from the team branch as it "
+                           + "is. Newcomers read the board first - make sure the work you want them on is there as TASKs. "
+                           + $"The team is now {Workers.Count} of up to {MaxWorkers}.");
+        }
+        finally
+        {
+            _growing.Release();
+        }
+    }
+
+    /// <summary>Refuses to go on when <paramref name="worktrees"/> more of <paramref name="bytesEach"/>
+    /// would leave less than the headroom free.</summary>
+    private void EnsureDiskSpace(int worktrees, long bytesEach, string what)
+    {
+        if (DiskShortfall(worktrees, bytesEach) is { } shortfall)
+        {
+            throw new UltraTeamDiskSpaceException(
+                $"There isn't room on the disk for {what}: {shortfall}. Use fewer workers, or free some space.");
+        }
+    }
+
+    private string? DiskShortfall(int worktrees, long bytesEach)
+    {
+        if (worktrees <= 0)
+        {
+            return null;
+        }
+
+        var needed = worktrees * bytesEach;
+        var free = (_options.FreeDiskSpace ?? DriveFreeSpace)(_runDirectory);
+        return free - needed >= DiskHeadroomBytes
+            ? null
+            : $"{worktrees} worktree(s) need about {Gigabytes(needed)}, {Gigabytes(free)} is free, and "
+              + $"{Gigabytes(DiskHeadroomBytes)} is kept spare";
+    }
+
+    private static long DriveFreeSpace(string path) => new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!).AvailableFreeSpace;
+
+    private static string Gigabytes(long bytes) => $"{bytes / (1024.0 * 1024 * 1024):0.0} GB";
+
+    /// <summary>A built worktree's size; anything unreadable is skipped - it is an estimate.</summary>
+    private static long DirectorySize(string directory)
+    {
+        try
+        {
+            return new DirectoryInfo(directory)
+                .EnumerateFiles("*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = 0 })
+                .Sum(file => file.Length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>
@@ -490,12 +752,11 @@ public sealed class UltraTeamRun
     /// cycle: the worktrees, branches and board are untouched in between, so nothing is lost but the
     /// conversation each worker was in, which the board already carries across cycles anyway.
     /// </summary>
-    private async Task<UltraTeamEndReason> RunWorkersAsync(
-        string goal, IReadOnlyList<TeamToolDispatcher> dispatchers, CancellationToken cancellationToken)
+    private async Task<UltraTeamEndReason> RunWorkersAsync(string goal, CancellationToken cancellationToken)
     {
         while (true)
         {
-            var reason = await RunRoundAsync(goal, dispatchers, staggerStarts: Round == 1, cancellationToken);
+            var reason = await RunRoundAsync(goal, staggerStarts: Round == 1, cancellationToken);
             if (reason is not (UltraTeamEndReason.TimeUp or UltraTeamEndReason.Stalled) || _askToContinue is null)
             {
                 return reason;
@@ -539,8 +800,7 @@ public sealed class UltraTeamRun
         }
     }
 
-    private async Task<UltraTeamEndReason> RunRoundAsync(
-        string goal, IReadOnlyList<TeamToolDispatcher> dispatchers, bool staggerStarts, CancellationToken cancellationToken)
+    private async Task<UltraTeamEndReason> RunRoundAsync(string goal, bool staggerStarts, CancellationToken cancellationToken)
     {
         using var hardStop = new CancellationTokenSource(_options.TimeBudget + _options.HardStopGrace, _time);
         using var runToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardStop.Token);
@@ -548,22 +808,65 @@ public sealed class UltraTeamRun
 
         var reminders = SendRemindersAsync(stopReminders.Token);
         var stallWatch = WatchForStallAsync(stopReminders.Token);
-        var workers = dispatchers
-            .Select((dispatcher, i) => (Dispatcher: dispatcher, State: Workers[i], Index: i))
-            .Where(w => !w.State.IsDone)
-            .Select(w => RunWorkerAsync(goal, w.State, w.Dispatcher, staggerStarts ? w.Index : 0, runToken.Token))
-            .ToList();
+        List<(TeamWorkerState State, TeamToolDispatcher Dispatcher, int Index)> starting;
+        lock (_teamLock)
+        {
+            _roundToken = runToken.Token;
+            _roundTasks = [];
+            starting = _workers
+                .Select((state, i) => (State: state, Dispatcher: _dispatchers[i], Index: i))
+                .Where(w => !w.State.IsDone)
+                .ToList();
+        }
+
+        // Started outside the lock - a worker runs until its first await before handing back - and
+        // registered one by one, so a newcomer added meanwhile is never lost.
+        foreach (var (state, dispatcher, index) in starting)
+        {
+            var task = RunWorkerAsync(goal, state, dispatcher, staggerStarts ? index : 0, runToken.Token);
+            lock (_teamLock)
+            {
+                _roundTasks!.Add(task);
+            }
+        }
 
         try
         {
-            await Task.WhenAll(workers);
-        }
-        catch (OperationCanceledException)
-        {
-            // Reported through the end reason below.
+            // Until no worker is left running - including any that joined while the others worked.
+            while (true)
+            {
+                Task[] running;
+                lock (_teamLock)
+                {
+                    running = [.. _roundTasks!];
+                }
+
+                try
+                {
+                    await Task.WhenAll(running);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Reported through the end reason below.
+                }
+
+                lock (_teamLock)
+                {
+                    if (_roundTasks!.Count == running.Length)
+                    {
+                        _roundTasks = null;
+                        break;
+                    }
+                }
+            }
         }
         finally
         {
+            lock (_teamLock)
+            {
+                _roundTasks = null;
+            }
+
             await stopReminders.CancelAsync();
             foreach (var background in new[] { reminders, stallWatch })
             {
@@ -643,7 +946,11 @@ public sealed class UltraTeamRun
         OnChanged();
 
         var systemPrompt = TeamPrompts.WorkerSystemPrompt(
-            state.Name, Workers.Select(w => w.Name).ToList(), _options.ClaimLifetime, dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName));
+            state.Name,
+            Workers.Select(w => w.Name).ToList(),
+            _options.ClaimLifetime,
+            dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName),
+            maxTeamSize: _options.AutoScale ? MaxWorkers : 0);
         var loop = new HeadlessAgentLoop(
             _client,
             _model,

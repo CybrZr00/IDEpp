@@ -97,6 +97,12 @@
                 <TextBox Text="{Binding UltraTimeBudgetMinutes, UpdateSourceTrigger=PropertyChanged}" Width="50" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <CheckBox Content="Auto mode - start with" IsChecked="{Binding UltraAutoScale}" VerticalAlignment="Center" Margin="0,0,6,0"
+                          ToolTip="The team starts small and its workers ask for more when the work left won't fit the time left. The runner grants at most 2 at a time, spaced out, up to the worker count above - and not when too little time, token budget or disk space is left." />
+                <TextBox Text="{Binding UltraStartWorkers, UpdateSourceTrigger=PropertyChanged}" Width="40" IsEnabled="{Binding UltraAutoScale}" />
+                <TextBlock Text="workers; they can ask for more, up to the worker count" VerticalAlignment="Center" Margin="6,0,0,0" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                 <TextBlock Text="Model requests at a time (1-64):" VerticalAlignment="Center" Margin="0,0,6,0" />
                 <TextBox Text="{Binding UltraConcurrentRequests, UpdateSourceTrigger=PropertyChanged}" Width="40"
                          ToolTip="The whole team's limit on simultaneous model requests - workers beyond it wait their turn. Rate-limited requests are retried with backoff. Raise it with the team size if your provider allows; a local model server usually wants 1-2." />

@@ -50,10 +50,10 @@ public sealed partial class TeamRunViewModel : ObservableObject
     {
         _run = run;
         _discardBranches = discardBranches;
+        _headerSuffix = (startedFrom is null ? "" : $", carrying on from {startedFrom}")
+                        + (runUntilDone ? ", running until done" : "");
         Workers = new ObservableCollection<TeamWorkerRowViewModel>(run.Workers.Select(w => new TeamWorkerRowViewModel(w.Name)));
-        Header = $"⚡ Ultra team - {run.Workers.Count} worker{(run.Workers.Count == 1 ? "" : "s")}"
-                 + (startedFrom is null ? "" : $", carrying on from {startedFrom}")
-                 + (runUntilDone ? ", running until done" : "");
+        header = ComposeHeader();
         LocalProviderWarning = isLocalProvider
             ? "A local model server usually answers one request at a time, so these workers will mostly take turns."
             : null;
@@ -64,7 +64,16 @@ public sealed partial class TeamRunViewModel : ObservableObject
         Refresh();
     }
 
-    public string Header { get; }
+    private readonly string _headerSuffix;
+
+    /// <summary>Recomposed when an auto-mode team grows, which is the one thing about it that changes.</summary>
+    [ObservableProperty]
+    private string header;
+
+    private string ComposeHeader() =>
+        $"⚡ Ultra team - {Workers.Count} worker{(Workers.Count == 1 ? "" : "s")}"
+        + (_run.IsAutoScaling ? $" (auto mode, up to {_run.MaxWorkers})" : "")
+        + _headerSuffix;
 
     public string? LocalProviderWarning { get; }
 
@@ -197,9 +206,20 @@ public sealed partial class TeamRunViewModel : ObservableObject
                            ? $" ({100.0 * _run.CachedPromptTokens / _run.PromptTokens:0}% of input cached)"
                            : "");
 
+        var team = _run.Workers;
+        if (team.Count > Workers.Count)
+        {
+            foreach (var joined in team.Skip(Workers.Count))
+            {
+                Workers.Add(new TeamWorkerRowViewModel(joined.Name));
+            }
+
+            Header = ComposeHeader();
+        }
+
         for (var i = 0; i < Workers.Count; i++)
         {
-            var state = _run.Workers[i];
+            var state = team[i];
             Workers[i].Status = state.Phase switch
             {
                 TeamWorkerPhase.Waiting => "waiting to start",

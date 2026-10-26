@@ -26,6 +26,9 @@ public sealed partial class CopilotChatPaneViewModel
     public const string UltraRunUntilDoneSettingKey = "UltraRunUntilDone";
     public const string UltraMaxRunMinutesSettingKey = "UltraMaxRunMinutes";
     public const string UltraMaxTokensMillionsSettingKey = "UltraMaxTokensMillions";
+    public const string UltraAutoScaleSettingKey = "UltraAutoScale";
+    public const string UltraStartWorkersSettingKey = "UltraStartWorkers";
+    public const int DefaultUltraStartWorkers = 2;
     public const int DefaultUltraWorkerCount = 4;
     public const int MaxUltraWorkerCount = 64;
     public const int DefaultUltraConcurrentRequests = 16;
@@ -138,6 +141,16 @@ public sealed partial class CopilotChatPaneViewModel
         int.TryParse(settings.Get(UltraMaxRunMinutesSettingKey), out var minutes)
             ? Math.Clamp(minutes, MinUltraTimeBudgetMinutes, MaxUltraMaxRunMinutes)
             : DefaultUltraMaxRunMinutes;
+
+    /// <summary>Auto mode: the team starts with <see cref="ReadUltraStartWorkers"/> workers and
+    /// grows, when its workers ask, up to the worker count.</summary>
+    public static bool ReadUltraAutoScale(AppSettingsStore settings) =>
+        bool.TryParse(settings.Get(UltraAutoScaleSettingKey), out var autoScale) && autoScale;
+
+    public static int ReadUltraStartWorkers(AppSettingsStore settings) =>
+        int.TryParse(settings.Get(UltraStartWorkersSettingKey), out var count)
+            ? Math.Clamp(count, 1, MaxUltraWorkerCount)
+            : DefaultUltraStartWorkers;
 
     /// <summary>The token budget, in millions, a run left to go until done ends at; 0 means none.</summary>
     public static int ReadUltraMaxTokensMillions(AppSettingsStore settings) =>
@@ -270,6 +283,8 @@ public sealed partial class CopilotChatPaneViewModel
                 {
                     MaxConcurrentModelRequests = ReadUltraConcurrentRequests(_appSettingsStore),
                     MaxTokens = runUntilDone ? ReadUltraMaxTokensMillions(_appSettingsStore) * 1_000_000L : 0,
+                    AutoScale = ReadUltraAutoScale(_appSettingsStore),
+                    InitialWorkerCount = ReadUltraStartWorkers(_appSettingsStore),
                 };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();
@@ -296,7 +311,8 @@ public sealed partial class CopilotChatPaneViewModel
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
-                CurrentActivity = $"Ultra team working - {options.WorkerCount} workers, up to {options.TimeBudget.TotalMinutes:0} min...";
+                CurrentActivity = $"Ultra team working - {(options.AutoScale ? $"{run.Workers.Count} workers, growing to {run.MaxWorkers} if they ask" : $"{options.WorkerCount} workers")}, "
+                                  + $"up to {options.TimeBudget.TotalMinutes:0} min...";
 
                 var solutionPath = _solutionPath;
                 var testProjects = _testProjectPaths;
@@ -358,6 +374,12 @@ public sealed partial class CopilotChatPaneViewModel
             card?.Abandon("Didn't start - the solution doesn't build.");
             assistantMessage.Text = $"**Ultra team** - didn't start. {ex.Message} No workers were started and "
                                     + $"nothing was spent on them.\n\n```\n{ex.Report}\n```";
+        }
+        catch (UltraTeamDiskSpaceException ex)
+        {
+            card?.Abandon("Didn't start - not enough disk space.");
+            assistantMessage.Text = $"**Ultra team** - didn't start. {ex.Message} No workers were started and nothing "
+                                    + "was spent on them.";
         }
         catch (Exception ex)
         {

@@ -48,6 +48,17 @@ public sealed class TeamMessageBus
         }
     }
 
+    /// <summary>Adds a worker who joins mid-run. They get the channel from now on, not its history -
+    /// the board, which their first cycle opens with, is what carries what the team has learned.</summary>
+    public void AddMember(string member)
+    {
+        lock (_lock)
+        {
+            _direct.TryAdd(member, new Queue<TeamMessage>());
+            _channelCursors[member] = _channel.Count;
+        }
+    }
+
     /// <summary>Raised after every post or direct message, outside the lock.</summary>
     public event Action<TeamMessage>? MessageSent;
 

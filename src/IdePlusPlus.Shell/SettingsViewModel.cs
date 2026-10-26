@@ -51,6 +51,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         ultraConcurrentRequests = CopilotChatPaneViewModel.ReadUltraConcurrentRequests(_appSettingsStore);
         ultraMaxRunMinutes = CopilotChatPaneViewModel.ReadUltraMaxRunMinutes(_appSettingsStore);
         ultraMaxTokensMillions = CopilotChatPaneViewModel.ReadUltraMaxTokensMillions(_appSettingsStore);
+        ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
+        ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -127,6 +129,14 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraMaxTokensMillions;
+
+    /// <summary>Auto mode: start with UltraStartWorkers and let the workers ask for more, up to
+    /// UltraWorkerCount.</summary>
+    [ObservableProperty]
+    private bool ultraAutoScale;
+
+    [ObservableProperty]
+    private int ultraStartWorkers;
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -213,12 +223,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         UltraMaxRunMinutes = Math.Clamp(
             UltraMaxRunMinutes, CopilotChatPaneViewModel.MinUltraTimeBudgetMinutes, CopilotChatPaneViewModel.MaxUltraMaxRunMinutes);
         UltraMaxTokensMillions = Math.Clamp(UltraMaxTokensMillions, 0, CopilotChatPaneViewModel.MaxUltraMaxTokensMillions);
+        UltraStartWorkers = Math.Clamp(UltraStartWorkers, 1, UltraWorkerCount);
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraAutoScaleSettingKey, UltraAutoScale.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraStartWorkersSettingKey, UltraStartWorkers.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConcurrentRequestsSettingKey, UltraConcurrentRequests.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxTokensMillionsSettingKey, UltraMaxTokensMillions.ToString());
-        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers, up to {UltraTimeBudgetMinutes} minutes, "
+        StatusMessage = $"Ultra settings saved - "
+                        + (UltraAutoScale ? $"auto mode, {UltraStartWorkers} workers growing to {UltraWorkerCount}" : $"{UltraWorkerCount} workers")
+                        + $", up to {UltraTimeBudgetMinutes} minutes, "
                         + $"{UltraConcurrentRequests} model requests at a time; run until done stops after "
                         + $"{UltraMaxRunMinutes} minutes"
                         + (UltraMaxTokensMillions > 0 ? $" or {UltraMaxTokensMillions}M tokens." : ".");

@@ -41,6 +41,25 @@ public sealed partial class TeamGitWorkspace
             .ToList();
     }
 
+    /// <summary>The total size of the files in <paramref name="commit"/>'s tree - what a worktree of
+    /// it takes on disk before anything is built in it.</summary>
+    public async Task<long> GetTreeSizeAsync(string repoRoot, string commit, CancellationToken cancellationToken = default)
+    {
+        var output = await RunOrThrowAsync(repoRoot, ["ls-tree", "-r", "-l", "-z", commit], cancellationToken);
+        long total = 0;
+        foreach (var entry in output.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            // "<mode> <type> <object> <size>\t<path>" - the size is "-" for a submodule.
+            var fields = entry.Split('\t', 2)[0].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length >= 4 && long.TryParse(fields[3], out var size))
+            {
+                total += size;
+            }
+        }
+
+        return total;
+    }
+
     /// <summary>
     /// Another team branch that already contains <paramref name="branch"/> and has work on top of it,
     /// or null - so carrying on from an old run's branch can be caught before it leaves out a later

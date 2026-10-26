@@ -11,6 +11,21 @@ public class TeamMessageBusTests
     private TeamMessageBus CreateBus() => new(_time, ["w1", "w2", "w3"]);
 
     [Fact]
+    public void AMemberWhoJoinsMidRun_GetsTheChannelFromThenOn_AndCanBeMessaged()
+    {
+        var bus = CreateBus();
+        bus.Post("w1", "before w4 joined");
+
+        bus.AddMember("w4");
+        bus.Post("w1", "after w4 joined");
+
+        bus.TakeChannel("w4").Select(m => m.Text).ShouldBe(["after w4 joined"]);
+        bus.SendDirect("w2", "w4", "welcome").ShouldBeNull();
+        bus.TakeDirect("w4").ShouldHaveSingleItem().Text.ShouldBe("welcome");
+        bus.Members.ShouldContain("w4");
+    }
+
+    [Fact]
     public void SendDirect_IsTakenOnceByTheRecipientOnly()
     {
         var bus = CreateBus();

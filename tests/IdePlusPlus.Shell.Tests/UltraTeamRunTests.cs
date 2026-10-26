@@ -144,6 +144,127 @@ public sealed class UltraTeamRunTests : IDisposable
         _client.Requests.Last().Messages.Last().Content.ShouldContain("90% of its token budget");
     }
 
+    // --- Auto mode: the team starts small and grows when its workers ask ---
+
+    [Fact]
+    public async Task AutoMode_AWorkerAsksForHelp_AndNewcomersJoinTheRoundFromTheTeamBranch()
+    {
+        _client.Script("w1",
+            _client.Call(TeamTools.RequestHelpToolName, new { count = 2, reason = "four TASKs left and little time" }),
+            _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        _client.Script("w2", _client.Call(TeamTools.DoneToolName, new { summary = "joined, nothing left" }));
+        _client.Script("w3", _client.Call(TeamTools.DoneToolName, new { summary = "joined, nothing left" }));
+        var run = CreateRun(workers: 3, budget: TimeSpan.FromMinutes(10), configure: o => o with
+        {
+            AutoScale = true,
+            InitialWorkerCount = 1,
+            HelpCooldown = TimeSpan.Zero,
+        });
+        run.Workers.Count.ShouldBe(1);
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        result.Workers.Select(w => w.Name).ShouldBe(["w1", "w2", "w3"]);
+        result.Workers.ShouldAllBe(w => w.IsDone);
+        run.Bus.ChannelSnapshot().ShouldContain(m =>
+            m.From == TeamMessageBus.RunnerName && m.Text == "w2, w3 joined the team at w1's request: four TASKs left and little time");
+        var w1Requests = _client.Requests.Where(r => r.Worker == "w1").ToList();
+        w1Requests[0].Messages[0].Content.ShouldContain("The team can grow, up to 3 workers");
+        w1Requests[1].Messages.Last().Content.ShouldContain("Granted: w2, w3 are joining now");
+        Directory.Exists(Worktree(run, "w3", UltraRoot)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AutoMode_RefusesHelpWhileTheLastNewcomersAreStillStarting()
+    {
+        _client.Script("w1",
+            _client.Call(TeamTools.RequestHelpToolName, new { count = 1, reason = "a second pair of hands" }),
+            _client.Call(TeamTools.RequestHelpToolName, new { count = 1, reason = "and a third" }),
+            _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        _client.Script("w2", _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        var run = CreateRun(workers: 4, budget: TimeSpan.FromMinutes(10), configure: o => o with
+        {
+            AutoScale = true,
+            InitialWorkerCount = 1,
+            HelpCooldown = TimeSpan.FromHours(1),
+        });
+
+        var result = await RunAsync(run);
+
+        result.Workers.Count.ShouldBe(2);
+        var replies = ToolReplies("w1");
+        replies[0].ShouldStartWith("Granted: w2 is joining now");
+        replies[1].ShouldStartWith("Refused for now: the team grew");
+    }
+
+    [Fact]
+    public async Task AutoMode_RefusesHelpBeyondTheTeamsLimit_AndGrantsNoMoreThanTheRoomLeft()
+    {
+        _client.Script("w1",
+            _client.Call(TeamTools.RequestHelpToolName, new { count = 2, reason = "lots left" }),
+            _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        _client.Script("w2",
+            _client.Call(TeamTools.RequestHelpToolName, new { count = 1, reason = "still lots left" }),
+            _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        var run = CreateRun(workers: 2, budget: TimeSpan.FromMinutes(10), configure: o => o with
+        {
+            AutoScale = true,
+            InitialWorkerCount = 1,
+            HelpCooldown = TimeSpan.Zero,
+        });
+
+        var result = await RunAsync(run);
+
+        result.Workers.Select(w => w.Name).ShouldBe(["w1", "w2"]);
+        ToolReplies("w1")[0].ShouldStartWith("Granted: w2 is joining now");
+        ToolReplies("w2")[0].ShouldStartWith("Refused: the team is at its limit of 2 workers");
+    }
+
+    /// <summary>What a worker's tool calls answered, in order - the last message of each of its
+    /// requests after its first.</summary>
+    private List<string> ToolReplies(string worker) =>
+        _client.Requests.Where(r => r.Worker == worker).Skip(1)
+            .Select(r => r.Messages.Last())
+            .Where(m => m.Role == ChatRole.Tool)
+            .Select(m => m.Content)
+            .ToList();
+
+    [Fact]
+    public async Task AutoMode_RefusesHelpWhenTheDiskWillNotTakeAnotherWorktree()
+    {
+        var checks = 0;
+        _client.Script("w1",
+            _client.Call(TeamTools.RequestHelpToolName, new { count = 1, reason = "more hands" }),
+            _client.Call(TeamTools.DoneToolName, new { summary = "ok" }));
+        var run = CreateRun(workers: 4, budget: TimeSpan.FromMinutes(10), configure: o => o with
+        {
+            AutoScale = true,
+            InitialWorkerCount = 1,
+            HelpCooldown = TimeSpan.Zero,
+            // Room for the team it starts with, none for anyone joining.
+            FreeDiskSpace = _ => Interlocked.Increment(ref checks) == 1 ? long.MaxValue / 2 : 0,
+        });
+
+        var result = await RunAsync(run);
+
+        result.Workers.Count.ShouldBe(1);
+        _client.Requests.Last().Messages.Last().Content.ShouldStartWith("Refused: the disk will not take 1 more worktree(s)");
+    }
+
+    [Fact]
+    public async Task ATeamWhoseWorktreesWouldNotFitOnTheDisk_IsRefusedBeforeAnythingIsCreated()
+    {
+        var run = CreateRun(workers: 2, budget: TimeSpan.FromMinutes(10), configure: o => o with { FreeDiskSpace = _ => 0 });
+
+        var error = await Should.ThrowAsync<UltraTeamDiskSpaceException>(() => RunAsync(run));
+
+        error.Message.ShouldContain("2 worktree(s) need about");
+        _client.Requests.ShouldBeEmpty();
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "branch", "--list", $"ideplusplus/ultra/{run.RunId}/*").ShouldBeEmpty();
+        Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
+    }
+
     [Theory]
     [InlineData(1, 0)]
     [InlineData(16, 5_000)]
