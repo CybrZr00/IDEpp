@@ -302,6 +302,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         areWebFetchEnabled =
             bool.TryParse(_appSettingsStore.Get(WebFetchSettingKey), out var savedWebFetch) && savedWebFetch;
         isPlanMode = bool.TryParse(_appSettingsStore.Get(PlanModeSettingKey), out var savedPlanMode) && savedPlanMode;
+        isUltraRunUntilDone =
+            bool.TryParse(_appSettingsStore.Get(UltraRunUntilDoneSettingKey), out var savedRunUntilDone) && savedRunUntilDone;
 
         AvailableModels = [];
 

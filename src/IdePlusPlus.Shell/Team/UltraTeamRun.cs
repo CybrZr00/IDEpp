@@ -34,6 +34,12 @@ public sealed record UltraTeamOptions(
 
     public TimeSpan RateLimitBackoff { get; init; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>The run ends once its workers have used this many tokens between them (prompt plus
+    /// completion), whatever time is left; 0 means no limit. The team is told at 90% to stop starting
+    /// new work, the way the time reminders tell it. Set for a run left to go until done, which has
+    /// nobody to ask whether to keep spending.</summary>
+    public long MaxTokens { get; init; }
+
     /// <summary>How long workers get to finish their current step once time is up, before they are
     /// cancelled outright.</summary>
     public TimeSpan HardStopGrace { get; init; } = TimeSpan.FromMinutes(2);
@@ -87,6 +93,9 @@ public enum UltraTeamEndReason
     /// <summary>Paused because nothing could merge: no work reached the team branch for the stall
     /// window while merge builds kept failing.</summary>
     Stalled,
+
+    /// <summary>The team used up its token budget (<see cref="UltraTeamOptions.MaxTokens"/>).</summary>
+    BudgetSpent,
 }
 
 /// <summary>What a finished run leaves behind. The team branch is kept (when anything was merged)
@@ -224,11 +233,20 @@ public sealed class UltraTeamRun
     /// <summary>Set by the stall check to end the round between steps, the way running out of time does.</summary>
     private volatile string? _stalledBecause;
 
+    /// <summary>Set once the token budget is spent; unlike a stall it is never cleared - no later
+    /// round gets more budget.</summary>
+    private volatile string? _budgetSpentBecause;
+
+    private int _budgetWarningSent;
+
     private string? _repositoryRoot;
     private string? _teamBranch;
 
-    /// <summary>The round is over for its workers: out of time, or stalled.</summary>
-    private bool RoundOver => TimeLeft <= TimeSpan.Zero || _stalledBecause is not null;
+    /// <summary>The round is over for its workers: out of time or token budget, or stalled.</summary>
+    private bool RoundOver => TimeLeft <= TimeSpan.Zero || _stalledBecause is not null || _budgetSpentBecause is not null;
+
+    /// <summary>The token budget the run ends at, or 0 for none.</summary>
+    public long MaxTokens => _options.MaxTokens;
 
     /// <summary>The branch this run carries on from, merged into the working-tree snapshot it starts
     /// at - null for a run that starts from the working tree alone.</summary>
@@ -561,6 +579,7 @@ public sealed class UltraTeamRun
 
         return cancellationToken.IsCancellationRequested ? UltraTeamEndReason.Cancelled
             : Workers.All(w => w.IsDone) ? UltraTeamEndReason.AllDone
+            : _budgetSpentBecause is not null ? UltraTeamEndReason.BudgetSpent
             : _stalledBecause is not null ? UltraTeamEndReason.Stalled
             : TimeLeft <= TimeSpan.Zero ? UltraTeamEndReason.TimeUp
             : UltraTeamEndReason.WorkersStopped;
@@ -734,6 +753,27 @@ public sealed class UltraTeamRun
 
     private void OnChanged() => Changed?.Invoke();
 
+    /// <summary>Called as usage arrives: warns the team once at 90% of the token budget, and ends the
+    /// round at 100%. Workers stop between steps, as they do when time runs out.</summary>
+    private void CheckTokenBudget()
+    {
+        if (_options.MaxTokens <= 0 || _budgetSpentBecause is not null)
+        {
+            return;
+        }
+
+        var used = (long)PromptTokens + CompletionTokens;
+        if (used >= _options.MaxTokens)
+        {
+            _budgetSpentBecause = $"The token budget is spent: {used:N0} of {_options.MaxTokens:N0} tokens used.";
+            OnChanged();
+        }
+        else if (used >= _options.MaxTokens * 0.9 && Interlocked.Exchange(ref _budgetWarningSent, 1) == 0)
+        {
+            Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.BudgetReminder);
+        }
+    }
+
     /// <summary>
     /// The team's share of the provider: at most <see cref="UltraTeamOptions.MaxConcurrentModelRequests"/>
     /// requests in flight, and a request refused for rate limiting retried with backoff instead of
@@ -821,6 +861,7 @@ public sealed class UltraTeamRun
                     Interlocked.Add(ref run._promptTokens, usage.PromptTokens);
                     Interlocked.Add(ref run._completionTokens, usage.CompletionTokens);
                     Interlocked.Add(ref run._cachedPromptTokens, usage.CachedPromptTokens);
+                    run.CheckTokenBudget();
                     run.OnChanged();
                 }
 

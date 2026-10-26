@@ -23,9 +23,16 @@ public sealed partial class CopilotChatPaneViewModel
     public const string UltraWorkerCountSettingKey = "UltraWorkerCount";
     public const string UltraTimeBudgetSettingKey = "UltraTimeBudgetMinutes";
     public const string UltraConcurrentRequestsSettingKey = "UltraMaxConcurrentRequests";
+    public const string UltraRunUntilDoneSettingKey = "UltraRunUntilDone";
+    public const string UltraMaxRunMinutesSettingKey = "UltraMaxRunMinutes";
+    public const string UltraMaxTokensMillionsSettingKey = "UltraMaxTokensMillions";
     public const int DefaultUltraWorkerCount = 4;
     public const int MaxUltraWorkerCount = 64;
     public const int DefaultUltraConcurrentRequests = 16;
+    public const int DefaultUltraMaxRunMinutes = 480;
+    public const int MaxUltraMaxRunMinutes = 2_880;
+    public const int DefaultUltraMaxTokensMillions = 50;
+    public const int MaxUltraMaxTokensMillions = 2_000;
     public const int DefaultUltraTimeBudgetMinutes = 30;
     public const int MinUltraTimeBudgetMinutes = 5;
     public const int MaxUltraTimeBudgetMinutes = 240;
@@ -124,6 +131,30 @@ public sealed partial class CopilotChatPaneViewModel
         int.TryParse(settings.Get(UltraConcurrentRequestsSettingKey), out var requests)
             ? Math.Clamp(requests, 1, MaxUltraWorkerCount)
             : DefaultUltraConcurrentRequests;
+
+    /// <summary>The longest a run left to go until done may take - its only time limit, since there
+    /// is nobody to ask at the end of a round.</summary>
+    public static int ReadUltraMaxRunMinutes(AppSettingsStore settings) =>
+        int.TryParse(settings.Get(UltraMaxRunMinutesSettingKey), out var minutes)
+            ? Math.Clamp(minutes, MinUltraTimeBudgetMinutes, MaxUltraMaxRunMinutes)
+            : DefaultUltraMaxRunMinutes;
+
+    /// <summary>The token budget, in millions, a run left to go until done ends at; 0 means none.</summary>
+    public static int ReadUltraMaxTokensMillions(AppSettingsStore settings) =>
+        int.TryParse(settings.Get(UltraMaxTokensMillionsSettingKey), out var millions)
+            ? Math.Clamp(millions, 0, MaxUltraMaxTokensMillions)
+            : DefaultUltraMaxTokensMillions;
+
+    /// <summary>
+    /// Set, an Ultra message runs the team until it is done - every worker reports done - or a cap in
+    /// Settings is reached: total time, total tokens, or a stall. Nobody is asked at the end of a
+    /// round, and what reached the team branch is then landed on the checked-out branch as a commit
+    /// instead of offered file by file. Saved as soon as it changes, like Auto Mode.
+    /// </summary>
+    [ObservableProperty]
+    private bool isUltraRunUntilDone;
+
+    partial void OnIsUltraRunUntilDoneChanged(bool value) => _appSettingsStore.Set(UltraRunUntilDoneSettingKey, value.ToString());
 
     public static int ReadUltraTimeBudgetMinutes(AppSettingsStore settings) =>
         int.TryParse(settings.Get(UltraTimeBudgetSettingKey), out var minutes)
@@ -227,14 +258,18 @@ public sealed partial class CopilotChatPaneViewModel
                     }
                 }
 
+                // Until done, the caps are the only limits: one round as long as the time cap, and
+                // nobody asked to continue - a stall or a spent budget ends the run instead.
+                var runUntilDone = IsUltraRunUntilDone;
                 var options = new UltraTeamOptions(
                     ReadUltraWorkerCount(_appSettingsStore),
-                    TimeSpan.FromMinutes(ReadUltraTimeBudgetMinutes(_appSettingsStore)),
+                    TimeSpan.FromMinutes(runUntilDone ? ReadUltraMaxRunMinutes(_appSettingsStore) : ReadUltraTimeBudgetMinutes(_appSettingsStore)),
                     AreShellCommandsEnabled,
                     _currentConfiguration?.Invoke() ?? "Debug",
                     ChatEffort.Ultra)
                 {
                     MaxConcurrentModelRequests = ReadUltraConcurrentRequests(_appSettingsStore),
+                    MaxTokens = runUntilDone ? ReadUltraMaxTokensMillions(_appSettingsStore) * 1_000_000L : 0,
                 };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();
@@ -243,7 +278,7 @@ public sealed partial class CopilotChatPaneViewModel
                     client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit,
                     TimeProvider.System, UltraRootDirectory,
                     (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct),
-                    askToContinue: ct => _dispatcher.InvokeAsync(async () =>
+                    askToContinue: runUntilDone ? null : ct => _dispatcher.InvokeAsync(async () =>
                     {
                         StatusMessage = "The Ultra team is waiting for you - keep it going, or finish and review? (on the team card)";
                         try
@@ -257,7 +292,7 @@ public sealed partial class CopilotChatPaneViewModel
                     }).Task.Unwrap());
 
                 card = new TeamRunViewModel(
-                    run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom);
+                    run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom, runUntilDone);
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
@@ -435,6 +470,7 @@ public sealed partial class CopilotChatPaneViewModel
             UltraTeamEndReason.TimeUp => "stopped: the time budget ran out.",
             UltraTeamEndReason.Cancelled => "stopped.",
             UltraTeamEndReason.Stalled => "stopped: the team had stalled - nothing could merge, and merge builds kept failing.",
+            UltraTeamEndReason.BudgetSpent => $"stopped: the token budget ({run.MaxTokens:N0}) was spent.",
             _ => "stopped: no worker was still making progress.",
         });
         text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min"

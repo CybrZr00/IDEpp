@@ -39,14 +39,21 @@ public sealed partial class TeamRunViewModel : ObservableObject
     /// worker branches - once the user has finished with them. Null hides the button.</param>
     /// <param name="startedFrom">The branch the run carries on from, shown in the header; null for a
     /// run from the working tree alone.</param>
+    /// <param name="runUntilDone">The run goes on until done or a cap, with nobody asked between
+    /// rounds - said in the header, since the card is where the user looks while it runs.</param>
     public TeamRunViewModel(
-        UltraTeamRun run, bool isLocalProvider, Func<IReadOnlyList<string>, Task>? discardBranches, string? startedFrom = null)
+        UltraTeamRun run,
+        bool isLocalProvider,
+        Func<IReadOnlyList<string>, Task>? discardBranches,
+        string? startedFrom = null,
+        bool runUntilDone = false)
     {
         _run = run;
         _discardBranches = discardBranches;
         Workers = new ObservableCollection<TeamWorkerRowViewModel>(run.Workers.Select(w => new TeamWorkerRowViewModel(w.Name)));
         Header = $"⚡ Ultra team - {run.Workers.Count} worker{(run.Workers.Count == 1 ? "" : "s")}"
-                 + (startedFrom is null ? "" : $", carrying on from {startedFrom}");
+                 + (startedFrom is null ? "" : $", carrying on from {startedFrom}")
+                 + (runUntilDone ? ", running until done" : "");
         LocalProviderWarning = isLocalProvider
             ? "A local model server usually answers one request at a time, so these workers will mostly take turns."
             : null;
@@ -140,6 +147,7 @@ public sealed partial class TeamRunViewModel : ObservableObject
             UltraTeamEndReason.TimeUp => "Stopped - the time budget ran out.",
             UltraTeamEndReason.Cancelled => "Stopped.",
             UltraTeamEndReason.Stalled => "Paused and finished - the team had stalled: nothing could merge.",
+            UltraTeamEndReason.BudgetSpent => "Stopped - the token budget was spent.",
             _ => "Stopped - no worker was still making progress.",
         };
         _keptBranches = [.. result.TeamBranchKept ? [result.TeamBranch] : Array.Empty<string>(), .. result.KeptWorkerBranches];
@@ -183,7 +191,8 @@ public sealed partial class TeamRunViewModel : ObservableObject
             : $"{Clock(_run.Elapsed)} elapsed, {Clock(_run.TimeLeft < TimeSpan.Zero ? TimeSpan.Zero : _run.TimeLeft)} left";
         ProgressText = (_run.Round > 1 ? $"Round {_run.Round}  ·  " : "")
                        + $"{time}  ·  {merges} merge{(merges == 1 ? "" : "s")}  ·  "
-                       + $"{_run.PromptTokens + _run.CompletionTokens:N0} tokens"
+                       + $"{_run.PromptTokens + _run.CompletionTokens:N0}"
+                       + (_run.MaxTokens > 0 ? $" of {_run.MaxTokens:N0}" : "") + " tokens"
                        + (_run.CachedPromptTokens > 0 && _run.PromptTokens > 0
                            ? $" ({100.0 * _run.CachedPromptTokens / _run.PromptTokens:0}% of input cached)"
                            : "");

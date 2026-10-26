@@ -149,11 +149,17 @@ public static class TeamPrompts
         + "your worktree. Build on it: read what is there, and any plan or progress notes it includes, before "
         + "you claim anything, and do not redo work that is already done.";
 
-    /// <summary>Sent to every worker when the run stalls: it is about to pause and ask the user.</summary>
+    /// <summary>Sent to every worker when the run stalls: it is about to pause, or end.</summary>
     public const string StallNotice =
-        "The run is pausing: nothing has reached the team branch for a while and merge builds keep failing. Finish "
-        + "your current step, post a FAIL or FACT saying what is blocking you, and stop - the user is being asked how "
-        + "to go on.";
+        "The run is stopping: nothing has reached the team branch for a while and merge builds keep failing. Finish "
+        + "your current step, post a FAIL or FACT saying what is blocking you, and stop - the user decides how to go "
+        + "on.";
+
+    /// <summary>Sent once, at 90% of a run's token budget - the spending counterpart of the deadline
+    /// reminder.</summary>
+    public const string BudgetReminder =
+        "The team has used 90% of its token budget. Stop starting new work: finish what you are on, get it building, "
+        + "and team_merge it. When the budget runs out the run ends, and anything not merged is lost.";
 
     public const string IdleNudge =
         "Your last cycle ended without merging or posting anything. Keep working: board_read, then claim and do the "

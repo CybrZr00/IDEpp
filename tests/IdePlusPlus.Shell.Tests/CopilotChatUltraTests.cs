@@ -329,6 +329,21 @@ public sealed class CopilotChatUltraTests : IDisposable
     }
 
     [Fact]
+    public void RunUntilDone_IsRemembered_AndSaidOnTheTeamCard() => RunOnUiThread(async () =>
+    {
+        _http.Script = n => n == 1 ? ToolCall(TeamTools.DoneToolName, new { summary = "nothing to change" }) : Text("done");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.IsUltraRunUntilDone = true;
+
+        viewModel.InputText = "Run it to the end.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem().Header.ShouldEndWith(", running until done");
+        CreateViewModel(workers: 1).IsUltraRunUntilDone.ShouldBeTrue();
+    });
+
+    [Fact]
     public void ComposeTeamGoal_CarriesTheRecentConversation_CappedAndLabelled()
     {
         var earlier = new List<CommunityToolkit.Mvvm.ComponentModel.ObservableObject>

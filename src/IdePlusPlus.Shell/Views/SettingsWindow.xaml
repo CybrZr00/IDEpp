@@ -101,6 +101,13 @@
                 <TextBox Text="{Binding UltraConcurrentRequests, UpdateSourceTrigger=PropertyChanged}" Width="40"
                          ToolTip="The whole team's limit on simultaneous model requests - workers beyond it wait their turn. Rate-limited requests are retried with backoff. Raise it with the team size if your provider allows; a local model server usually wants 1-2." />
             </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <TextBlock Text="Run until done stops after (minutes, 5-2880):" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBox Text="{Binding UltraMaxRunMinutes, UpdateSourceTrigger=PropertyChanged}" Width="50" />
+                <TextBlock Text="or (million tokens, 0 = no limit):" VerticalAlignment="Center" Margin="16,0,6,0" />
+                <TextBox Text="{Binding UltraMaxTokensMillions, UpdateSourceTrigger=PropertyChanged}" Width="50"
+                         ToolTip="The whole team's prompt plus completion tokens. At 90% the workers are told to finish and merge what they are on." />
+            </StackPanel>
             <Button Content="Save Ultra Settings" Command="{Binding SaveUltraSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
             <TextBlock Text="NuGet" FontWeight="Bold" Margin="0,0,0,8" />

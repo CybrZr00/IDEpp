@@ -117,6 +117,33 @@ public sealed class UltraTeamRunTests : IDisposable
         _client.Requests.Count.ShouldBe(9);
     }
 
+    /// <summary>A run left to go until done has nobody to ask whether to keep spending, so its token
+    /// budget ends it outright - after warning the team to wrap up at 90%.</summary>
+    [Fact]
+    public async Task ATokenBudget_WarnsTheTeamAt90Percent_ThenEndsTheRun_WithoutAskingToContinue()
+    {
+        _client.WhenScriptEmpty = _ => _client.Call(TeamTools.BoardReadToolName);
+        _client.UsagePerReply = (100, 10);
+        var asked = false;
+        var run = CreateRun(
+            workers: 1,
+            budget: TimeSpan.FromMinutes(10),
+            askToContinue: _ =>
+            {
+                asked = true;
+                return Task.FromResult(true);
+            },
+            configure: o => o with { MaxTokens = 600 });
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.BudgetSpent);
+        asked.ShouldBeFalse();
+        // 110 tokens a reply: the fifth (550) crosses 90%, the sixth (660) spends the budget.
+        _client.Requests.Count.ShouldBe(6);
+        _client.Requests.Last().Messages.Last().Content.ShouldContain("90% of its token budget");
+    }
+
     [Theory]
     [InlineData(1, 0)]
     [InlineData(16, 5_000)]

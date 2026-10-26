@@ -561,6 +561,12 @@
                           FontSize="11"
                           ToolTip="Carry on from an earlier Ultra run's team branch, or type any branch or commit. It is merged into your working tree for the team to build on, and its work is offered for review with the rest." />
             </DockPanel>
+            <CheckBox Content="Run until done"
+                      IsChecked="{Binding IsUltraRunUntilDone}"
+                      FontSize="11"
+                      Margin="0,2,0,0"
+                      Visibility="{Binding IsUltraEffort, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
+                      ToolTip="Keep the team going until every worker reports done, or a cap in Settings is reached - total time, total tokens, or a stall. Nobody is asked between rounds." />
             <TextBlock Text="⚡ Auto Mode is on - edits are applied automatically, without review"
                        FontSize="10"
                        Foreground="OrangeRed"
