@@ -262,6 +262,73 @@ public sealed class CopilotChatUltraTests : IDisposable
     });
 
     [Fact]
+    public void StartFrom_ABranchALaterRunCarriedOnFrom_AsksFirst_AndCanCarryOnFromTheLaterOne() => RunOnUiThread(async () =>
+    {
+        var (older, later) = CommitOlderAndLaterTeamBranches();
+        _http.Script = n => n == 1 ? ToolCall(TeamTools.DoneToolName, new { summary = "already there" }) : Text("done");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        var asked = new List<(string Chosen, string Later, int LaterCommits)>();
+        viewModel.LaterTeamBranchPrompt = (chosen, laterBranch, laterCommits) =>
+        {
+            asked.Add((chosen, laterBranch, laterCommits));
+            return UltraStartChoice.StartFromLater;
+        };
+
+        await viewModel.RefreshUltraStartOptionsAsync();
+        viewModel.UltraStartFrom = older;
+        viewModel.InputText = "Carry on.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        asked.ShouldBe([(older, later, 1)]);
+        viewModel.UltraStartFrom.ShouldBe(later);
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem().Header.ShouldContain($"carrying on from {later}");
+        viewModel.Messages.OfType<EditProposalViewModel>()
+            .Select(p => p.FilePath.Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ShouldBe(["Lib/Later.cs", "Lib/Older.cs"]);
+    });
+
+    [Fact]
+    public void StartFrom_ABranchALaterRunCarriedOnFrom_CancelledAtThePrompt_StartsNothing() => RunOnUiThread(async () =>
+    {
+        var (older, later) = CommitOlderAndLaterTeamBranches();
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.LaterTeamBranchPrompt = (_, _, _) => UltraStartChoice.Cancel;
+
+        await viewModel.RefreshUltraStartOptionsAsync();
+        viewModel.UltraStartFrom = older;
+        viewModel.InputText = "Carry on.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        viewModel.IsStreaming.ShouldBeFalse();
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldBeEmpty();
+        viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text.ShouldContain($"not started. `{later}` already carries on");
+        _http.FirstRequestBody.ShouldBeEmpty();
+        Directory.Exists(viewModel.UltraRootDirectory).ShouldBeFalse();
+        viewModel.UltraStartFrom.ShouldBe(older);
+    });
+
+    /// <summary>An earlier run's team branch, and a later run's that carried on from it with one
+    /// commit of its own on top.</summary>
+    private (string Older, string Later) CommitOlderAndLaterTeamBranches()
+    {
+        var older = TeamGitWorkspace.GetTeamBranchName("older");
+        var later = TeamGitWorkspace.GetTeamBranchName("later");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "-c", older);
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Older.cs"), "public class Older { }\n");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "an older run's work");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "-c", later);
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Later.cs"), "public class Later { }\n");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "the later run's work on top");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "switch", "main");
+        return (older, later);
+    }
+
+    [Fact]
     public void ComposeTeamGoal_CarriesTheRecentConversation_CappedAndLabelled()
     {
         var earlier = new List<CommunityToolkit.Mvvm.ComponentModel.ObservableObject>

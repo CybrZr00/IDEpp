@@ -245,6 +245,48 @@ public sealed class TeamGitWorkspaceTests : IDisposable
         branches.ShouldBe([TeamGitWorkspace.GetTeamBranchName("newer"), TeamGitWorkspace.GetTeamBranchName("older")]);
     }
 
+    [Fact]
+    public async Task FindLaterTeamBranchAsync_OffersTheRunWithTheMostWorkOnTop_NotANewerOneThatDidNothing()
+    {
+        CommitFile("a.txt", "a");
+        var older = TeamGitWorkspace.GetTeamBranchName("older");
+        RunGit("branch", older);
+        var later = TeamGitWorkspace.GetTeamBranchName("later");
+        RunGit("switch", "-c", later);
+        CommitFile("b.txt", "b");
+        CommitFile("c.txt", "c");
+        // A newer run started from the same old branch and stopped before merging anything: all its
+        // team branch has on top is the run machinery's own commit.
+        RunGit("switch", "-c", TeamGitWorkspace.GetTeamBranchName("stopped"), older);
+        WriteFile("snapshot.txt", "s");
+        RunGit("add", "-A");
+        RunGitWithEnvironment(
+            ["-c", "user.name=IDE++ Ultra", "commit", "-m", "IDE++ Ultra snapshot"], "GIT_COMMITTER_DATE", "2099-01-01T00:00:00");
+        RunGit("switch", "main");
+
+        var successor = await _workspace.FindLaterTeamBranchAsync(_repositoryDirectory, older);
+
+        successor.ShouldBe(new TeamBranchSuccessor(later, 2));
+    }
+
+    [Fact]
+    public async Task FindLaterTeamBranchAsync_ForTheLatestTeamBranch_OrABranchThatIsNotARunsOwn_ReturnsNull()
+    {
+        CommitFile("a.txt", "a");
+        var older = TeamGitWorkspace.GetTeamBranchName("older");
+        RunGit("branch", older);
+        var later = TeamGitWorkspace.GetTeamBranchName("later");
+        RunGit("switch", "-c", later);
+        CommitFile("b.txt", "b");
+        RunGit("switch", "main");
+
+        (await _workspace.FindLaterTeamBranchAsync(_repositoryDirectory, later)).ShouldBeNull();
+        // Every team branch contains main, which says nothing about carrying on from it.
+        (await _workspace.FindLaterTeamBranchAsync(_repositoryDirectory, "main")).ShouldBeNull();
+        (await _workspace.FindLaterTeamBranchAsync(_repositoryDirectory, $"refs/heads/{older}"))
+            .ShouldBe(new TeamBranchSuccessor(later, 1));
+    }
+
     // --- Worktrees, commits and merges between workers ---
 
     [Fact]

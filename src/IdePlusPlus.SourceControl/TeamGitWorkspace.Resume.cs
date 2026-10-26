@@ -16,6 +16,10 @@ public enum TeamStartMergeStatus
 /// was already in it - and null on a conflict, when ConflictedPaths names the files.</summary>
 public sealed record TeamStartMergeResult(TeamStartMergeStatus Status, string? Commit, IReadOnlyList<string> ConflictedPaths);
 
+/// <summary>A later run's team branch that already carried on from the one asked about.
+/// LaterCommits counts the work it has on top - commits the run machinery itself did not make.</summary>
+public sealed record TeamBranchSuccessor(string Branch, int LaterCommits);
+
 public sealed partial class TeamGitWorkspace
 {
     private const string StartMergeAuthorName = "IDE++ Ultra";
@@ -35,6 +39,51 @@ public sealed partial class TeamGitWorkspace
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(name => name.EndsWith("/team", StringComparison.Ordinal))
             .ToList();
+    }
+
+    /// <summary>
+    /// Another team branch that already contains <paramref name="branch"/> and has work on top of it,
+    /// or null - so carrying on from an old run's branch can be caught before it leaves out a later
+    /// run that carried on from it too, and the team redoes that run's work.
+    ///
+    /// Commits by the run machinery itself (the snapshot and start-from merge, both authored as
+    /// "IDE++ Ultra") are not work: a run stopped before merging anything still keeps a team branch
+    /// containing the one it started from, and that is no reason to suggest it. Of the rest, the one
+    /// with the most work on top wins rather than the newest, for the same reason - a run started
+    /// from the old branch by mistake is newer than the run it should have carried on from.
+    ///
+    /// Only asked about team branches: every team branch contains master, and "a later run carried
+    /// on from master" is no warning at all.
+    /// </summary>
+    public async Task<TeamBranchSuccessor?> FindLaterTeamBranchAsync(
+        string repoRoot, string branch, CancellationToken cancellationToken = default)
+    {
+        var name = branch.StartsWith("refs/heads/", StringComparison.Ordinal) ? branch["refs/heads/".Length..] : branch;
+        if (!name.StartsWith(BranchPrefix, StringComparison.Ordinal) || !name.EndsWith("/team", StringComparison.Ordinal)
+            || await ResolveRefAsync(repoRoot, branch, cancellationToken) is not { } branchCommit)
+        {
+            return null;
+        }
+
+        TeamBranchSuccessor? best = null;
+        foreach (var candidate in await ListTeamBranchesAsync(repoRoot, cancellationToken))
+        {
+            if (!await IsAncestorAsync(repoRoot, branchCommit, candidate, cancellationToken))
+            {
+                continue;
+            }
+
+            var authors = await RunOrThrowAsync(repoRoot, ["log", "--format=%an", $"{branchCommit}..{candidate}"], cancellationToken);
+            var laterCommits = authors
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Count(author => author != SnapshotAuthorName);
+            if (laterCommits > 0 && (best is null || laterCommits > best.LaterCommits))
+            {
+                best = new TeamBranchSuccessor(candidate, laterCommits);
+            }
+        }
+
+        return best;
     }
 
     /// <summary>

@@ -52,6 +52,14 @@ public sealed partial class CopilotChatPaneViewModel
     /// </summary>
     public Func<string, string, Task<ApprovalChoice>>? TeamShellCommandApprovalPrompt { get; set; }
 
+    /// <summary>
+    /// Asked before an Ultra run carries on from a team branch that a later run already carried on
+    /// from - (branch chosen, later branch, commits of work the later one has on top). Starting from
+    /// the chosen one leaves that work out, and the team would likely do it all again. Unset, the run
+    /// starts from the branch chosen without asking.
+    /// </summary>
+    public Func<string, string, int, UltraStartChoice>? LaterTeamBranchPrompt { get; set; }
+
     /// <summary>The "Start from" choice that means no branch: the run starts from the working tree alone.</summary>
     public const string WorkingTreeStartOption = "(your working tree)";
 
@@ -188,6 +196,28 @@ public sealed partial class CopilotChatPaneViewModel
                 // saved first - the same as build_solution does, for the same reason.
                 _editApplicationService.SaveDirtyDocuments();
 
+                // Before the run exists, since creating one makes its folder. The picker lists every
+                // team branch newest first, but one run carrying on from another leaves both listed,
+                // and picking the older is easy - and silently drops everything the later run did.
+                var startFrom = SelectedUltraStartBranch;
+                if (startFrom is not null
+                    && LaterTeamBranchPrompt is { } askAboutLaterBranch
+                    && await _teamGit.FindLaterTeamBranchAsync(repositoryRoot, startFrom, turn.Token) is { } later)
+                {
+                    ThrowIfDetached(turn);
+                    switch (askAboutLaterBranch(startFrom, later.Branch, later.LaterCommits))
+                    {
+                        case UltraStartChoice.StartFromLater:
+                            startFrom = later.Branch;
+                            UltraStartFrom = later.Branch;
+                            break;
+                        case UltraStartChoice.Cancel:
+                            assistantMessage.Text = $"**Ultra team** - not started. `{later.Branch}` already carries on from "
+                                                    + $"`{startFrom}`. Choose under Start from, then send again.";
+                            return;
+                    }
+                }
+
                 var options = new UltraTeamOptions(
                     ReadUltraWorkerCount(_appSettingsStore),
                     TimeSpan.FromMinutes(ReadUltraTimeBudgetMinutes(_appSettingsStore)),
@@ -214,7 +244,6 @@ public sealed partial class CopilotChatPaneViewModel
                         }
                     }).Task.Unwrap());
 
-                var startFrom = SelectedUltraStartBranch;
                 card = new TeamRunViewModel(
                     run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom);
                 runCard = card;

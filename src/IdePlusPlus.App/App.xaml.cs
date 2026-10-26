@@ -152,6 +152,7 @@ public partial class App : Application
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question,
                 MessageBoxResult.No) == MessageBoxResult.Yes;
+        copilotChatPane.LaterTeamBranchPrompt = (chosen, later, laterCommits) => ConfirmUltraStartFrom(mainWindow, chosen, later, laterCommits);
 
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.
@@ -265,6 +266,30 @@ public partial class App : Application
             warning: "It runs as you, in that worker's worktree, with your permissions. \"Allow all for this run\" "
                      + "lets every worker on this team run any command, without asking, until the run ends - "
                      + "including any extra rounds you continue it for.");
+    }
+
+    /// <summary>
+    /// Asked when an Ultra run would carry on from a team branch that a later run already carried on
+    /// from. Yes, the default, takes the later branch - it has everything the chosen one does - and
+    /// closing the box starts nothing.
+    /// </summary>
+    private static UltraStartChoice ConfirmUltraStartFrom(Window owner, string chosen, string later, int laterCommits)
+    {
+        var newLine = Environment.NewLine;
+        return MessageBox.Show(
+                owner,
+                $"{later} already carries on from {chosen}, with {laterCommits} commit(s) of later work on top."
+                + $"{newLine}{newLine}Starting from {chosen} leaves that work out, and the team would likely do it again."
+                + $"{newLine}{newLine}Yes - start from {later}{newLine}No - start from {chosen} anyway{newLine}Cancel - don't start",
+                "IDE++ - carry on from an older run?",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question,
+                MessageBoxResult.Yes) switch
+        {
+            MessageBoxResult.Yes => UltraStartChoice.StartFromLater,
+            MessageBoxResult.No => UltraStartChoice.StartFromChosen,
+            _ => UltraStartChoice.Cancel,
+        };
     }
 
     /// <summary>
