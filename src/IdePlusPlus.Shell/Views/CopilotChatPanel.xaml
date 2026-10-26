@@ -542,7 +542,7 @@
                        Margin="0,2,0,0"
                        TextWrapping="Wrap"
                        Visibility="{Binding IsPlanMode, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
-            <TextBlock Text="⚡ Ultra is on - your next message goes to a team of workers, each in its own git worktree. Like Auto Mode, they edit, build and run tests without review, so code they write runs on this machine. Their result comes back as edits for you to review. Team size and time budget are in Settings."
+            <TextBlock Text="⚡ Ultra is on - your next message goes to a team of workers, each in its own git worktree. Like Auto Mode, they edit, build and run tests without review, so code they write runs on this machine. Their result comes back as edits for you to review - or, with Run until done, is merged into your checked-out branch. Team size, time budget and caps are in Settings."
                        FontSize="10"
                        Foreground="OrangeRed"
                        Margin="0,2,0,0"
@@ -566,7 +566,7 @@
                       FontSize="11"
                       Margin="0,2,0,0"
                       Visibility="{Binding IsUltraEffort, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}"
-                      ToolTip="Keep the team going until every worker reports done, or a cap in Settings is reached - total time, total tokens, or a stall. Nobody is asked between rounds." />
+                      ToolTip="Keep the team going until every worker reports done, or a cap in Settings is reached - total time, total tokens, or a stall. Nobody is asked between rounds. What the team merged is then merged into your checked-out branch as a merge commit; if that can't be done cleanly, it is offered for review instead." />
             <TextBlock Text="⚡ Auto Mode is on - edits are applied automatically, without review"
                        FontSize="10"
                        Foreground="OrangeRed"

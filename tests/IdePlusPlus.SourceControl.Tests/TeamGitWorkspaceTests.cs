@@ -287,6 +287,135 @@ public sealed class TeamGitWorkspaceTests : IDisposable
             .ShouldBe(new TeamBranchSuccessor(later, 1));
     }
 
+    // --- Landing a finished run on the user's branch ---
+
+    /// <summary>The team branch with one worker commit on it, changing hello.txt and adding new.txt.</summary>
+    private async Task<string> SetUpFinishedRunAsync()
+    {
+        var (snapshot, w1, _) = await SetUpTeamAsync();
+        File.WriteAllText(Path.Combine(w1, "hello.txt"), "line 1\nteam\nline 3\n");
+        File.WriteAllText(Path.Combine(w1, "new.txt"), "from the team\n");
+        var work = await _workspace.CommitAllAsync(w1, "team work", "Worker 1");
+        work.Status.ShouldBe(TeamCommitStatus.Committed, work.Message);
+        (await _workspace.FastForwardBranchAsync(_repositoryDirectory, TeamBranch, work.Commit!, snapshot))
+            .Status.ShouldBe(TeamFastForwardStatus.FastForwarded);
+        return work.Commit!;
+    }
+
+    [Fact]
+    public async Task LandOnCheckedOutBranchAsync_MergesTheTeamBranch_AsAMergeCommitOnTheUsersBranch()
+    {
+        var teamHead = await SetUpFinishedRunAsync();
+        var before = RunGit("rev-parse", "HEAD").Trim();
+
+        var result = await _workspace.LandOnCheckedOutBranchAsync(_repositoryDirectory, TeamBranch, "Merge the run");
+
+        result.Status.ShouldBe(TeamLandStatus.Landed, result.Message);
+        result.BranchName.ShouldBe("main");
+        result.ChangedPaths.ShouldBe(["hello.txt", "new.txt"], ignoreOrder: true);
+        RunGit("rev-parse", "HEAD").Trim().ShouldBe(result.Commit);
+        RunGit("rev-list", "--parents", "-n", "1", "HEAD").Trim().Split(' ').Skip(1).ShouldBe([before, teamHead]);
+        RunGit("log", "-1", "--format=%s").Trim().ShouldBe("Merge the run");
+        RunGit("log", "-1", "--format=%an").Trim().ShouldBe("Test User");
+        ReadFile("hello.txt").ShouldBe("line 1\nteam\nline 3\n");
+        ReadFile("new.txt").ShouldBe("from the team\n");
+        RunGit("status", "--porcelain").ShouldBeEmpty();
+    }
+
+    /// <summary>The run's snapshot already holds what was uncommitted when it started, and git merge
+    /// would refuse those files even though they match what it would write.</summary>
+    [Fact]
+    public async Task LandOnCheckedOutBranchAsync_AcceptsUncommittedFilesTheRunStartedWith_AndLeavesOtherLocalEditsAlone()
+    {
+        CommitFile("hello.txt", "line 1\nline 2\nline 3\n");
+        CommitFile("mine.txt", "mine\n");
+        WriteFile("hello.txt", "line 1\nuncommitted at start\nline 3\n");
+        WriteFile("untracked.txt", "untracked at start\n");
+        var snapshot = await _workspace.CreateSnapshotCommitAsync(_repositoryDirectory);
+        (await _workspace.CreateBranchAsync(_repositoryDirectory, TeamBranch, snapshot)).Success.ShouldBeTrue();
+        var w1 = await AddWorkerAsync(1, snapshot);
+        File.WriteAllText(Path.Combine(w1, "team.txt"), "team\n");
+        var work = await _workspace.CommitAllAsync(w1, "team work", "Worker 1");
+        await _workspace.FastForwardBranchAsync(_repositoryDirectory, TeamBranch, work.Commit!, snapshot);
+        WriteFile("mine.txt", "edited while the team worked\n");
+
+        var result = await _workspace.LandOnCheckedOutBranchAsync(_repositoryDirectory, TeamBranch, "Merge the run");
+
+        result.Status.ShouldBe(TeamLandStatus.Landed, result.Message);
+        ReadFile("team.txt").ShouldBe("team\n");
+        ReadFile("hello.txt").ShouldBe("line 1\nuncommitted at start\nline 3\n");
+        ReadFile("untracked.txt").ShouldBe("untracked at start\n");
+        ReadFile("mine.txt").ShouldBe("edited while the team worked\n");
+        RunGit("status", "--porcelain").Trim().ShouldBe("M mine.txt");
+    }
+
+    [Fact]
+    public async Task LandOnCheckedOutBranchAsync_RefusesWhenALocalEditDiffersFromTheTeams_AndChangesNothing()
+    {
+        await SetUpFinishedRunAsync();
+        WriteFile("hello.txt", "line 1\nmine\nline 3\n");
+        var before = RunGit("rev-parse", "HEAD").Trim();
+
+        var result = await _workspace.LandOnCheckedOutBranchAsync(_repositoryDirectory, TeamBranch, "Merge the run");
+
+        result.Status.ShouldBe(TeamLandStatus.Refused);
+        result.Message.ShouldContain("hello.txt");
+        RunGit("rev-parse", "HEAD").Trim().ShouldBe(before);
+        ReadFile("hello.txt").ShouldBe("line 1\nmine\nline 3\n");
+        File.Exists(Path.Combine(_repositoryDirectory, "new.txt")).ShouldBeFalse();
+        RunGit("diff", "--cached", "--name-only").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task LandOnCheckedOutBranchAsync_RefusesAConflictWithCommitsMadeSinceTheRunStarted()
+    {
+        await SetUpFinishedRunAsync();
+        CommitFile("hello.txt", "line 1\ncommitted meanwhile\nline 3\n");
+        var before = RunGit("rev-parse", "HEAD").Trim();
+
+        var result = await _workspace.LandOnCheckedOutBranchAsync(_repositoryDirectory, TeamBranch, "Merge the run");
+
+        result.Status.ShouldBe(TeamLandStatus.Refused);
+        result.Message.ShouldContain("conflicts");
+        result.Message.ShouldContain("hello.txt");
+        RunGit("rev-parse", "HEAD").Trim().ShouldBe(before);
+        RunGit("status", "--porcelain").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task LandOnCheckedOutBranchAsync_StopsAtTheVeto_BeforeWritingAnything()
+    {
+        await SetUpFinishedRunAsync();
+        var before = RunGit("rev-parse", "HEAD").Trim();
+        IReadOnlyList<string>? shown = null;
+
+        var result = await _workspace.LandOnCheckedOutBranchAsync(
+            _repositoryDirectory, TeamBranch, "Merge the run", changed =>
+            {
+                shown = changed;
+                return "hello.txt is open with unsaved edits";
+            });
+
+        result.Status.ShouldBe(TeamLandStatus.Refused);
+        result.Message.ShouldBe("hello.txt is open with unsaved edits");
+        shown.ShouldBe(["hello.txt", "new.txt"], ignoreOrder: true);
+        RunGit("rev-parse", "HEAD").Trim().ShouldBe(before);
+        File.Exists(Path.Combine(_repositoryDirectory, "new.txt")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task LandOnCheckedOutBranchAsync_Twice_LandsNothingTheSecondTime()
+    {
+        await SetUpFinishedRunAsync();
+        (await _workspace.LandOnCheckedOutBranchAsync(_repositoryDirectory, TeamBranch, "Merge the run")).Status.ShouldBe(TeamLandStatus.Landed);
+        var after = RunGit("rev-parse", "HEAD").Trim();
+
+        var again = await _workspace.LandOnCheckedOutBranchAsync(_repositoryDirectory, TeamBranch, "Merge the run");
+
+        again.Status.ShouldBe(TeamLandStatus.NothingToLand);
+        RunGit("rev-parse", "HEAD").Trim().ShouldBe(after);
+    }
+
     // --- Worktrees, commits and merges between workers ---
 
     [Fact]

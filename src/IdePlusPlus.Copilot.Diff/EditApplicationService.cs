@@ -179,6 +179,39 @@ public sealed class EditApplicationService
         return new SaveReport(saved, alreadySaved, notOpen, refused, failed);
     }
 
+    /// <summary>The files open with unsaved edits, as full paths - read once on the UI thread, so a
+    /// check made later off it never has to touch an editor document.</summary>
+    public IReadOnlySet<string> GetUnsavedPaths() =>
+        _editorWorkspace.OpenDocuments
+            .Where(d => d is { IsDirty: true, FilePath: not null })
+            .Select(d => d.FilePath!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Brings open documents back in line with disk after something outside the editor rewrote their
+    /// files - landing an Ultra run's merge with git. Nothing watches the disk, so without this an
+    /// open tab keeps showing the old text, and saving it would quietly undo what landed. Only
+    /// documents without unsaved edits are touched; the landing refuses to start when a file it
+    /// would change has any.
+    /// </summary>
+    public void ReloadFromDisk(IEnumerable<string> fullPaths)
+    {
+        foreach (var fullPath in fullPaths)
+        {
+            if (FindOpenDocument(fullPath) is not { IsDirty: false } document || !File.Exists(fullPath))
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(fullPath);
+            if (document.TextDocument.Text != text)
+            {
+                document.TextDocument.Text = text;
+                document.IsDirty = false;
+            }
+        }
+    }
+
     public string GetCurrentContent(string fullPath)
     {
         var openDocument = FindOpenDocument(fullPath);

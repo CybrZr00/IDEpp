@@ -309,8 +309,38 @@ public sealed partial class CopilotChatPaneViewModel
                 card.Finish(result);
                 TotalPromptTokens += result.PromptTokens;
                 TotalCompletionTokens += result.CompletionTokens;
-                CurrentActivity = "Preparing the team's changes for review...";
-                await ProposeTeamResultAsync(run, result, assistantMessage, turn.Token);
+
+                // Until done, the team's work is merged into the user's branch - there was nobody to
+                // review it file by file. Anything that stops a clean merge (a conflict with commits
+                // made since, local edits that differ, unsaved tabs) falls back to that review.
+                TeamLandResult? landing = null;
+                if (runUntilDone && result.TeamBranchKept)
+                {
+                    CurrentActivity = "Merging the team's work into your branch...";
+                    var unsaved = _editApplicationService.GetUnsavedPaths();
+                    landing = await _teamGit.LandOnCheckedOutBranchAsync(
+                        repositoryRoot,
+                        result.TeamBranch,
+                        LandingCommitMessage(goal, run, result),
+                        changed => UnsavedAmong(changed, repositoryRoot, unsaved),
+                        turn.Token);
+                    ThrowIfDetached(turn);
+                }
+
+                if (landing is { Status: not TeamLandStatus.Refused })
+                {
+                    _editApplicationService.ReloadFromDisk(
+                        (landing.ChangedPaths ?? []).Select(p => Path.GetFullPath(Path.Combine(repositoryRoot, p))));
+                    assistantMessage.Text = DescribeTeamResult(run, result, 0, [], landing);
+                }
+                else
+                {
+                    CurrentActivity = "Preparing the team's changes for review...";
+                    await ProposeTeamResultAsync(
+                        run, result, assistantMessage, turn.Token,
+                        landing is null ? null : $"Couldn't merge into your branch: {landing.Message}. Offered for review instead.");
+                }
+
                 await RefreshUltraStartOptionsAsync();
             }
         }
@@ -370,8 +400,14 @@ public sealed partial class CopilotChatPaneViewModel
     /// proposal cannot carry - deletions, binary files, files outside the solution folder - is listed
     /// for the user to take from the team branch themselves.
     /// </summary>
+    /// <param name="notLandedNote">Why a run left to go until done could not be merged into the
+    /// user's branch, put at the top of the summary - null for an ordinary run.</param>
     private async Task ProposeTeamResultAsync(
-        UltraTeamRun run, UltraTeamResult result, ChatMessageViewModel assistantMessage, CancellationToken cancellationToken)
+        UltraTeamRun run,
+        UltraTeamResult result,
+        ChatMessageViewModel assistantMessage,
+        CancellationToken cancellationToken,
+        string? notLandedNote = null)
     {
         var solutionDirectory = _solutionDirectory!;
         var notProposed = new List<string>();
@@ -447,7 +483,7 @@ public sealed partial class CopilotChatPaneViewModel
             proposals.Add((new EditOperation(relativeToSolution, "whole_file", null, null, content), note));
         }
 
-        assistantMessage.Text = DescribeTeamResult(run, result, proposals.Count, notProposed);
+        assistantMessage.Text = DescribeTeamResult(run, result, proposals.Count, notProposed, notLandedNote: notLandedNote);
 
         foreach (var (operation, note) in proposals)
         {
@@ -460,8 +496,15 @@ public sealed partial class CopilotChatPaneViewModel
         }
     }
 
+    /// <param name="landing">Set when the result was merged into the user's branch (or already in
+    /// it) instead of offered for review.</param>
     private static string DescribeTeamResult(
-        UltraTeamRun run, UltraTeamResult result, int proposalCount, IReadOnlyList<string> notProposed)
+        UltraTeamRun run,
+        UltraTeamResult result,
+        int proposalCount,
+        IReadOnlyList<string> notProposed,
+        TeamLandResult? landing = null,
+        string? notLandedNote = null)
     {
         var text = new StringBuilder("**Ultra team** - ");
         text.Append(result.EndReason switch
@@ -487,9 +530,24 @@ public sealed partial class CopilotChatPaneViewModel
                         + ".\n\n");
         }
 
+        if (notLandedNote is not null)
+        {
+            text.Append($"{notLandedNote}\n\n");
+        }
+
         if (result.Changes.Count == 0)
         {
             text.Append("Nothing was merged, so there is nothing to review.\n");
+        }
+        else if (landing is { Status: TeamLandStatus.Landed, Commit: { } commit })
+        {
+            text.Append($"Merged into `{landing.BranchName ?? "HEAD"}` as commit {commit[..Math.Min(9, commit.Length)]}"
+                        + $" - {landing.ChangedPaths?.Count ?? 0} file(s) changed. The workers' own commits are in its history; "
+                        + $"nothing is left to review. `{result.TeamBranch}` stays until you delete it.\n");
+        }
+        else if (landing is { Status: TeamLandStatus.NothingToLand })
+        {
+            text.Append($"Nothing to merge: {landing.Message}.\n");
         }
         else
         {
@@ -546,6 +604,41 @@ public sealed partial class CopilotChatPaneViewModel
         }
 
         return text.ToString().TrimEnd();
+    }
+
+    /// <summary>The merge commit's message: the request, then what the run was - enough for someone
+    /// reading the log later to know a team made this and where its full history is.</summary>
+    internal static string LandingCommitMessage(string goal, UltraTeamRun run, UltraTeamResult result)
+    {
+        var request = goal.Split('\n', 2)[0].Trim();
+        if (request.Length > 60)
+        {
+            request = request[..57].TrimEnd() + "...";
+        }
+
+        var message = new StringBuilder($"Merge Ultra run {result.RunId}: {request}\n\n");
+        message.Append($"{result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min, "
+                       + $"{result.PromptTokens + result.CompletionTokens:N0} tokens; ended: {result.EndReason}.\n");
+        message.Append($"Team branch: {result.TeamBranch}\n");
+        var summaries = result.Board.Where(e => e.Type == TeamBoardEntryType.PatchSummary).Take(50).ToList();
+        if (summaries.Count > 0)
+        {
+            message.Append("\nWhat the workers reported:\n");
+            foreach (var entry in summaries)
+            {
+                message.Append($"- {entry.Author}: {entry.Text}\n");
+            }
+        }
+
+        return message.ToString().TrimEnd();
+    }
+
+    private static string? UnsavedAmong(IReadOnlyList<string> changed, string repositoryRoot, IReadOnlySet<string> unsaved)
+    {
+        var open = changed.Where(p => unsaved.Contains(Path.GetFullPath(Path.Combine(repositoryRoot, p)))).ToList();
+        return open.Count == 0
+            ? null
+            : $"you have unsaved edits open in {string.Join(", ", open.Take(3))}{(open.Count > 3 ? $" and {open.Count - 3} more" : "")}";
     }
 
     private static bool SameText(string a, string b) =>

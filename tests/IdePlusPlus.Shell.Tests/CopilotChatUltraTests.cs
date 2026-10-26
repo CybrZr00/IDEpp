@@ -328,18 +328,39 @@ public sealed class CopilotChatUltraTests : IDisposable
         return (older, later);
     }
 
+    /// <summary>Until done, nobody is there to review the team's files one by one, so what it merged
+    /// lands on the checked-out branch as a merge commit instead of as proposals.</summary>
     [Fact]
-    public void RunUntilDone_IsRemembered_AndSaidOnTheTeamCard() => RunOnUiThread(async () =>
+    public void RunUntilDone_MergesTheTeamsWorkIntoTheCheckedOutBranch_InsteadOfProposingIt() => RunOnUiThread(async () =>
     {
-        _http.Script = n => n == 1 ? ToolCall(TeamTools.DoneToolName, new { summary = "nothing to change" }) : Text("done");
+        string[] script =
+        [
+            ToolCall(TeamTools.EditFileToolName, new
+            {
+                file = "Lib/Class1.cs", mode = "replace_text",
+                old_text = "public int Value => 1;", new_text = "public int Value => 2;",
+            }),
+            ToolCall(TeamTools.CommitToolName, new { message = "Value is 2" }),
+            ToolCall(TeamTools.MergeToolName, new { }),
+            ToolCall(TeamTools.DoneToolName, new { summary = "Value returns 2" }),
+        ];
+        _http.Script = n => n <= script.Length ? script[n - 1] : Text("done");
         var viewModel = CreateViewModel(workers: 1);
         viewModel.SelectedEffort = ChatEffort.Ultra;
         viewModel.IsUltraRunUntilDone = true;
+        var before = TeamRepositoryFixture.Git(_repo.RepositoryRoot, "rev-parse", "HEAD").Trim();
 
-        viewModel.InputText = "Run it to the end.";
+        viewModel.InputText = "Make Class1.Value return 2.";
         await viewModel.SendCommand.ExecuteAsync(null);
 
         viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem().Header.ShouldEndWith(", running until done");
+        viewModel.Messages.OfType<EditProposalViewModel>().ShouldBeEmpty();
+        viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text.ShouldContain("Merged into `main`");
+        File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 2;");
+        var parents = TeamRepositoryFixture.Git(_repo.RepositoryRoot, "rev-list", "--parents", "-n", "1", "HEAD").Trim().Split(' ');
+        parents.Length.ShouldBe(3);
+        parents[1].ShouldBe(before);
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "log", "-1", "--format=%s").ShouldStartWith("Merge Ultra run ");
         CreateViewModel(workers: 1).IsUltraRunUntilDone.ShouldBeTrue();
     });
 
