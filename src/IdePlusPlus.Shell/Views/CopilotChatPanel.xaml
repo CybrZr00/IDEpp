@@ -371,11 +371,23 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
+                    <TextBlock Text="{Binding FailureReason}"
+                               Margin="0,6,0,0"
+                               FontSize="11"
+                               Foreground="OrangeRed"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding IsFailed, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,6,0,0"
                                 Visibility="{Binding IsDecided, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}">
-                        <Button Content="Approve &amp; Implement" Command="{Binding ApproveCommand}" Padding="8,2" />
-                        <Button Content="Reject" Command="{Binding RejectCommand}" Margin="6,0,0,0" Padding="8,2" />
+                        <!-- A plan that never parsed has nothing to implement: only Reject is offered. -->
+                        <Button Content="Approve &amp; Implement"
+                                Command="{Binding ApproveCommand}"
+                                Margin="0,0,6,0"
+                                Padding="8,2"
+                                Visibility="{Binding IsFailed, Converter={x:Static toolPanes:InverseBoolToVisibilityConverter.Instance}}" />
+                        <Button Content="Reject" Command="{Binding RejectCommand}" Padding="8,2" />
                     </StackPanel>
 
                     <TextBlock Text="{Binding DecisionText}"

@@ -43,6 +43,13 @@ public sealed partial class PlanProposalViewModel : ObservableObject
     [ObservableProperty]
     private string? decisionText;
 
+    /// <summary>The stream ended without the plan ever parsing - see <see cref="FailureReason"/>.</summary>
+    [ObservableProperty]
+    private bool isFailed;
+
+    [ObservableProperty]
+    private string? failureReason;
+
     public void UpdateStreaming(PlanProposalEvent planEvent)
     {
         if (planEvent.SummaryPreview is { } summaryPreview)
@@ -58,9 +65,25 @@ public sealed partial class PlanProposalViewModel : ObservableObject
         IsComplete = true;
     }
 
-    private bool CanDecide() => IsComplete && !IsDecided;
+    /// <summary>
+    /// For a plan whose stream has ended without it ever parsing. It can't be approved - there are no
+    /// steps to implement - but it can be rejected, so the card no longer sits there with both buttons
+    /// dead and nothing saying why. A no-op once the plan completed or was decided.
+    /// </summary>
+    public void Fail(string reason)
+    {
+        if (IsComplete || IsDecided)
+        {
+            return;
+        }
 
-    private bool CanApprove() => CanDecide() && (_canApprove?.Invoke() ?? true);
+        FailureReason = $"This plan couldn't be read: {reason.TrimEnd('.')}. Reject it, then ask for the plan again.";
+        IsFailed = true;
+    }
+
+    private bool CanDecide() => (IsComplete || IsFailed) && !IsDecided;
+
+    private bool CanApprove() => IsComplete && !IsDecided && (_canApprove?.Invoke() ?? true);
 
     /// <summary>For the owner to call when whatever canApprove depends on has changed.</summary>
     public void RefreshCanApprove() => ApproveCommand.NotifyCanExecuteChanged();
@@ -88,6 +111,12 @@ public sealed partial class PlanProposalViewModel : ObservableObject
     }
 
     partial void OnIsCompleteChanged(bool value)
+    {
+        ApproveCommand.NotifyCanExecuteChanged();
+        RejectCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsFailedChanged(bool value)
     {
         ApproveCommand.NotifyCanExecuteChanged();
         RejectCommand.NotifyCanExecuteChanged();

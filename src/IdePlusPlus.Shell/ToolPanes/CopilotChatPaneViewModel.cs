@@ -2066,82 +2066,91 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         IChatClient client = CurrentChatClient;
 
-        await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, SelectedEffort, turn.Token))
+        try
         {
-            _dispatcher.Invoke(() =>
+            await foreach (var streamEvent in client.StreamChatAsync(history, SelectedModel, tools, SelectedEffort, turn.Token))
             {
-                // Counted whether or not anyone is still listening - it was billed either way.
-                if (streamEvent is UsageReceived usage)
+                _dispatcher.Invoke(() =>
                 {
-                    TotalPromptTokens += usage.PromptTokens;
-                    TotalCompletionTokens += usage.CompletionTokens;
-                    return;
-                }
+                    // Counted whether or not anyone is still listening - it was billed either way.
+                    if (streamEvent is UsageReceived usage)
+                    {
+                        TotalPromptTokens += usage.PromptTokens;
+                        TotalCompletionTokens += usage.CompletionTokens;
+                        return;
+                    }
 
-                // A turn cut loose mid-stream must not add proposal cards to the next conversation,
-                // or complete an edit against the next solution.
-                if (!IsLive(turn))
-                {
-                    return;
-                }
+                    // A turn cut loose mid-stream must not add proposal cards to the next conversation,
+                    // or complete an edit against the next solution.
+                    if (!IsLive(turn))
+                    {
+                        return;
+                    }
 
-                switch (streamEvent)
-                {
-                    case TextDelta delta:
-                        assistantMessage.Append(delta.Text);
-                        break;
+                    switch (streamEvent)
+                    {
+                        case TextDelta delta:
+                            assistantMessage.Append(delta.Text);
+                            break;
 
-                    case ReasoningDelta reasoning:
-                        assistantMessage.AppendReasoning(reasoning.Text);
-                        break;
+                        case ReasoningDelta reasoning:
+                            assistantMessage.AppendReasoning(reasoning.Text);
+                            break;
 
-                    case ToolCallDelta toolCallDelta:
-                        if (toolCallDelta.FunctionName is not null)
-                        {
-                            routeByIndex[toolCallDelta.Index] = toolCallDelta.FunctionName switch
+                        case ToolCallDelta toolCallDelta:
+                            if (toolCallDelta.FunctionName is not null)
                             {
-                                ProposeEditTool.ToolName => ToolCallRoute.ProposeEdit,
-                                ProposePlanTool.ToolName => ToolCallRoute.ProposePlan,
-                                _ => ToolCallRoute.Mcp,
-                            };
-                        }
+                                routeByIndex[toolCallDelta.Index] = toolCallDelta.FunctionName switch
+                                {
+                                    ProposeEditTool.ToolName => ToolCallRoute.ProposeEdit,
+                                    ProposePlanTool.ToolName => ToolCallRoute.ProposePlan,
+                                    _ => ToolCallRoute.Mcp,
+                                };
+                            }
 
-                        switch (routeByIndex.GetValueOrDefault(toolCallDelta.Index, ToolCallRoute.Mcp))
-                        {
-                            case ToolCallRoute.ProposeEdit:
-                                HandleToolCallDelta(turn, toolCallDelta, proposalParser, proposalsByToolCallId);
-                                break;
-                            case ToolCallRoute.ProposePlan:
-                                HandlePlanToolCallDelta(toolCallDelta, planParser, planProposalsByToolCallId);
-                                break;
-                            default:
-                                AccumulateMcpCall(toolCallDelta, mcpCallsByIndex);
-                                break;
-                        }
+                            switch (routeByIndex.GetValueOrDefault(toolCallDelta.Index, ToolCallRoute.Mcp))
+                            {
+                                case ToolCallRoute.ProposeEdit:
+                                    HandleToolCallDelta(turn, toolCallDelta, proposalParser, proposalsByToolCallId);
+                                    break;
+                                case ToolCallRoute.ProposePlan:
+                                    HandlePlanToolCallDelta(toolCallDelta, planParser, planProposalsByToolCallId);
+                                    break;
+                                default:
+                                    AccumulateMcpCall(toolCallDelta, mcpCallsByIndex);
+                                    break;
+                            }
 
-                        break;
+                            break;
 
-                    case StreamError error:
-                        reportedError = true;
-                        Log.Warning("The chat stream reported an error: {Message}", error.Message);
-                        assistantMessage.Append($"\n\n[error: {error.Message}]");
-                        break;
+                        case StreamError error:
+                            reportedError = true;
+                            Log.Warning("The chat stream reported an error: {Message}", error.Message);
+                            assistantMessage.Append($"\n\n[error: {error.Message}]");
+                            break;
 
-                    // The provider declined to answer; nothing else in the stream says so.
-                    case FinishReasonReceived { Reason: "content_filter" }:
-                        reportedError = true;
-                        assistantMessage.Append("\n\n[the provider blocked this reply with its content filter]");
-                        break;
+                        // The provider declined to answer; nothing else in the stream says so.
+                        case FinishReasonReceived { Reason: "content_filter" }:
+                            reportedError = true;
+                            assistantMessage.Append("\n\n[the provider blocked this reply with its content filter]");
+                            break;
 
-                    // "length" means the model was cut off by the output-token cap, not that it
-                    // chose to stop - without flagging this, a truncated turn (e.g. one that got cut
-                    // off partway through a verbose plan, before ever reaching a tool call) looks
-                    // identical to a normal, complete reply.
-                    case FinishReasonReceived { Reason: "length" }:
-                        assistantMessage.Append("\n\n[response was cut off - it hit the model's output length limit before finishing]");
-                        break;
-                }
-            });
+                        // "length" means the model was cut off by the output-token cap, not that it
+                        // chose to stop - without flagging this, a truncated turn (e.g. one that got cut
+                        // off partway through a verbose plan, before ever reaching a tool call) looks
+                        // identical to a normal, complete reply.
+                        case FinishReasonReceived { Reason: "length" }:
+                            assistantMessage.Append("\n\n[response was cut off - it hit the model's output length limit before finishing]");
+                            break;
+                    }
+                });
+            }
+        }
+        finally
+        {
+            // However the stream ended - finished, cut off, cancelled or failed - a plan that never
+            // parsed is marked failed rather than left looking like it is still arriving.
+            _dispatcher.Invoke(() => FailUnparsedPlans(planParser, planProposalsByToolCallId));
         }
 
         // A no-op unless a PreToolUse hook made an accept asynchronous: the loop's next decision
@@ -2476,6 +2485,36 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         else
         {
             proposal.UpdateStreaming(planEvent);
+        }
+    }
+
+    /// <summary>
+    /// Fails every plan card from a finished stream that never got a readable plan, and logs what the
+    /// model actually sent - otherwise those arguments are lost, since a plan that never parsed is not
+    /// saved to the chat history either.
+    /// </summary>
+    private static void FailUnparsedPlans(
+        PlanProposalParser planParser,
+        Dictionary<string, PlanProposalViewModel> proposalsByToolCallId)
+    {
+        // Runs in a finally, so this must not throw - hence no ToDictionary, which would on a repeated id.
+        var failures = new Dictionary<string, PlanProposalFailure>();
+        foreach (var failure in planParser.Finish())
+        {
+            Log.Warning(
+                "A propose_plan call ({ToolCallId}) ended without a readable plan: {Reason}. Raw arguments ({Length} chars): {RawArguments}",
+                failure.ToolCallId, failure.Reason, failure.RawArguments.Length, failure.RawArguments);
+            failures[failure.ToolCallId] = failure;
+        }
+
+        foreach (var (toolCallId, proposal) in proposalsByToolCallId)
+        {
+            if (!proposal.IsComplete)
+            {
+                // No failure under this id only if the card and the parser disagree on it (an id that
+                // arrived after the call's first fragment) - the card is just as unusable either way.
+                proposal.Fail(failures.GetValueOrDefault(toolCallId)?.Reason ?? "the plan never finished arriving");
+            }
         }
     }
 

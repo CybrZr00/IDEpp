@@ -189,6 +189,54 @@ public sealed class CopilotChatTurnEndingTests : IDisposable
         viewModel.Messages.OfType<EditProposalViewModel>().Single().Outcome.ShouldBe(EditOutcome.AwaitingDecision);
     });
 
+    /// <summary>One propose_plan call whose arguments are exactly <paramref name="arguments"/>, valid or not.</summary>
+    private static string ProposePlan(string arguments) =>
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"plan_1\",\"type\":\"function\","
+        + "\"function\":{\"name\":\"propose_plan\",\"arguments\":"
+        + System.Text.Json.JsonSerializer.Serialize(arguments)
+        + "}}]}}]}\n\n"
+        + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" + Done;
+
+    [Fact]
+    public void APlanThatNeverParses_IsMarkedFailed_AndCanStillBeRejected() => RunOnUiThread(async () =>
+    {
+        // Cut off partway through "steps": the summary preview shows, but there is never a plan. This
+        // card used to sit there with both buttons disabled and nothing saying why.
+        _http.Script = _ => ProposePlan("{\"summary\": \"Rewrite the plan doc\", \"steps\": [\"Read it\", \"Rew");
+        var viewModel = CreateViewModel();
+        viewModel.IsPlanMode = true;
+
+        await Ask(viewModel);
+
+        _http.ChatRequests.ShouldBe(1, "a plan card is the user's to answer, failed or not");
+        viewModel.IsStreaming.ShouldBeFalse();
+        var plan = viewModel.Messages.OfType<PlanProposalViewModel>().ShouldHaveSingleItem();
+        plan.Summary.ShouldBe("Rewrite the plan doc");
+        plan.IsFailed.ShouldBeTrue();
+        plan.FailureReason.ShouldNotBeNull().ShouldContain("isn't valid JSON");
+        plan.ApproveCommand.CanExecute(null).ShouldBeFalse("there are no steps to implement");
+        plan.RejectCommand.CanExecute(null).ShouldBeTrue();
+
+        plan.RejectCommand.Execute(null);
+        plan.IsDecided.ShouldBeTrue();
+    });
+
+    [Fact]
+    public void APlanWhoseStepsAreObjects_IsReadAndCanBeApproved() => RunOnUiThread(async () =>
+    {
+        _http.Script = _ => ProposePlan("{\"summary\": \"S\", \"steps\": [{\"title\": \"Read\", \"detail\": \"the doc\"}]}");
+        var viewModel = CreateViewModel();
+        viewModel.IsPlanMode = true;
+
+        await Ask(viewModel);
+
+        var plan = viewModel.Messages.OfType<PlanProposalViewModel>().ShouldHaveSingleItem();
+        plan.IsFailed.ShouldBeFalse();
+        plan.IsComplete.ShouldBeTrue();
+        plan.Steps.ShouldBe(["Read - the doc"]);
+        plan.ApproveCommand.CanExecute(null).ShouldBeTrue();
+    });
+
     private async Task Ask(CopilotChatPaneViewModel viewModel)
     {
         viewModel.SetSolutionContext(_solution, _directory, () => "Debug");

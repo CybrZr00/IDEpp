@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace IdePlusPlus.Copilot.Core;
@@ -31,10 +32,11 @@ public sealed class PlanProposalParser
             buffer.Append(delta.ArgumentsFragment);
         }
 
-        var toolCallId = _toolCallIdByIndex.GetValueOrDefault(delta.Index, $"index-{delta.Index}");
+        var toolCallId = ToolCallIdFor(delta.Index);
         var accumulated = buffer.ToString();
 
-        var plan = TryParseComplete(accumulated);
+        // Not parsing yet is the normal case mid-stream - keep accumulating.
+        var plan = TryParse(accumulated, out _);
         if (plan is not null)
         {
             return new PlanProposalEvent { ToolCallId = toolCallId, Status = PlanProposalStatus.Complete, Plan = plan };
@@ -48,36 +50,117 @@ public sealed class PlanProposalParser
         };
     }
 
-    private static PlanOperation? TryParseComplete(string json)
+    /// <summary>
+    /// Once the stream has ended: every call whose arguments never parsed into a plan, why not, and
+    /// what was actually sent. Without this a plan that never parses just stays "streaming" - its
+    /// card shows the summary preview and nothing can be clicked, with no sign anything went wrong.
+    /// </summary>
+    public IReadOnlyList<PlanProposalFailure> Finish()
     {
-        if (json.Length == 0)
+        var failures = new List<PlanProposalFailure>();
+        foreach (var (index, buffer) in _argumentsByIndex)
         {
+            var accumulated = buffer.ToString();
+            if (TryParse(accumulated, out var reason) is null)
+            {
+                failures.Add(new PlanProposalFailure(ToolCallIdFor(index), reason!, accumulated));
+            }
+        }
+
+        return failures;
+    }
+
+    private string ToolCallIdFor(int index) => _toolCallIdByIndex.GetValueOrDefault(index, $"index-{index}");
+
+    private static PlanOperation? TryParse(string json, out string? failureReason)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            failureReason = "the model sent no plan at all";
             return null;
         }
 
+        JsonNode? node;
         try
         {
-            var node = JsonNode.Parse(json);
-            var summary = node?["summary"]?.GetValue<string>();
-            var stepsArray = node?["steps"]?.AsArray();
-            if (summary is null || stepsArray is null)
-            {
-                return null;
-            }
-
-            var steps = stepsArray
-                .Select(s => s?.GetValue<string>())
-                .Where(s => s is not null)
-                .Select(s => s!)
-                .ToList();
-
-            return new PlanOperation(summary, steps);
+            node = JsonNode.Parse(json);
         }
-        catch (Exception)
+        catch (JsonException ex)
         {
-            // Not syntactically complete yet (the normal case mid-stream) - keep accumulating.
+            failureReason = $"the plan isn't valid JSON - most likely cut off or malformed ({ex.Message})";
             return null;
         }
+
+        // Some models send the arguments object as a JSON string that holds the JSON.
+        if (node is JsonValue wrapped && wrapped.TryGetValue<string>(out var inner) && inner.TrimStart().StartsWith('{'))
+        {
+            return TryParse(inner, out failureReason);
+        }
+
+        if (node is not JsonObject fields)
+        {
+            failureReason = "the plan isn't a JSON object";
+            return null;
+        }
+
+        if (fields["summary"] is not JsonValue summaryValue || !summaryValue.TryGetValue<string>(out var summary))
+        {
+            failureReason = "the plan has no \"summary\" text";
+            return null;
+        }
+
+        var steps = fields["steps"] switch
+        {
+            JsonArray items => items.Select(StepText).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).ToList(),
+            // The whole list as one string, a step per line.
+            JsonValue value when value.TryGetValue<string>(out var text) =>
+                text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToList(),
+            _ => null,
+        };
+        if (steps is null)
+        {
+            failureReason = "the plan has no \"steps\" list";
+            return null;
+        }
+
+        failureReason = null;
+        return new PlanOperation(summary, steps);
+    }
+
+    private static readonly string[] StepHeadingKeys = ["title", "name", "step", "action"];
+    private static readonly string[] StepDetailKeys = ["description", "detail", "details", "text", "summary"];
+
+    /// <summary>
+    /// One step as text. The schema asks for strings, but models also send numbers, objects such as
+    /// {"title": ..., "detail": ...}, or nested lists - reading those beats refusing the whole plan.
+    /// </summary>
+    private static string? StepText(JsonNode? step) => step switch
+    {
+        null => null,
+        JsonValue value when value.TryGetValue<string>(out var text) => text,
+        JsonArray items => string.Join("; ", items.Select(StepText).Where(s => !string.IsNullOrWhiteSpace(s))),
+        JsonObject fields => ObjectStepText(fields),
+        _ => step.ToJsonString(),
+    };
+
+    private static string ObjectStepText(JsonObject fields)
+    {
+        // Headings must be text: {"step": 1, "description": ...} is numbered, not titled "1".
+        var heading = StepHeadingKeys
+            .Select(key => fields[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
+            .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
+        var detail = StepDetailKeys
+            .Select(key => StepText(fields[key]))
+            .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
+
+        if (heading is not null || detail is not null)
+        {
+            return heading is not null && detail is not null ? $"{heading} - {detail}" : (heading ?? detail)!;
+        }
+
+        // No key it recognises: every field's text in order, or failing that the object as written.
+        var texts = fields.Select(field => StepText(field.Value)).Where(text => !string.IsNullOrWhiteSpace(text)).ToList();
+        return texts.Count > 0 ? string.Join(" - ", texts) : fields.ToJsonString();
     }
 
     /// <summary>Best-effort extraction of the "summary" string for a live preview while streaming.</summary>
