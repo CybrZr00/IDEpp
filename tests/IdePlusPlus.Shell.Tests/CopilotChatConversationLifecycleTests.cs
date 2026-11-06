@@ -397,10 +397,10 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         var send = await StartTurnInSolutionAAsync(viewModel);
         string? askedAbout = null;
-        viewModel.NewConversationConfirmation = warning =>
+        viewModel.NewConversationConfirmation = (warning, _) =>
         {
             askedAbout = warning;
-            return true;
+            return NewConversationChoice.Discard;
         };
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
@@ -421,10 +421,11 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
         var proposal = UndecidedProposal(viewModel);
-        viewModel.NewConversationConfirmation = warning =>
+        viewModel.NewConversationConfirmation = (warning, canAcceptAll) =>
         {
             warning.ShouldContain("1 proposed edit");
-            return false;
+            canAcceptAll.ShouldBeTrue();
+            return NewConversationChoice.Cancel;
         };
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
@@ -444,10 +445,10 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
         UndecidedProposal(viewModel);
-        viewModel.NewConversationConfirmation = _ =>
+        viewModel.NewConversationConfirmation = (_, _) =>
         {
             viewModel.SetSolutionContext(_solutionB, _directoryB, () => "Debug");
-            return true;
+            return NewConversationChoice.Discard;
         };
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
@@ -463,7 +464,7 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
         var proposal = UndecidedProposal(viewModel);
-        viewModel.NewConversationConfirmation = _ => true;
+        viewModel.NewConversationConfirmation = (_, _) => NewConversationChoice.Discard;
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
 

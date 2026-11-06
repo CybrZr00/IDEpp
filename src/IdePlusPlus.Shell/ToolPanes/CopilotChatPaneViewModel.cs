@@ -425,8 +425,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// <summary>Asked before New Chat throws away something the saved transcript won't bring back - a
     /// response still running, edits or plans still waiting for a decision - with a description of
     /// exactly that. Unset, New Chat goes ahead: unlike the shell and web prompts this is a chance to
-    /// back out, not a safety gate.</summary>
-    public Func<string, bool>? NewConversationConfirmation { get; set; }
+    /// back out, not a safety gate. The bool says whether undecided edits are among what would be
+    /// lost, i.e. whether "accept all and start new" is on offer.</summary>
+    public Func<string, bool, NewConversationChoice>? NewConversationConfirmation { get; set; }
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
@@ -871,11 +872,26 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         var epoch = _conversationEpoch;
 
+        var acceptAll = false;
         if (DescribeWhatNewConversationDiscards() is { } warning
-            && NewConversationConfirmation is { } confirm
-            && !confirm(warning))
+            && NewConversationConfirmation is { } confirm)
         {
-            return;
+            var choice = confirm(warning, UndecidedEdits().Any());
+            if (choice == NewConversationChoice.Cancel)
+            {
+                return;
+            }
+
+            acceptAll = choice == NewConversationChoice.AcceptAllThenStart;
+        }
+
+        if (acceptAll)
+        {
+            // Sequential: edits to one file are applied against the buffer the previous one left.
+            foreach (var proposal in UndecidedEdits().ToList())
+            {
+                await proposal.AcceptCommand.ExecuteAsync(null);
+            }
         }
 
         await StopActiveTurnAsync();
@@ -914,6 +930,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             : "New conversation.";
     }
 
+    private IEnumerable<EditProposalViewModel> UndecidedEdits() =>
+        Messages.OfType<EditProposalViewModel>().Where(p => p.IsComplete && !p.IsDecided && !p.AcceptCommand.IsRunning);
+
     private string? DescribeWhatNewConversationDiscards()
     {
         var losses = new List<string>();
@@ -925,8 +944,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         // An edit already being accepted (a PreToolUse hook still deciding) is left to finish by
         // Discard, so it isn't one this would discard.
-        var undecidedEdits = Messages.OfType<EditProposalViewModel>()
-            .Count(p => p.IsComplete && !p.IsDecided && !p.AcceptCommand.IsRunning);
+        var undecidedEdits = UndecidedEdits().Count();
         if (undecidedEdits > 0)
         {
             losses.Add(undecidedEdits == 1
@@ -2195,6 +2213,36 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         Mcp,
     }
 
+    /// <summary>Open/focus the target file and hand the proposal its editor tab to show the diff in -
+    /// review happens there instead of the chat pane, whose card is only a status line. A proposal
+    /// that is never opened has nowhere to be accepted from. Skipped only for one refused on arrival
+    /// (ResolvedFullPath null), which has no valid file to open.</summary>
+    private void OpenProposalInEditor(EditProposalViewModel proposal)
+    {
+        if (proposal.ResolvedFullPath is not { } fullPath)
+        {
+            return;
+        }
+
+        // Captured before opening, for ShowInEditor's openedForReview - see its remarks on why
+        // Accept() needs to know whether opening the file for review is what made it "open".
+        var wasAlreadyOpen = _editApplicationService.IsOpen(fullPath);
+
+        // Several proposals can arrive in one turn, each flipping the active tab - that shouldn't
+        // steal keyboard focus away from the chat input if the user is still typing there.
+        var previouslyFocused = Keyboard.FocusedElement as IInputElement;
+        var openedDocument = OpenFileRequested?.Invoke(fullPath);
+        if (openedDocument is not null)
+        {
+            proposal.ShowInEditor(openedDocument, openedForReview: !wasAlreadyOpen);
+        }
+
+        if (previouslyFocused is not null)
+        {
+            _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => previouslyFocused.Focus());
+        }
+    }
+
     private void HandleToolCallDelta(
         TurnScope turn,
         ToolCallDelta delta,
@@ -2225,31 +2273,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             proposal.Complete(proposalEvent, turn.SolutionDirectory);
 
-            // Open/focus the target file and hand the proposal its editor tab to show the diff in -
-            // review now happens there instead of the chat pane. Skipped only for a proposal refused
-            // on arrival (ResolvedFullPath null), which has no valid file to open.
-            if (proposal.ResolvedFullPath is { } fullPath)
-            {
-                // Captured before opening, for ShowInEditor's openedForReview - see its remarks on
-                // why Accept() needs to know whether opening the file for review is what made it
-                // "open" (this call), rather than it already being open independently.
-                var wasAlreadyOpen = _editApplicationService.IsOpen(fullPath);
-
-                // Auto Mode can process several proposals in one turn, each flipping the active tab
-                // for visibility even when nothing needs approving - that shouldn't steal keyboard
-                // focus away from the chat input if the user is still typing there.
-                var previouslyFocused = Keyboard.FocusedElement as IInputElement;
-                var openedDocument = OpenFileRequested?.Invoke(fullPath);
-                if (openedDocument is not null)
-                {
-                    proposal.ShowInEditor(openedDocument, openedForReview: !wasAlreadyOpen);
-                }
-
-                if (previouslyFocused is not null)
-                {
-                    _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => previouslyFocused.Focus());
-                }
-            }
+            OpenProposalInEditor(proposal);
 
             // A saved skill's raw text later gets injected straight into the model's own context as
             // trusted instruction-shaped content (see PrependContextAsync/read_skill) - so unlike an
@@ -2450,6 +2474,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 directory,
                 "Built from a code block in the reply - this model did not call the edit tool, so where it "
                 + "goes was inferred. Check the diff before accepting; Auto Mode does not apply these.");
+            OpenProposalInEditor(proposal);
         }
     }
 

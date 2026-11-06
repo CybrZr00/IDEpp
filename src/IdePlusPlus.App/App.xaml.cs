@@ -144,14 +144,8 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmTeamShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
-        copilotChatPane.NewConversationConfirmation = warning =>
-            MessageBox.Show(
-                mainWindow,
-                warning,
-                "IDE++ - new conversation",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question,
-                MessageBoxResult.No) == MessageBoxResult.Yes;
+        copilotChatPane.NewConversationConfirmation = (warning, canAcceptAll) =>
+            ConfirmNewConversation(mainWindow, warning, canAcceptAll);
 
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.
@@ -228,6 +222,32 @@ public partial class App : Application
             string.Join(Environment.NewLine, request.ManifestPaths),
             warning: "That executes whatever they do when loaded, as you, with your permissions. Only allow "
                      + "this if you trust the source of this solution. You will be asked again if they change.");
+    }
+
+    /// <summary>
+    /// New Chat's warning about what it would throw away. When edits are among it, "Accept all and
+    /// exit" applies them first instead - the way out for a pile of reviews that would otherwise have
+    /// to be clicked through one by one. Defaults to Cancel.
+    /// </summary>
+    private static NewConversationChoice ConfirmNewConversation(Window owner, string warning, bool canAcceptAll)
+    {
+        var dialog = ApprovalDialog.Create(
+            owner, "IDE++ - new conversation", "Start a new conversation?", warning);
+        dialog.AllowButton.Content = "_Discard and start new";
+        dialog.DenyButton.Content = "_Cancel";
+        if (canAcceptAll)
+        {
+            dialog.OfferAllowAll("Accept _all and exit");
+        }
+
+        if (dialog.ShowDialog() != true)
+        {
+            return NewConversationChoice.Cancel;
+        }
+
+        return dialog.Choice == ApprovalChoice.AllowAll
+            ? NewConversationChoice.AcceptAllThenStart
+            : NewConversationChoice.Discard;
     }
 
     /// <summary>

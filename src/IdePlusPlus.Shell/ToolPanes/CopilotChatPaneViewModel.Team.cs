@@ -381,6 +381,7 @@ public sealed partial class CopilotChatPaneViewModel
             AttachEditHooks(proposal);
             Messages.Add(proposal);
             proposal.CompleteFromReplyText(operation, solutionDirectory, note);
+            OpenProposalInEditor(proposal);
         }
     }
 
