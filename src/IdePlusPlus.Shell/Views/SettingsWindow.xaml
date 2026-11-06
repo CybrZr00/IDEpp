@@ -139,7 +139,7 @@
                                          ToolTip="Command, e.g. npx" />
                                 <TextBox Text="{Binding ArgsText, UpdateSourceTrigger=PropertyChanged}"
                                          Margin="0,4,0,0"
-                                         ToolTip="Arguments, space-separated, e.g. -y @playwright/mcp@latest" />
+                                         ToolTip="Arguments, space-separated (wrap in double quotes if one contains spaces), e.g. -y @playwright/mcp@latest" />
                                 <TextBox Text="{Binding EnvText, UpdateSourceTrigger=PropertyChanged}"
                                          Margin="0,4,0,0"
                                          ToolTip="Optional environment variables, KEY=VALUE;KEY2=VALUE2" />
@@ -158,6 +158,7 @@
                 <Button Content="Add Server" Command="{Binding AddMcpServerCommand}" Padding="8,2" />
                 <Button Content="+ Playwright" Command="{Binding AddPlaywrightMcpServerCommand}" Margin="4,0,0,0" Padding="8,2" />
                 <Button Content="+ Context7" Command="{Binding AddContext7McpServerCommand}" Margin="4,0,0,0" Padding="8,2" />
+                <Button Content="+ REA" Command="{Binding AddReaMcpServerCommand}" Margin="4,0,0,0" Padding="8,2" />
             </StackPanel>
 
             <Button Content="Save &amp; Reconnect MCP Servers"

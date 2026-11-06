@@ -55,7 +55,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 Name = config.Name,
                 Command = config.Command,
-                ArgsText = string.Join(' ', config.Args),
+                ArgsText = FormatArgs(config.Args),
                 EnvText = config.Env is null ? "" : string.Join(';', config.Env.Select(kv => $"{kv.Key}={kv.Value}")),
             });
         }
@@ -236,6 +236,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     });
 
     [RelayCommand]
+    private void AddReaMcpServer() => McpServers.Add(new McpServerRowViewModel
+    {
+        Name = "rea",
+        Command = @"C:\Program Files\nodejs\node.exe",
+        ArgsText = FormatArgs([@"C:\Users\markp\AppData\Roaming\npm\node_modules\rea-agents\scripts\rea.mjs", "mcp"]),
+        EnvText = @"GHIDRA_INSTALL_DIR=C:\ghidra\ghidra_12.1.4_PUBLIC;JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot",
+    });
+
+    [RelayCommand]
     private void RemoveMcpServer(McpServerRowViewModel row) => McpServers.Remove(row);
 
     [RelayCommand]
@@ -270,8 +279,31 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    private static List<string> ParseArgs(string argsText) =>
-        argsText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+    /// <summary>Splits on spaces, but a "double quoted" run stays one argument (for paths containing spaces).</summary>
+    internal static List<string> ParseArgs(string argsText)
+    {
+        var args = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inQuotes = false;
+        var hasToken = false;
+        foreach (var ch in argsText)
+        {
+            if (ch == '"') { inQuotes = !inQuotes; hasToken = true; }
+            else if (ch == ' ' && !inQuotes)
+            {
+                if (hasToken) args.Add(current.ToString());
+                current.Clear();
+                hasToken = false;
+            }
+            else { current.Append(ch); hasToken = true; }
+        }
+        if (hasToken) args.Add(current.ToString());
+        return args;
+    }
+
+    /// <summary>Inverse of <see cref="ParseArgs"/>: quotes any argument containing a space.</summary>
+    internal static string FormatArgs(IEnumerable<string> args) =>
+        string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
 
     private static Dictionary<string, string>? ParseEnv(string envText)
     {
