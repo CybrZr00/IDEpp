@@ -19,6 +19,10 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
 
     public ConcurrentQueue<(string Worker, IReadOnlyList<ChatMessage> Messages)> Requests { get; } = new();
 
+    /// <summary>The model and effort each request asked for, by the same worker name - a worker's
+    /// own model and the lead's are told apart by this.</summary>
+    public ConcurrentQueue<(string Worker, string Model, ChatEffort Effort)> Models { get; } = new();
+
     public Func<string, ChatStreamEvent[]> WhenScriptEmpty { get; set; } = _ => [new TextDelta("Nothing more to do.")];
 
     public TimeSpan DelayPerReply { get; set; } = TimeSpan.Zero;
@@ -49,6 +53,7 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
     {
         var worker = WorkerName().Match(messages[0].Content) is { Success: true } match ? match.Groups[1].Value : "?";
         Requests.Enqueue((worker, [.. messages]));
+        Models.Enqueue((worker, model, effort));
 
         if (DelayPerReply > TimeSpan.Zero)
         {
@@ -69,6 +74,6 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
         yield return new UsageReceived(100, 10);
     }
 
-    [GeneratedRegex(@"^You are (w\d+),")]
+    [GeneratedRegex(@"^You are (w\d+|lead),")]
     private static partial Regex WorkerName();
 }

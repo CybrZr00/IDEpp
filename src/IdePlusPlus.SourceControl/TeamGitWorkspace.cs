@@ -391,6 +391,21 @@ public sealed partial class TeamGitWorkspace
     }
 
     /// <summary>
+    /// A readable summary of what <paramref name="toRef"/> changes relative to <paramref name="fromRef"/>:
+    /// the --stat table, then the patch, cut at <paramref name="maxChars"/>. For a reviewer reading what
+    /// a worker is about to merge - not for applying - so renames are left to git's default.
+    /// </summary>
+    public async Task<string> GetDiffTextAsync(
+        string repoRoot, string fromRef, string toRef, int maxChars, CancellationToken cancellationToken = default)
+    {
+        var output = await RunOrThrowAsync(
+            repoRoot, ["diff", "--no-color", "--stat", "--patch", fromRef, toRef, "--"], cancellationToken);
+        return output.Length <= maxChars
+            ? output
+            : output[..maxChars] + $"\n[diff cut at {maxChars} characters - {output.Length - maxChars} more not shown]";
+    }
+
+    /// <summary>
     /// The file's content at <paramref name="revision"/> in working-tree form, or null when the file
     /// doesn't exist there. <paramref name="relativePath"/> is repo-root-relative; backslashes are
     /// fine and become the forward slashes git's rev:path syntax needs.

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.Mcp;
@@ -48,6 +49,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
         ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraWorkerCount(_appSettingsStore);
         ultraTimeBudgetMinutes = CopilotChatPaneViewModel.ReadUltraTimeBudgetMinutes(_appSettingsStore);
+        ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
+        ultraOrchestratorModel = CopilotChatPaneViewModel.ReadUltraOrchestratorModel(_appSettingsStore) ?? "";
+        ultraOrchestratorEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey));
+        subAgentModel = CopilotChatPaneViewModel.ReadSubAgentModel(_appSettingsStore) ?? "";
+        subAgentEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.SubAgentEffortSettingKey));
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -113,6 +119,41 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraTimeBudgetMinutes;
+
+    /// <summary>Run Ultra with a lead that plans the work, checks in on the team and reviews each merge
+    /// before it lands. Costs the lead's own model calls on top of the workers'.</summary>
+    [ObservableProperty]
+    private bool ultraOrchestrated;
+
+    /// <summary>The lead's model id; blank means the chat's own.</summary>
+    [ObservableProperty]
+    private string ultraOrchestratorModel;
+
+    /// <summary>The lead's effort; <see cref="DefaultEffortChoice"/> means High.</summary>
+    [ObservableProperty]
+    private string ultraOrchestratorEffort;
+
+    /// <summary>The model id for sub-agents - investigate_parallel's investigators and Ultra's workers;
+    /// blank means the chat's own. It is a model on the provider the chat is using.</summary>
+    [ObservableProperty]
+    private string subAgentModel;
+
+    /// <summary>The effort for sub-agents; <see cref="DefaultEffortChoice"/> means the chat's own.</summary>
+    [ObservableProperty]
+    private string subAgentEffort;
+
+    public const string DefaultEffortChoice = "Default";
+
+    /// <summary>What the effort boxes offer. Ultra is left out: it is a mode, not an effort one request can run at.</summary>
+    public IReadOnlyList<string> EffortChoices { get; } =
+        [DefaultEffortChoice, nameof(ChatEffort.None), nameof(ChatEffort.Low), nameof(ChatEffort.Medium), nameof(ChatEffort.High)];
+
+    private static string EffortChoiceFor(string? stored) =>
+        Enum.TryParse<ChatEffort>(stored, ignoreCase: true, out var effort) && effort != ChatEffort.Ultra
+            ? effort.ToString()
+            : DefaultEffortChoice;
+
+    private static string StoredEffort(string choice) => choice == DefaultEffortChoice ? "" : choice;
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -197,7 +238,18 @@ public sealed partial class SettingsViewModel : ObservableObject
             CopilotChatPaneViewModel.MaxUltraTimeBudgetMinutes);
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
-        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers, up to {UltraTimeBudgetMinutes} minutes.";
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
+        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers{(UltraOrchestrated ? " with a lead" : "")}, up to {UltraTimeBudgetMinutes} minutes.";
+    }
+
+    [RelayCommand]
+    private void SaveSubAgentSettings()
+    {
+        _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentModelSettingKey, SubAgentModel.Trim());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentEffortSettingKey, StoredEffort(SubAgentEffort));
+        StatusMessage = "Sub-agent settings saved.";
     }
 
     [RelayCommand]

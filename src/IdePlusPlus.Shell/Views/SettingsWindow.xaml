@@ -96,7 +96,35 @@
                 <TextBlock Text="Time budget (minutes, 5-240):" VerticalAlignment="Center" Margin="16,0,6,0" />
                 <TextBox Text="{Binding UltraTimeBudgetMinutes, UpdateSourceTrigger=PropertyChanged}" Width="50" />
             </StackPanel>
+            <CheckBox Content="Orchestrated - a lead plans the work, checks in on the team and reviews each merge"
+                      IsChecked="{Binding UltraOrchestrated}"
+                      Margin="0,0,0,4"
+                      ToolTip="A planner agent splits the goal into tasks before any worker starts, redirects workers that drift, and approves or sends back every merge. Better when the pieces need coordinating; costs the lead's calls on top of the workers', and merges wait for its review." />
+            <StackPanel Orientation="Horizontal" Margin="20,0,0,8">
+                <TextBlock Text="Lead model:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBox Text="{Binding UltraOrchestratorModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                         ToolTip="A model id on the provider the chat is using. Blank uses the chat's own model." />
+                <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
+                <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraOrchestratorEffort}" Width="90"
+                          ToolTip="Default is High." />
+            </StackPanel>
             <Button Content="Save Ultra Settings" Command="{Binding SaveUltraSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
+
+            <TextBlock Text="Sub-agents" FontWeight="Bold" Margin="0,0,0,4" />
+            <TextBlock Text="The model and effort for investigate_parallel's investigators and for Ultra's workers. Leave blank to use the chat's own - a cheaper, faster model is often enough for these."
+                       FontSize="11"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBox Text="{Binding SubAgentModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                         ToolTip="A model id on the provider the chat is using. Blank uses the chat's own model." />
+                <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
+                <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding SubAgentEffort}" Width="90"
+                          ToolTip="Default uses the chat's own effort." />
+            </StackPanel>
+            <Button Content="Save Sub-agent Settings" Command="{Binding SaveSubAgentSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
             <TextBlock Text="NuGet" FontWeight="Bold" Margin="0,0,0,8" />
             <CheckBox Content="Restore NuGet packages on solution load"

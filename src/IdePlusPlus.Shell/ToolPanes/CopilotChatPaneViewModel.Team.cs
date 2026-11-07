@@ -22,6 +22,14 @@ public sealed partial class CopilotChatPaneViewModel
 {
     public const string UltraWorkerCountSettingKey = "UltraWorkerCount";
     public const string UltraTimeBudgetSettingKey = "UltraTimeBudgetMinutes";
+    public const string UltraOrchestratedSettingKey = "UltraOrchestrated";
+    public const string UltraOrchestratorModelSettingKey = "UltraOrchestratorModel";
+    public const string UltraOrchestratorEffortSettingKey = "UltraOrchestratorEffort";
+
+    /// <summary>The model and effort for sub-agents - investigate_parallel's investigators and Ultra's
+    /// workers. Blank means the same as the chat's own.</summary>
+    public const string SubAgentModelSettingKey = "SubAgentModel";
+    public const string SubAgentEffortSettingKey = "SubAgentEffort";
     public const int DefaultUltraWorkerCount = 4;
     public const int MaxUltraWorkerCount = 16;
     public const int DefaultUltraTimeBudgetMinutes = 30;
@@ -108,6 +116,30 @@ public sealed partial class CopilotChatPaneViewModel
             ? Math.Clamp(count, 1, MaxUltraWorkerCount)
             : DefaultUltraWorkerCount;
 
+    public static bool ReadUltraOrchestrated(AppSettingsStore settings) =>
+        bool.TryParse(settings.Get(UltraOrchestratedSettingKey), out var orchestrated) && orchestrated;
+
+    /// <summary>A model id setting, or null when blank - which means "use the chat's own".</summary>
+    private static string? ReadModelSetting(AppSettingsStore settings, string key) =>
+        settings.Get(key) is { } value && !string.IsNullOrWhiteSpace(value) ? value.Trim() : null;
+
+    /// <summary>An effort setting, or null when blank or not a value a single request can use - Ultra
+    /// is a mode of the chat pane, not an effort a sub-agent could run at.</summary>
+    private static ChatEffort? ReadEffortSetting(AppSettingsStore settings, string key) =>
+        Enum.TryParse<ChatEffort>(settings.Get(key), ignoreCase: true, out var effort) && effort != ChatEffort.Ultra
+            ? effort
+            : null;
+
+    public static string? ReadSubAgentModel(AppSettingsStore settings) => ReadModelSetting(settings, SubAgentModelSettingKey);
+
+    public static ChatEffort? ReadSubAgentEffort(AppSettingsStore settings) => ReadEffortSetting(settings, SubAgentEffortSettingKey);
+
+    public static string? ReadUltraOrchestratorModel(AppSettingsStore settings) =>
+        ReadModelSetting(settings, UltraOrchestratorModelSettingKey);
+
+    public static ChatEffort ReadUltraOrchestratorEffort(AppSettingsStore settings) =>
+        ReadEffortSetting(settings, UltraOrchestratorEffortSettingKey) ?? ChatEffort.High;
+
     public static int ReadUltraTimeBudgetMinutes(AppSettingsStore settings) =>
         int.TryParse(settings.Get(UltraTimeBudgetSettingKey), out var minutes)
             ? Math.Clamp(minutes, MinUltraTimeBudgetMinutes, MaxUltraTimeBudgetMinutes)
@@ -193,7 +225,14 @@ public sealed partial class CopilotChatPaneViewModel
                     TimeSpan.FromMinutes(ReadUltraTimeBudgetMinutes(_appSettingsStore)),
                     AreShellCommandsEnabled,
                     _currentConfiguration?.Invoke() ?? "Debug",
-                    ChatEffort.Ultra);
+                    ChatEffort.Ultra)
+                {
+                    Orchestrated = ReadUltraOrchestrated(_appSettingsStore),
+                    WorkerModel = ReadSubAgentModel(_appSettingsStore),
+                    WorkerEffort = ReadSubAgentEffort(_appSettingsStore),
+                    OrchestratorModel = ReadUltraOrchestratorModel(_appSettingsStore),
+                    OrchestratorEffort = ReadUltraOrchestratorEffort(_appSettingsStore),
+                };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();
                 TeamRunViewModel? runCard = null;

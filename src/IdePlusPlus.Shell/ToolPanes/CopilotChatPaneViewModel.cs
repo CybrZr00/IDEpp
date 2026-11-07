@@ -2120,6 +2120,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // Read once: the sub-agents run on the thread pool and outlive any single check of the field.
         var solutionDirectory = _solutionDirectory;
         IChatClient client = CurrentChatClient;
+
+        // Their own model and effort when configured (Settings > Sub-agents); investigations are
+        // often well served by something cheaper and faster than the chat's own.
+        var subAgentModel = ReadSubAgentModel(_appSettingsStore) ?? SelectedModel;
+        var subAgentEffort = ReadSubAgentEffort(_appSettingsStore) ?? SelectedEffort;
         using var concurrencyLimit = new SemaphoreSlim(SubAgentTools.MaxConcurrency);
 
         var runs = tasks.Select(async task =>
@@ -2128,7 +2133,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             try
             {
                 var loop = new HeadlessAgentLoop(
-                    client, SelectedModel, SelectedEffort, SubAgentTools.AllowedTools,
+                    client, subAgentModel, subAgentEffort, SubAgentTools.AllowedTools,
                     (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, solutionDirectory, ct));
                 var result = await loop.RunAsync(
                     SubAgentSystemPrompt, task, SubAgentTools.MaxIterationsPerTask, cancellationToken);
