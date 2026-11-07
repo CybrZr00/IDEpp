@@ -287,7 +287,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _templateInstantiation = templateInstantiation;
         // Falls back to the constructing thread's dispatcher where there is no Application - tests.
         _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
-        Messages.CollectionChanged += (_, _) => NewConversationCommand.NotifyCanExecuteChanged();
+        Messages.CollectionChanged += OnMessagesCollectionChanged;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is { } savedProvider && AvailableProviders.Contains(savedProvider)
             ? savedProvider
@@ -932,6 +932,94 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     private IEnumerable<EditProposalViewModel> UndecidedEdits() =>
         Messages.OfType<EditProposalViewModel>().Where(p => p.IsComplete && !p.IsDecided && !p.AcceptCommand.IsRunning);
+
+    // ---- Pending edits bar: decide every waiting edit at once, instead of one card (and one editor
+    // tab) at a time. The same Accept All that New Chat offers, available without starting over.
+
+    /// <summary>How many proposed edits are complete and still waiting for Accept or Reject.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPendingEdits))]
+    [NotifyPropertyChangedFor(nameof(PendingEditsText))]
+    private int pendingEditCount;
+
+    public bool HasPendingEdits => PendingEditCount > 0;
+
+    public string PendingEditsText => PendingEditCount == 1
+        ? "1 edit is waiting for your decision"
+        : $"{PendingEditCount} edits are waiting for your decision";
+
+    private void OnMessagesCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        NewConversationCommand.NotifyCanExecuteChanged();
+
+        if (e.NewItems is not null)
+        {
+            foreach (var proposal in e.NewItems.OfType<EditProposalViewModel>())
+            {
+                proposal.PropertyChanged += OnProposalPropertyChanged;
+            }
+        }
+
+        RefreshPendingEdits();
+    }
+
+    private void OnProposalPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(EditProposalViewModel.IsComplete) or nameof(EditProposalViewModel.IsDecided))
+        {
+            RefreshPendingEdits();
+        }
+    }
+
+    private void RefreshPendingEdits() => PendingEditCount = UndecidedEdits().Count();
+
+    /// <summary>
+    /// Accepts every waiting edit, one after another (edits to one file are applied against the buffer
+    /// the previous one left). An edit that removes most of its file is left for a look of its own -
+    /// the same edits Auto Mode holds back - and the status line says how many were.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(HasPendingEdits))]
+    private async Task AcceptAllPendingAsync()
+    {
+        var waiting = UndecidedEdits().ToList();
+        var held = 0;
+        var accepted = 0;
+
+        foreach (var proposal in waiting)
+        {
+            if (proposal.IsLargeDeletion)
+            {
+                held++;
+                continue;
+            }
+
+            await proposal.AcceptCommand.ExecuteAsync(null);
+            accepted++;
+        }
+
+        StatusMessage = held == 0
+            ? $"Accepted {accepted} edit{(accepted == 1 ? "" : "s")}."
+            : $"Accepted {accepted}; {held} left for review because {(held == 1 ? "it removes" : "they remove")} most of a file.";
+    }
+
+    /// <summary>Rejects every waiting edit. The model is told each was rejected, as for a single Reject.</summary>
+    [RelayCommand(CanExecute = nameof(HasPendingEdits))]
+    private void RejectAllPending()
+    {
+        var waiting = UndecidedEdits().ToList();
+        foreach (var proposal in waiting)
+        {
+            proposal.RejectCommand.Execute(null);
+        }
+
+        StatusMessage = $"Rejected {waiting.Count} edit{(waiting.Count == 1 ? "" : "s")}.";
+    }
+
+    partial void OnPendingEditCountChanged(int value)
+    {
+        AcceptAllPendingCommand.NotifyCanExecuteChanged();
+        RejectAllPendingCommand.NotifyCanExecuteChanged();
+    }
 
     private string? DescribeWhatNewConversationDiscards()
     {
@@ -2266,6 +2354,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // as "no longer fits the file" (or, if it happens to fit, lands twice).
         if (proposal.IsComplete)
         {
+            return;
+        }
+
+        if (proposalEvent.Status == EditProposalStatus.Oversized)
+        {
+            proposal.RefuseOversized(proposalEvent);
             return;
         }
 

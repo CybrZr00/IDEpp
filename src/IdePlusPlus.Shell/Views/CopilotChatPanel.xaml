@@ -604,9 +604,41 @@
             </DockPanel>
         </StackPanel>
 
-        <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Messages}" />
-        </ScrollViewer>
+        <Grid Grid.Row="3">
+            <ScrollViewer x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Messages}" />
+            </ScrollViewer>
+
+            <!-- Floats over the bottom of the conversation so a decision on every waiting edit is one
+                 click away wherever the list is scrolled to. Hidden when nothing is waiting. -->
+            <Border VerticalAlignment="Bottom"
+                    Margin="6"
+                    Padding="8,4"
+                    CornerRadius="4"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource MutedForegroundBrush}"
+                    Background="{DynamicResource ChatBubbleAssistantBackgroundBrush}"
+                    Visibility="{Binding HasPendingEdits, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                <DockPanel LastChildFill="True">
+                    <Button DockPanel.Dock="Right"
+                            Content="Reject all"
+                            Command="{Binding RejectAllPendingCommand}"
+                            Margin="6,0,0,0"
+                            Padding="8,2"
+                            ToolTip="Rejects every edit that is waiting. Nothing is written, and the assistant is told." />
+                    <Button DockPanel.Dock="Right"
+                            Content="Accept all"
+                            Command="{Binding AcceptAllPendingCommand}"
+                            Margin="6,0,0,0"
+                            Padding="8,2"
+                            ToolTip="Accepts every waiting edit in order. An edit that removes most of a file is left for you to review." />
+                    <TextBlock Text="{Binding PendingEditsText}"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               FontSize="11" />
+                </DockPanel>
+            </Border>
+        </Grid>
 
         <Grid Grid.Row="4" Margin="4,0">
             <Grid.ColumnDefinitions>
