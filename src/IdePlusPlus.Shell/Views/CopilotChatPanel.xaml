@@ -523,6 +523,12 @@
                           FontSize="11"
                           Margin="12,0,0,0"
                           ToolTip="Accepts edit proposals automatically instead of waiting for Accept/Reject" />
+                <CheckBox Content="Close tabs"
+                          IsChecked="{Binding CloseReviewTabs}"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Margin="12,0,0,0"
+                          ToolTip="Closes the editor tab an edit was opened in once you accept or reject it. Files you already had open are left alone." />
                 <CheckBox Content="Shell"
                           IsChecked="{Binding AreShellCommandsEnabled}"
                           VerticalAlignment="Center"

@@ -524,6 +524,63 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
     });
 
     [Fact]
+    public void DecidingAnEdit_ClosesTheTabItWasOpenedInForReview() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var closed = new List<DocumentViewModel>();
+        viewModel.CloseReviewDocumentRequested = document => { closed.Add(document); return true; };
+
+        var proposal = UndecidedProposal(viewModel);
+        var document = DocumentViewModel.ForExistingFile(Path.Combine(_directoryA, "Foo.cs"));
+        proposal.ShowInEditor(document, openedForReview: true);
+
+        viewModel.RejectAllPendingCommand.Execute(null);
+        await WaitUntilAsync(() => closed.Count > 0);
+
+        closed.ShouldHaveSingleItem().ShouldBeSameAs(document);
+    });
+
+    [Fact]
+    public void DecidingAnEdit_LeavesATabTheUserAlreadyHadOpen() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var closed = new List<DocumentViewModel>();
+        viewModel.CloseReviewDocumentRequested = document => { closed.Add(document); return true; };
+
+        var proposal = UndecidedProposal(viewModel);
+        proposal.ShowInEditor(DocumentViewModel.ForExistingFile(Path.Combine(_directoryA, "Foo.cs")), openedForReview: false);
+
+        viewModel.RejectAllPendingCommand.Execute(null);
+        await Task.Delay(200);
+
+        closed.ShouldBeEmpty();
+    });
+
+    [Fact]
+    public void DecidingAnEdit_LeavesTheTabWhileAnotherEditToTheSameFileIsWaiting() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var closed = new List<DocumentViewModel>();
+        viewModel.CloseReviewDocumentRequested = document => { closed.Add(document); return true; };
+
+        var first = UndecidedProposal(viewModel);
+        var document = DocumentViewModel.ForExistingFile(Path.Combine(_directoryA, "Foo.cs"));
+        first.ShowInEditor(document, openedForReview: true);
+        var second = UndecidedProposal(viewModel);
+        second.ShowInEditor(document, openedForReview: true);
+
+        first.RejectCommand.Execute(null);
+        await Task.Delay(200);
+        closed.ShouldBeEmpty();
+
+        second.RejectCommand.Execute(null);
+        await WaitUntilAsync(() => closed.Count > 0);
+    });
+
+    [Fact]
     public void RefuseOversized_ClosesTheProposalWithoutAnAcceptButton()
     {
         var proposal = new EditProposalViewModel(

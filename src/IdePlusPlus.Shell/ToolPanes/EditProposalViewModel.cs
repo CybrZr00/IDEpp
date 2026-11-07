@@ -109,6 +109,10 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private bool _openedForReview;
     private bool _isDiscarded;
 
+    /// <summary>The editor tab, but only when opening this proposal for review is what opened it - a
+    /// file the user already had open is theirs and is never closed on their behalf.</summary>
+    public DocumentViewModel? ReviewDocument => _openedForReview ? _attachedDocument : null;
+
     /// <summary>Called once the target file has been opened/focused in the editor - pushes this
     /// proposal's diff into that document's editor tab, docked above the code. Accept()/Reject() call
     /// RefreshEditorAndStatus() again once decided, so the panel there stays in sync with the

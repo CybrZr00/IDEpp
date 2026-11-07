@@ -46,6 +46,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const string DeepSeekModelSettingKey = "DeepSeekChatModel";
     private const string EffortSettingKey = "ChatEffort";
     private const string AutoModeSettingKey = "ChatAutoMode";
+    private const string CloseReviewTabsSettingKey = "ChatCloseReviewTabs";
     private const string ShellCommandsSettingKey = "ChatShellCommands";
     private const string WebFetchSettingKey = "ChatWebFetch";
     private const string PlanModeSettingKey = "ChatPlanMode";
@@ -297,6 +298,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             ? savedEffort
             : ChatEffort.None;
         isAutoMode = bool.TryParse(_appSettingsStore.Get(AutoModeSettingKey), out var savedAutoMode) && savedAutoMode;
+        closeReviewTabs = !bool.TryParse(_appSettingsStore.Get(CloseReviewTabsSettingKey), out var savedCloseTabs) || savedCloseTabs;
         areShellCommandsEnabled =
             bool.TryParse(_appSettingsStore.Get(ShellCommandsSettingKey), out var savedShell) && savedShell;
         areWebFetchEnabled =
@@ -969,6 +971,46 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             RefreshPendingEdits();
         }
+
+        if (e.PropertyName == nameof(EditProposalViewModel.IsDecided)
+            && sender is EditProposalViewModel { IsDecided: true } decided)
+        {
+            CloseReviewTabIfDone(decided);
+        }
+    }
+
+    /// <summary>
+    /// Whether a tab that was opened only to review an edit is closed once that edit is decided, so
+    /// deciding a run of them does not leave a run of tabs to close by hand.
+    /// </summary>
+    [ObservableProperty]
+    private bool closeReviewTabs = true;
+
+    /// <summary>Set by MainWindowViewModel: closes an editor tab and returns whether it did. It
+    /// refuses a tab with unsaved changes or one that is already gone.</summary>
+    public Func<DocumentViewModel, bool>? CloseReviewDocumentRequested { get; set; }
+
+    /// <summary>
+    /// Closes the tab a decided proposal opened for review - but not while another edit to the same
+    /// file is still waiting on it, and not a tab the user had open themselves. Deferred past the
+    /// decision itself: Accept is still finishing (saving, refreshing the panel) when IsDecided flips.
+    /// </summary>
+    private void CloseReviewTabIfDone(EditProposalViewModel decided)
+    {
+        if (!CloseReviewTabs || decided.ReviewDocument is not { } document)
+        {
+            return;
+        }
+
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            var stillNeeded = Messages.OfType<EditProposalViewModel>()
+                .Any(p => !ReferenceEquals(p, decided) && !p.IsDecided && ReferenceEquals(p.ReviewDocument, document));
+            if (!stillNeeded)
+            {
+                CloseReviewDocumentRequested?.Invoke(document);
+            }
+        });
     }
 
     private void RefreshPendingEdits() => PendingEditCount = UndecidedEdits().Count();
@@ -2955,6 +2997,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     partial void OnIsAutoModeChanged(bool value) => _appSettingsStore.Set(AutoModeSettingKey, value.ToString());
+
+    partial void OnCloseReviewTabsChanged(bool value) => _appSettingsStore.Set(CloseReviewTabsSettingKey, value.ToString());
 
     partial void OnAreShellCommandsEnabledChanged(bool value)
     {

@@ -180,6 +180,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // normal case here rather than the "moved/renamed/deleted" error OpenPath's other callers
         // mean by a missing file.
         CopilotChat.OpenFileRequested = OpenOrCreatePath;
+        CopilotChat.CloseReviewDocumentRequested = document =>
+        {
+            // Only a tab that is still open and has nothing unsaved: a closed one needs nothing, and
+            // closing a dirty one would either prompt or lose the user's own typing.
+            if (document.IsDirty || !OpenDocuments.Contains(document))
+            {
+                return false;
+            }
+
+            EditorServices.DiffPreview?.Request(document, null);
+            CloseDocument(document);
+            return true;
+        };
 
         currentTheme = _themeService.Current;
         _themeService.Changed += () => _dispatcher.Invoke(() => CurrentTheme = _themeService.Current);
