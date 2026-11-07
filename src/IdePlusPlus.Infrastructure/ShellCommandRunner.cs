@@ -25,6 +25,15 @@ public sealed record ShellCommandResult(int ExitCode, string Output, bool TimedO
 /// </summary>
 public sealed class ShellCommandRunner
 {
+    private readonly Func<CancellationToken, Task<IReadOnlyDictionary<string, string>?>> _nativeToolchain;
+
+    /// <param name="nativeToolchain">Supplies the Visual Studio C++ environment for commands that
+    /// compile C++ - see <see cref="NativeToolchain"/>. Defaults to the real discovery; tests pass a
+    /// stand-in so they need no Visual Studio.</param>
+    public ShellCommandRunner(
+        Func<CancellationToken, Task<IReadOnlyDictionary<string, string>?>>? nativeToolchain = null) =>
+        _nativeToolchain = nativeToolchain ?? NativeToolchain.GetEnvironmentAsync;
+
     public async Task<ShellCommandResult> RunAsync(
         string command,
         string workingDirectory,
@@ -32,6 +41,13 @@ public sealed class ShellCommandRunner
         int maxOutputChars,
         CancellationToken cancellationToken = default)
     {
+        // Only for commands that look like C++ builds: the rest keep exactly the environment this app
+        // was started with, rather than every dotnet or git call inheriting Visual Studio's.
+        var needsToolchain = NativeToolchain.IsNeededBy(command);
+        var toolchain = needsToolchain
+            ? await _nativeToolchain(cancellationToken).ConfigureAwait(false)
+            : null;
+
         var startInfo = new ProcessStartInfo("powershell.exe")
         {
             RedirectStandardInput = true,
@@ -41,6 +57,14 @@ public sealed class ShellCommandRunner
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory,
         };
+
+        if (toolchain is not null)
+        {
+            foreach (var (name, value) in toolchain)
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
 
         // -NoProfile so a user's $PROFILE cannot change what a command means; -NonInteractive so a
         // prompt fails fast instead of hanging; -ExecutionPolicy Bypass because -Command is not a
@@ -128,7 +152,18 @@ public sealed class ShellCommandRunner
             text += $"\n[output truncated at {maxOutputChars} chars]";
         }
 
-        return new ShellCommandResult(timedOut ? -1 : process.ExitCode, text, timedOut);
+        var exitCode = timedOut ? -1 : process.ExitCode;
+
+        // A C++ build that failed with no toolchain found is the case a model reads as "there is no
+        // C++ toolchain" and gives up on. Say what actually is missing, so it can tell the user.
+        if (needsToolchain && toolchain is null && exitCode != 0)
+        {
+            text += "\n[IDE++: this looks like a C++ build, but no Visual Studio installation with the "
+                    + "\"Desktop development with C++\" workload was found, so cl, cmake and ninja were not "
+                    + "put on PATH. Installing that workload (Visual Studio Installer > Modify) is the fix.]";
+        }
+
+        return new ShellCommandResult(exitCode, text, timedOut);
     }
 
     private static void KillTree(Process process, ProcessJob? job)

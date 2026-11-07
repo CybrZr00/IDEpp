@@ -29,7 +29,9 @@ public static class ShellTools
                      "tools where they fit - build_solution, run_tests, get_diagnostics, git_diff, git_status, " +
                      "read_file, list_files - which need no confirmation and return cleaner results. Use this only " +
                      "for what none of those cover. Commands run non-interactively: anything that waits for input " +
-                     "will fail rather than hang.",
+                     "will fail rather than hang. A command that invokes the C++ toolchain (cl, link, cmake, ninja, " +
+                     "msbuild) runs with the Visual Studio x64 build environment already set up, so those tools " +
+                     "are on PATH - do not conclude there is no C++ toolchain just because a bare shell lacks one.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
