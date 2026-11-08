@@ -2060,7 +2060,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 ReverseEngineeringTools.ManagedDecompileToolName => arguments?["type"]?.GetValue<string>() is { } typeName && !string.IsNullOrWhiteSpace(typeName)
                     ? (false, ToolReports.Cap(_managedDecompiler.DecompileType(resolved, typeName), ReverseEngineeringTools.MaxOutputChars, "decompiled C#"))
                     : (true, "A 'type' to decompile is required."),
-                ReverseEngineeringTools.GenerateShimToolName => (false, FormatShim(_shimGenerator.GenerateManagedForwarder(
+                ReverseEngineeringTools.GenerateShimToolName => (false, FormatShim(_shimGenerator.GenerateForwarder(
                     resolved, ResolveShimOutputDirectory(arguments, resolved)))),
                 _ => (true, $"Unknown reverse-engineering tool '{toolName}'."),
             }, cancellationToken);
@@ -2097,8 +2097,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         static string FormatShim(ShimResult result) =>
-            $"Generated a shim forwarding {result.ForwardedTypeCount} type(s):\n"
-            + $"  {result.ProjectPath}\n  {result.ForwardersPath}\n  {result.ReadmePath}";
+            $"Generated a shim forwarding {result.ForwardedCount} export(s)/type(s):\n"
+            + string.Join("\n", result.Files.Select(file => $"  {file}"));
     }
 
     /// <summary>Runs one native (Ghidra-backed) reverse-engineering tool. re_open imports and analyzes

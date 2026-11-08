@@ -147,15 +147,16 @@ public static class ReverseEngineeringTools
 
     public static readonly ToolDefinition GenerateShim = new(
         Name: GenerateShimToolName,
-        Description: "Generate a type-forwarding shim (facade) project for a managed .NET assembly: a .csproj plus " +
-                     "Forwarders.cs with [assembly: TypeForwardedTo(...)] for every public top-level type. Reads " +
-                     "metadata only; never runs the assembly.",
+        Description: "Generate a forwarding shim for a binary. A managed .NET assembly gets a .csproj plus Forwarders.cs " +
+                     "with [assembly: TypeForwardedTo(...)] for every public type; a native binary gets a .def that " +
+                     "forwards its named exports to the original module. Managed vs native is detected automatically. " +
+                     "Reads metadata/exports only; never runs the binary.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
               "properties": {
-                "path": { "type": "string", "description": "Path to the managed .dll/.exe to shim." },
-                "outputDir": { "type": "string", "description": "Where to write the shim project. Defaults to a '<name>.Shim' folder next to the assembly." }
+                "path": { "type": "string", "description": "Path to the managed or native binary to shim." },
+                "outputDir": { "type": "string", "description": "Where to write the shim. Defaults to a '<name>.Shim' folder next to the binary." }
               },
               "required": ["path"]
             }
