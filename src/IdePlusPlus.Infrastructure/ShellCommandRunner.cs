@@ -39,6 +39,7 @@ public sealed class ShellCommandRunner
         string workingDirectory,
         TimeSpan timeout,
         int maxOutputChars,
+        Action<string>? onLine = null,
         CancellationToken cancellationToken = default)
     {
         // Only for commands that look like C++ builds: the rest keep exactly the environment this app
@@ -91,6 +92,9 @@ public sealed class ShellCommandRunner
 
                 output.AppendLine(line);
             }
+
+            // Streamed outside the lock so a slow consumer (a UI update) can't stall the reader.
+            onLine?.Invoke(line);
         }
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };

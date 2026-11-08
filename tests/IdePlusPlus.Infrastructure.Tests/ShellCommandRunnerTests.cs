@@ -33,7 +33,7 @@ public sealed class ShellCommandRunnerTests : IDisposable
 
     private Task<ShellCommandResult> RunAsync(
         string command, TimeSpan? timeout = null, int maxOutputChars = 20_000, CancellationToken ct = default) =>
-        _runner.RunAsync(command, _directory, timeout ?? TimeSpan.FromMinutes(1), maxOutputChars, ct);
+        _runner.RunAsync(command, _directory, timeout ?? TimeSpan.FromMinutes(1), maxOutputChars, cancellationToken: ct);
 
     [Fact]
     public async Task RunAsync_CapturesStandardOutputAndSucceeds()

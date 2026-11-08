@@ -314,6 +314,29 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     public ObservableCollection<ObservableObject> Messages { get; }  = [];
 
+    /// <summary>The tool-call card for the call currently executing, so the MCP branch of
+    /// ExecuteTool can route progress notifications to it. One call runs at a time, so a single field
+    /// is enough.</summary>
+    private McpToolCallViewModel? _activeToolCall;
+
+    /// <summary>Called by the chat view's timer to tick the elapsed time on any running tool-call
+    /// card. Returns whether at least one call is still running, so the view knows to keep the log
+    /// pinned to the bottom. UI-thread only.</summary>
+    public bool TickRunningToolCalls()
+    {
+        var anyRunning = false;
+        foreach (var toolCall in Messages.OfType<McpToolCallViewModel>())
+        {
+            if (toolCall.IsRunning)
+            {
+                toolCall.RefreshElapsed();
+                anyRunning = true;
+            }
+        }
+
+        return anyRunning;
+    }
+
     /// <summary>The model picker's dropdown contents - whatever the current provider's /models
     /// endpoint last reported. Previously a hardcoded four-model list for OpenRouter, which went
     /// stale as models shipped and were retired (by the time it was replaced, one of the four no
@@ -1290,7 +1313,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                             Messages.Add(callViewModel);
                         });
 
+                        // Lets the MCP branch of ExecuteTool route progress notifications to this
+                        // card. Safe as a single field because tool calls run one at a time here.
+                        _activeToolCall = callViewModel;
                         var (isError, text) = await ExecuteToolAsync(call, turn.Token);
+                        _activeToolCall = null;
                         _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
 
                         history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
@@ -1472,7 +1499,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // advertised and then quietly forwarded to MCP as an unknown tool.
         if (!BuiltInTools.IsBuiltIn(call.Name!))
         {
-            var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), cancellationToken);
+            var card = _activeToolCall;
+            Action<double?, double?, string?>? onProgress = card is null
+                ? null
+                : (progress, total, message) => _dispatcher.Invoke(() => card.ReportProgress(message, progress, total));
+            var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), onProgress, cancellationToken);
             return (mcpResult.IsError, mcpResult.Text);
         }
 
@@ -1956,11 +1987,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private async Task<(bool IsError, string Text)> RunApprovedShellCommandAsync(
         string command, string workingDirectory, CancellationToken cancellationToken)
     {
+        // Streams each line to the active tool-call card so run_command shows live output instead of
+        // appearing frozen until it finishes. Null during an Ultra run, which has no such card.
+        var card = _activeToolCall;
+        Action<string>? onLine = card is null
+            ? null
+            : line => _dispatcher.Invoke(() => card.ReportProgress(line, null, null));
+
         ShellCommandResult result;
         try
         {
             result = await _shellCommandRunner.RunAsync(
-                command, workingDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, cancellationToken);
+                command, workingDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, onLine, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

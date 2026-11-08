@@ -414,8 +414,20 @@
                             <Run Text="{Binding ToolName, Mode=OneWay}" FontWeight="Bold" FontFamily="Consolas" FontSize="11" />
                             <Run Text="—" />
                             <Run Text="{Binding Status, Mode=OneWay}" FontStyle="Italic" />
+                            <Run Text="{Binding ElapsedText, Mode=OneWay}" FontSize="10" Foreground="{DynamicResource MutedForegroundBrush}" />
                         </TextBlock>
                     </DockPanel>
+                    <ProgressBar IsIndeterminate="True"
+                                 Height="2"
+                                 Margin="0,3,0,0"
+                                 Visibility="{Binding IsRunning, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+                    <TextBlock Text="{Binding ProgressText, Mode=OneWay}"
+                               FontSize="10"
+                               FontStyle="Italic"
+                               Margin="0,2,0,0"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
+                               Visibility="{Binding HasProgress, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
                     <TextBox Text="{Binding ResultPreview, Mode=OneWay}"
                              FontFamily="Consolas"
                              FontSize="10"
@@ -427,6 +439,23 @@
                              BorderThickness="0"
                              Padding="0"
                              Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <Expander Header="Arguments"
+                              FontSize="10"
+                              IsExpanded="False"
+                              Margin="0,2,0,0"
+                              Visibility="{Binding HasArguments, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <TextBox Text="{Binding ArgumentsJson, Mode=OneWay}"
+                                 FontFamily="Consolas"
+                                 FontSize="10"
+                                 TextWrapping="Wrap"
+                                 MaxHeight="140"
+                                 IsReadOnly="True"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Foreground="{DynamicResource MutedForegroundBrush}" />
+                    </Expander>
                 </StackPanel>
             </Border>
         </DataTemplate>

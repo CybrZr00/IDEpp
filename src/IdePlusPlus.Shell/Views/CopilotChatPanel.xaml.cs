@@ -3,6 +3,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using IdePlusPlus.Shell.ToolPanes;
 
 namespace IdePlusPlus.Shell.Views;
@@ -10,12 +11,19 @@ namespace IdePlusPlus.Shell.Views;
 public partial class CopilotChatPanel : UserControl
 {
     private CopilotChatPaneViewModel? _boundViewModel;
+    private readonly DispatcherTimer _elapsedTimer;
 
     public CopilotChatPanel()
     {
         InitializeComponent();
         DataContextChanged += (_, _) => Rebind();
         PreviewKeyDown += OnPanelPreviewKeyDown;
+
+        // Ticks the elapsed time on any running tool-call card, so a long call visibly counts up
+        // instead of looking frozen. One timer for the whole pane rather than one per card.
+        _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _elapsedTimer.Tick += (_, _) => OnElapsedTick();
+        _elapsedTimer.Start();
     }
 
     /// <summary>
@@ -56,6 +64,22 @@ public partial class CopilotChatPanel : UserControl
     private void OnMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         MessagesScrollViewer.ScrollToBottom();
 
+    /// <summary>Ticks running tool-call cards' elapsed time. If a card is running and the user is
+    /// already scrolled to the bottom, keeps it pinned there as the card grows in place (progress
+    /// line, result) - but never yanks the view down when they have scrolled up to read.</summary>
+    private void OnElapsedTick()
+    {
+        if (_boundViewModel is null || !_boundViewModel.TickRunningToolCalls())
+        {
+            return;
+        }
+
+        if (MessagesScrollViewer.VerticalOffset >= MessagesScrollViewer.ScrollableHeight - 40)
+        {
+            MessagesScrollViewer.ScrollToBottom();
+        }
+    }
+
     private void InputTextBox_OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
@@ -87,7 +111,7 @@ public partial class CopilotChatPanel : UserControl
             EditProposalViewModel proposal => proposal.BuildPlainTextSummary(),
             PlanProposalViewModel plan =>
                 plan.Summary + "\n" + string.Join("\n", plan.Steps.Select(step => $"- {step}")),
-            McpToolCallViewModel toolCall => $"{toolCall.ToolName}: {toolCall.Status}\n{toolCall.ResultPreview}",
+            McpToolCallViewModel toolCall => $"{toolCall.ToolName}: {toolCall.Status}\n{toolCall.ResultText ?? toolCall.ResultPreview}",
             _ => null,
         };
 

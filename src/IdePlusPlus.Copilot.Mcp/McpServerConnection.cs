@@ -107,7 +107,8 @@ public sealed class McpServerConnection : IAsyncDisposable
         return connection;
     }
 
-    public async Task<McpToolCallResult> CallToolAsync(string toolName, JsonNode? arguments, CancellationToken cancellationToken)
+    public async Task<McpToolCallResult> CallToolAsync(
+        string toolName, JsonNode? arguments, Action<double?, double?, string?>? onProgress, CancellationToken cancellationToken)
     {
         if (_client is null)
         {
@@ -118,7 +119,7 @@ public sealed class McpServerConnection : IAsyncDisposable
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var result = await _client.SendRequestAsync("tools/call", new { name = toolName, arguments }, cancellationToken);
+            var result = await _client.SendRequestAsync("tools/call", new { name = toolName, arguments }, onProgress, cancellationToken);
             var isError = result?["isError"]?.GetValue<bool>() ?? false;
             var text = string.Join(
                 "\n",

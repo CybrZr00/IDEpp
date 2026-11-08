@@ -259,7 +259,11 @@ public sealed class McpServerManager
         }
     }
 
-    public async Task<McpToolCallResult> CallToolAsync(string qualifiedName, string argumentsJson, CancellationToken cancellationToken)
+    public Task<McpToolCallResult> CallToolAsync(string qualifiedName, string argumentsJson, CancellationToken cancellationToken) =>
+        CallToolAsync(qualifiedName, argumentsJson, onProgress: null, cancellationToken);
+
+    public async Task<McpToolCallResult> CallToolAsync(
+        string qualifiedName, string argumentsJson, Action<double?, double?, string?>? onProgress, CancellationToken cancellationToken)
     {
         McpServerConnection? connection;
         string? toolName;
@@ -284,6 +288,6 @@ public sealed class McpServerManager
             return new McpToolCallResult(true, $"Malformed arguments JSON for '{qualifiedName}'.");
         }
 
-        return await connection.CallToolAsync(toolName, arguments, cancellationToken);
+        return await connection.CallToolAsync(toolName, arguments, onProgress, cancellationToken);
     }
 }
