@@ -20,6 +20,7 @@ using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Infrastructure.Hooks;
 using IdePlusPlus.Publish;
+using IdePlusPlus.ReverseEngineering;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
@@ -49,6 +50,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const string CloseReviewTabsSettingKey = "ChatCloseReviewTabs";
     private const string ShellCommandsSettingKey = "ChatShellCommands";
     private const string WebFetchSettingKey = "ChatWebFetch";
+    private const string ReverseEngineeringSettingKey = "ChatReverseEngineering";
     private const string PlanModeSettingKey = "ChatPlanMode";
 
     /// <summary>Public so SettingsViewModel can read/write the same key - re-read fresh on every
@@ -188,6 +190,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly TestRunService _testRunService;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
+    private readonly ManagedDecompiler _managedDecompiler = new();
     private readonly WebContentFetcher _webContentFetcher = new();
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly HookService _hookService;
@@ -303,6 +306,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             bool.TryParse(_appSettingsStore.Get(ShellCommandsSettingKey), out var savedShell) && savedShell;
         areWebFetchEnabled =
             bool.TryParse(_appSettingsStore.Get(WebFetchSettingKey), out var savedWebFetch) && savedWebFetch;
+        areReverseEngineeringToolsEnabled =
+            bool.TryParse(_appSettingsStore.Get(ReverseEngineeringSettingKey), out var savedRe) && savedRe;
         isPlanMode = bool.TryParse(_appSettingsStore.Get(PlanModeSettingKey), out var savedPlanMode) && savedPlanMode;
 
         AvailableModels = [];
@@ -384,6 +389,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// one. Persisted the same way.</summary>
     [ObservableProperty]
     private bool areWebFetchEnabled;
+
+    /// <summary>Off by default - the reverse-engineering tools act on binaries the user points at, so
+    /// they are opt-in like the shell and web toggles. The managed (.NET) tools read metadata only
+    /// and never run the target; see the warning banner beside the toggle.</summary>
+    [ObservableProperty]
+    private bool areReverseEngineeringToolsEnabled;
 
     /// <summary>When on, the model gets propose_plan instead of propose_edit and is instructed to
     /// investigate and present a plan rather than touch any files - propose_edit only becomes
@@ -1522,6 +1533,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case DiagnosticTools.GetDiagnosticsToolName:
                 return await _readOnlyToolDispatcher.ExecuteAsync(call.Name!, arguments, _solutionDirectory, cancellationToken);
 
+            case ReverseEngineeringTools.ManagedOverviewToolName:
+            case ReverseEngineeringTools.ManagedTypesToolName:
+            case ReverseEngineeringTools.ManagedDecompileToolName:
+                return await RunManagedReverseEngineeringAsync(call.Name!, arguments, cancellationToken);
+
             case GitTools.DiffToolName:
                 return await RunGitDiffAsync(
                     arguments?["path"]?.GetValue<string>(),
@@ -1984,6 +2000,63 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         return null;
     }
 
+    /// <summary>Runs one of the managed (.NET) reverse-engineering tools. The decompiler reads
+    /// metadata/IL only and never loads the target, but the work is CPU-bound so it runs off the UI
+    /// thread. The path is resolved against the solution when relative, but may be absolute - a user
+    /// often points these at a DLL outside the workspace (a downloaded build output).</summary>
+    private async Task<(bool IsError, string Text)> RunManagedReverseEngineeringAsync(
+        string toolName, JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        if (!AreReverseEngineeringToolsEnabled)
+        {
+            return (true, "Reverse-engineering tools are turned off. Enable 'Reverse engineering' in the chat options to use them.");
+        }
+
+        if (arguments?["path"]?.GetValue<string>() is not { } path || string.IsNullOrWhiteSpace(path))
+        {
+            return (true, "A 'path' to a .NET assembly is required.");
+        }
+
+        var resolved = Path.IsPathRooted(path) ? path : Path.Combine(_solutionDirectory ?? "", path);
+        if (!File.Exists(resolved))
+        {
+            return (true, $"No file found at '{resolved}'.");
+        }
+
+        try
+        {
+            return await Task.Run<(bool, string)>(() => toolName switch
+            {
+                ReverseEngineeringTools.ManagedOverviewToolName => (false, FormatOverview(_managedDecompiler.Overview(resolved))),
+                ReverseEngineeringTools.ManagedTypesToolName => (false, FormatTypes(
+                    _managedDecompiler.ListTypes(resolved, arguments?["filter"]?.GetValue<string>()))),
+                ReverseEngineeringTools.ManagedDecompileToolName => arguments?["type"]?.GetValue<string>() is { } typeName && !string.IsNullOrWhiteSpace(typeName)
+                    ? (false, ToolReports.Cap(_managedDecompiler.DecompileType(resolved, typeName), ReverseEngineeringTools.MaxOutputChars, "decompiled C#"))
+                    : (true, "A 'type' to decompile is required."),
+                _ => (true, $"Unknown reverse-engineering tool '{toolName}'."),
+            }, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Reverse engineering failed: {ex.Message}");
+        }
+
+        static string FormatOverview(ManagedAssemblyOverview overview)
+        {
+            var references = overview.References.Count > 25
+                ? string.Join(", ", overview.References.Take(25)) + $", +{overview.References.Count - 25} more"
+                : string.Join(", ", overview.References);
+            return $"{overview.Name} {overview.Version}\nTypes: {overview.TypeCount}\n"
+                + $"References ({overview.References.Count}): {references}";
+        }
+
+        static string FormatTypes(IReadOnlyList<string> types) =>
+            ToolReports.Cap(
+                types.Count == 0 ? "No matching types." : $"{types.Count} type(s):\n{string.Join("\n", types)}",
+                ReverseEngineeringTools.MaxOutputChars,
+                "type list");
+    }
+
     private async Task<(bool IsError, string Text)> RunApprovedShellCommandAsync(
         string command, string workingDirectory, CancellationToken cancellationToken)
     {
@@ -2249,6 +2322,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         if (AreWebFetchEnabled)
         {
             tools.AddRange(BuiltInTools.WebOptIn);
+        }
+        if (AreReverseEngineeringToolsEnabled)
+        {
+            tools.AddRange(BuiltInTools.ReOptIn);
         }
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
         tools.AddRange(_pluginChatToolRegistry.GetToolDefinitions());
@@ -3064,6 +3141,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             _approvedWebHosts.Clear();
         }
     }
+
+    partial void OnAreReverseEngineeringToolsEnabledChanged(bool value) =>
+        _appSettingsStore.Set(ReverseEngineeringSettingKey, value.ToString());
 
     partial void OnIsPlanModeChanged(bool value) => _appSettingsStore.Set(PlanModeSettingKey, value.ToString());
 
