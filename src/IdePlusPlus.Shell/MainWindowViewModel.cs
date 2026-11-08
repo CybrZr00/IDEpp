@@ -801,9 +801,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenRecentFile(string filePath) => OpenPath(filePath);
 
+    private static readonly HashSet<string> BinaryExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { ".dll", ".exe", ".so", ".dylib", ".bin" };
+
     public DocumentViewModel? OpenPath(string filePath)
     {
-        var document = _editorWorkspace.Open(filePath);
+        var document = BinaryExtensions.Contains(Path.GetExtension(filePath))
+            ? _editorWorkspace.OpenExternal(filePath, path => new BinaryDocumentViewModel(path))
+            : _editorWorkspace.Open(filePath);
         if (document is not null)
         {
             ActiveDocument = document;
@@ -865,6 +870,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void SaveDocument(DocumentViewModel document)
     {
+        // A binary viewer tab has an empty backing text document; saving it would overwrite the binary.
+        if (document is BinaryDocumentViewModel)
+        {
+            return;
+        }
+
         if (document.FilePath is null)
         {
             SaveDocumentAs(document);
@@ -877,6 +888,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void SaveDocumentAs(DocumentViewModel document)
     {
+        if (document is BinaryDocumentViewModel)
+        {
+            return;
+        }
+
         var dialog = new SaveFileDialog
         {
             FileName = document.FilePath is null ? "Untitled" : Path.GetFileName(document.FilePath),
@@ -931,7 +947,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         SaveCommand.NotifyCanExecuteChanged();
         SaveAsCommand.NotifyCanExecuteChanged();
-        CopilotChat.SetActiveDocument(value);
+        // A binary viewer is not a text file the assistant should treat as "the open file".
+        CopilotChat.SetActiveDocument(value is BinaryDocumentViewModel ? null : value);
     }
 
     [RelayCommand]

@@ -339,6 +339,12 @@
             </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:BinaryExplorerPaneViewModel}">
+            <ContentControl Content="{Binding Viewer}" />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:BinaryDocumentViewModel}">
+            <ContentControl Content="{Binding Viewer}" />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:BinaryViewerViewModel}">
             <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
                 <DockPanel DockPanel.Dock="Top" Margin="4,3" LastChildFill="True">
                     <Button DockPanel.Dock="Right"

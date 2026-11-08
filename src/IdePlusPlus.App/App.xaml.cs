@@ -135,7 +135,6 @@ public partial class App : Application
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
         mcpServerManager.OnLog += line => output.AppendLine(OutputPaneViewModel.McpChannel, line);
         _serviceProvider.GetRequiredService<McpServersPaneViewModel>().Post = action => dispatcher.BeginInvoke(action);
-        _serviceProvider.GetRequiredService<BinaryExplorerPaneViewModel>().Post = action => dispatcher.BeginInvoke(action);
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
 

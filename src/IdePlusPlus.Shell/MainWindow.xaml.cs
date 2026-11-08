@@ -541,9 +541,9 @@ public partial class MainWindow : Window
             Title = "Open a binary",
             Filter = "Binaries (*.dll;*.exe;*.so;*.dylib;*.bin)|*.dll;*.exe;*.so;*.dylib;*.bin|All files (*.*)|*.*",
         };
-        if (dialog.ShowDialog(this) == true)
+        if (dialog.ShowDialog(this) == true && sender is FrameworkElement { DataContext: BinaryViewerViewModel viewer })
         {
-            ((MainWindowViewModel)DataContext).BinaryExplorer.BinaryPath = dialog.FileName;
+            viewer.BinaryPath = dialog.FileName;
         }
     }
 

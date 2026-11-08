@@ -97,6 +97,33 @@ public sealed class EditorWorkspace
         return document;
     }
 
+    /// <summary>
+    /// Opens a file as a non-text document (e.g. a binary viewer) built by <paramref name="factory"/>,
+    /// with the same already-open dedup as <see cref="Open"/>. The factory lives in the Shell so this
+    /// project stays unaware of the concrete document type.
+    /// </summary>
+    public DocumentViewModel? OpenExternal(string filePath, Func<string, DocumentViewModel> factory)
+    {
+        var existing = OpenDocuments.FirstOrDefault(d =>
+            string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            TouchRecentFile(filePath);
+            return existing;
+        }
+
+        if (!File.Exists(filePath))
+        {
+            RemoveFromRecentFiles(filePath);
+            return null;
+        }
+
+        var document = factory(filePath);
+        OpenDocuments.Add(document);
+        TouchRecentFile(filePath);
+        return document;
+    }
+
     private void RemoveFromRecentFiles(string filePath)
     {
         if (RecentFiles.Remove(filePath))
