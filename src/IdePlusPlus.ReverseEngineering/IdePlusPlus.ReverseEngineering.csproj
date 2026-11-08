@@ -5,6 +5,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ghidra post-script, run by analyzeHeadless; shipped beside the assembly and passed via
+         -scriptPath. Not compiled by us - Ghidra compiles it at run time. -->
+    <None Include="GhidraScripts\IdePpOp.java" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="IdePlusPlus.ReverseEngineering.Tests" />
   </ItemGroup>
 

@@ -152,6 +152,8 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmTeamShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
+        copilotChatPane.ReverseEngineeringApprovalPrompt =
+            path => dispatcher.Invoke(() => Task.FromResult(ConfirmReverseEngineering(mainWindow, path)));
         copilotChatPane.NewConversationConfirmation = (warning, canAcceptAll) =>
             ConfirmNewConversation(mainWindow, warning, canAcceptAll);
 
@@ -273,6 +275,21 @@ public partial class App : Application
             note: $"Its reason: {reason}",
             warning: "It runs as you, in the solution directory, with your permissions. Only allow it if the "
                      + "command above is something you would be willing to run yourself.");
+    }
+
+    /// <summary>
+    /// Asked before the copilot opens a binary in Ghidra. The full path is shown verbatim. Analyzing a
+    /// binary runs Ghidra (Java) over it on this machine; the path is the thing to consent to. No.
+    /// </summary>
+    private static bool ConfirmReverseEngineering(Window owner, string path)
+    {
+        return ApprovalDialog.Ask(
+            owner,
+            "IDE++ - analyze this binary?",
+            "The AI assistant wants to open and analyze a binary with Ghidra:",
+            path,
+            warning: "Ghidra imports and disassembles the file on your machine. Only allow it for a file you "
+                     + "mean to reverse engineer.");
     }
 
     /// <summary>

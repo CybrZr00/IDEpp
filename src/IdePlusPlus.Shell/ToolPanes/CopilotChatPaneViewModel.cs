@@ -191,6 +191,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
     private readonly ManagedDecompiler _managedDecompiler = new();
+
+    // Lazily built; ExternalToolchainStore uses fixed paths, so a fresh instance sees the same
+    // detected/installed toolchains as the DI singleton Settings uses.
+    private GhidraHeadlessBackend? _ghidraBackend;
+    private GhidraHeadlessBackend GhidraBackend =>
+        _ghidraBackend ??= new GhidraHeadlessBackend(new GhidraToolchain(new ExternalToolchainStore()));
+    private GhidraSession? _activeGhidraSession;
+    private readonly HashSet<string> _approvedBinaries = new(StringComparer.OrdinalIgnoreCase);
     private readonly WebContentFetcher _webContentFetcher = new();
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly HookService _hookService;
@@ -457,6 +465,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// <summary>Asked before the first fetch_url call to a new host, with the exact URL and the
     /// model's stated reason. Unset, nothing is fetched - same rule as ShellCommandApprovalPrompt.</summary>
     public Func<string, string, Task<bool>>? WebFetchApprovalPrompt { get; set; }
+
+    /// <summary>Asked before re_open analyzes a binary (per path, once per session), with its path.
+    /// Unset, nothing is analyzed - same rule as the shell and web prompts.</summary>
+    public Func<string, Task<bool>>? ReverseEngineeringApprovalPrompt { get; set; }
 
     /// <summary>Asked before New Chat throws away something the saved transcript won't bring back - a
     /// response still running, edits or plans still waiting for a decision - with a description of
@@ -726,6 +738,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             // `.\build.ps1` in one repository is a different command from the same text in another.
             _approvedCommands.Clear();
             _approvedWebHosts.Clear();
+            _approvedBinaries.Clear();
+            _activeGhidraSession = null;
         }
     }
 
@@ -1538,6 +1552,17 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case ReverseEngineeringTools.ManagedDecompileToolName:
                 return await RunManagedReverseEngineeringAsync(call.Name!, arguments, cancellationToken);
 
+            case ReverseEngineeringTools.OpenToolName:
+            case ReverseEngineeringTools.CloseToolName:
+            case ReverseEngineeringTools.OverviewToolName:
+            case ReverseEngineeringTools.FunctionsToolName:
+            case ReverseEngineeringTools.DecompileToolName:
+            case ReverseEngineeringTools.XrefsToolName:
+            case ReverseEngineeringTools.CallGraphToolName:
+            case ReverseEngineeringTools.RenameToolName:
+            case ReverseEngineeringTools.CommentToolName:
+                return await RunNativeReverseEngineeringAsync(call.Name!, arguments, cancellationToken);
+
             case GitTools.DiffToolName:
                 return await RunGitDiffAsync(
                     arguments?["path"]?.GetValue<string>(),
@@ -2055,6 +2080,160 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 types.Count == 0 ? "No matching types." : $"{types.Count} type(s):\n{string.Join("\n", types)}",
                 ReverseEngineeringTools.MaxOutputChars,
                 "type list");
+    }
+
+    /// <summary>Runs one native (Ghidra-backed) reverse-engineering tool. re_open imports and analyzes
+    /// a binary into a cached project (after a per-binary consent); the rest operate on the currently
+    /// open session. Ghidra's progress streams to the active tool-call card.</summary>
+    private async Task<(bool IsError, string Text)> RunNativeReverseEngineeringAsync(
+        string toolName, JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        if (!AreReverseEngineeringToolsEnabled)
+        {
+            return (true, "Reverse-engineering tools are turned off. Enable 'RE' in the chat options to use them.");
+        }
+
+        var backend = GhidraBackend;
+        var card = _activeToolCall;
+        void OnProgress(string line)
+        {
+            if (card is not null)
+            {
+                _dispatcher.Invoke(() => card.ReportProgress(line, null, null));
+            }
+        }
+
+        try
+        {
+            switch (toolName)
+            {
+                case ReverseEngineeringTools.OpenToolName:
+                {
+                    if (arguments?["path"]?.GetValue<string>() is not { } path || string.IsNullOrWhiteSpace(path))
+                    {
+                        return (true, "A 'path' to a binary is required.");
+                    }
+
+                    var resolved = Path.IsPathRooted(path) ? path : Path.Combine(_solutionDirectory ?? "", path);
+                    if (!File.Exists(resolved))
+                    {
+                        return (true, $"No file found at '{resolved}'.");
+                    }
+
+                    if (!backend.IsAvailable)
+                    {
+                        return (true, GhidraHeadlessBackend.UnavailableMessage);
+                    }
+
+                    if (!await ApproveBinaryAsync(resolved))
+                    {
+                        return (true, "The user did not approve analyzing this binary.");
+                    }
+
+                    var open = await backend.OpenAsync(resolved, OnProgress, cancellationToken);
+                    if (open.Session is not null)
+                    {
+                        _activeGhidraSession = open.Session;
+                    }
+
+                    return (open.IsError, open.Text);
+                }
+
+                case ReverseEngineeringTools.CloseToolName:
+                    _activeGhidraSession = null;
+                    return (false, "Closed the open binary.");
+
+                default:
+                {
+                    if (_activeGhidraSession is not { } session)
+                    {
+                        return (true, "No binary is open. Call re_open first.");
+                    }
+
+                    return toolName switch
+                    {
+                        ReverseEngineeringTools.OverviewToolName => await backend.OverviewAsync(session, OnProgress, cancellationToken),
+                        ReverseEngineeringTools.FunctionsToolName => await backend.FunctionsAsync(
+                            session, arguments?["filter"]?.GetValue<string>(), ReadLimit(arguments), OnProgress, cancellationToken),
+                        ReverseEngineeringTools.DecompileToolName => await RequireTargetAsync(arguments, target => backend.DecompileAsync(session, target, OnProgress, cancellationToken)),
+                        ReverseEngineeringTools.XrefsToolName => await RequireTargetAsync(arguments, target => backend.XrefsAsync(session, target, OnProgress, cancellationToken)),
+                        ReverseEngineeringTools.CallGraphToolName => await RequireTargetAsync(arguments, target => backend.CallGraphAsync(session, target, OnProgress, cancellationToken)),
+                        ReverseEngineeringTools.RenameToolName => await RenameNativeAsync(backend, session, arguments, OnProgress, cancellationToken),
+                        ReverseEngineeringTools.CommentToolName => await CommentNativeAsync(backend, session, arguments, OnProgress, cancellationToken),
+                        _ => (true, $"Unknown reverse-engineering tool '{toolName}'."),
+                    };
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Reverse engineering failed: {ex.Message}");
+        }
+    }
+
+    private async Task<bool> ApproveBinaryAsync(string path)
+    {
+        if (_approvedBinaries.Contains(path))
+        {
+            return true;
+        }
+
+        if (ReverseEngineeringApprovalPrompt is not { } prompt || !await prompt(path))
+        {
+            return false;
+        }
+
+        _approvedBinaries.Add(path);
+        return true;
+    }
+
+    private static int ReadLimit(JsonNode? arguments)
+    {
+        try
+        {
+            return arguments?["limit"]?.GetValue<int>() ?? 200;
+        }
+        catch (Exception)
+        {
+            return 200;
+        }
+    }
+
+    private static async Task<(bool IsError, string Text)> RequireTargetAsync(
+        JsonNode? arguments, Func<string, Task<(bool IsError, string Text)>> operation)
+    {
+        if (arguments?["target"]?.GetValue<string>() is not { } target || string.IsNullOrWhiteSpace(target))
+        {
+            return (true, "A 'target' (function name or hex address) is required.");
+        }
+
+        return await operation(target);
+    }
+
+    private static async Task<(bool IsError, string Text)> RenameNativeAsync(
+        GhidraHeadlessBackend backend, GhidraSession session, JsonNode? arguments, Action<string> onProgress, CancellationToken cancellationToken)
+    {
+        var target = arguments?["target"]?.GetValue<string>();
+        var name = arguments?["name"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(name))
+        {
+            return (true, "Both 'target' and 'name' are required.");
+        }
+
+        return await backend.RenameAsync(session, target, name, onProgress, cancellationToken);
+    }
+
+    private static async Task<(bool IsError, string Text)> CommentNativeAsync(
+        GhidraHeadlessBackend backend, GhidraSession session, JsonNode? arguments, Action<string> onProgress, CancellationToken cancellationToken)
+    {
+        var target = arguments?["target"]?.GetValue<string>();
+        var comment = arguments?["comment"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(comment))
+        {
+            return (true, "Both 'target' and 'comment' are required.");
+        }
+
+        return await backend.CommentAsync(session, target, comment, onProgress, cancellationToken);
     }
 
     private async Task<(bool IsError, string Text)> RunApprovedShellCommandAsync(
