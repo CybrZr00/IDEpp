@@ -111,6 +111,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         TestExplorerPaneViewModel testExplorer,
         TaskExplorerPaneViewModel taskExplorer,
         ConnectionsExplorerPaneViewModel connectionsExplorer,
+        McpServersPaneViewModel mcpServers,
         ScheduledAutomationsPaneViewModel scheduledAutomations,
         ScheduledAutomationService scheduledAutomationService,
         WelcomeDocumentViewModel welcome,
@@ -140,6 +141,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         TestExplorer = testExplorer;
         TaskExplorer = taskExplorer;
         ConnectionsExplorer = connectionsExplorer;
+        McpServers = mcpServers;
         ScheduledAutomations = scheduledAutomations;
         _scheduledAutomationService = scheduledAutomationService;
         Welcome = welcome;
@@ -268,6 +270,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public TaskExplorerPaneViewModel TaskExplorer { get; }
 
     public ConnectionsExplorerPaneViewModel ConnectionsExplorer { get; }
+
+    public McpServersPaneViewModel McpServers { get; }
 
     public ScheduledAutomationsPaneViewModel ScheduledAutomations { get; }
 

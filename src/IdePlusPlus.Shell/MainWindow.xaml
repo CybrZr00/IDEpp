@@ -263,6 +263,81 @@
                          TextChanged="OutputTextBox_OnTextChanged" />
             </DockPanel>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:McpServersPaneViewModel}">
+            <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
+                <DockPanel DockPanel.Dock="Top" Margin="4,3" LastChildFill="False">
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="8,2" />
+                    <Button Content="Restart selected"
+                            Command="{Binding RestartCommand}"
+                            CommandParameter="{Binding SelectedServer}"
+                            Margin="6,0,0,0"
+                            Padding="8,2" />
+                </DockPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="200" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ListBox Grid.Column="0"
+                             ItemsSource="{Binding Servers}"
+                             SelectedItem="{Binding SelectedServer, Mode=TwoWay}"
+                             Background="{DynamicResource PanelBackgroundBrush}"
+                             Foreground="{DynamicResource WindowForegroundBrush}"
+                             BorderThickness="0,0,1,0"
+                             BorderBrush="{DynamicResource PanelBorderBrush}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="2">
+                                    <TextBlock Text="{Binding Name}" FontWeight="Bold" />
+                                    <TextBlock Text="{Binding StatusText}" FontSize="11" Opacity="0.8" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Grid Grid.Column="1" Margin="8,2,2,2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0"
+                                   Text="{Binding SelectedServer.Name}"
+                                   FontWeight="Bold"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource WindowForegroundBrush}" />
+                        <TextBlock Grid.Row="1"
+                                   Text="{Binding SelectedServer.StatusText}"
+                                   Margin="0,2,0,0"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource WindowForegroundBrush}" />
+                        <TextBlock Grid.Row="2"
+                                   Text="{Binding SelectedServer.LastCallText}"
+                                   Margin="0,2,0,0"
+                                   Opacity="0.8"
+                                   Foreground="{DynamicResource WindowForegroundBrush}" />
+                        <TextBlock Grid.Row="3"
+                                   Text="Recent stderr:"
+                                   Margin="0,8,0,2"
+                                   Opacity="0.8"
+                                   Foreground="{DynamicResource WindowForegroundBrush}" />
+                        <TextBox Grid.Row="4"
+                                 Text="{Binding SelectedServer.RecentStderr, Mode=OneWay}"
+                                 IsReadOnly="True"
+                                 BorderThickness="1"
+                                 BorderBrush="{DynamicResource PanelBorderBrush}"
+                                 Background="{DynamicResource PanelBackgroundBrush}"
+                                 Foreground="{DynamicResource WindowForegroundBrush}"
+                                 FontFamily="Consolas"
+                                 FontSize="11"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto" />
+                    </Grid>
+                </Grid>
+            </DockPanel>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:ErrorListPaneViewModel}">
             <ListBox ItemsSource="{Binding Diagnostics}"
                      Background="{DynamicResource PanelBackgroundBrush}"
@@ -693,6 +768,10 @@
                             <avalonDock:LayoutAnchorable x:Name="LocalsAnchorable"
                                                           ContentId="{x:Static toolPanes:LocalsPaneViewModel.PaneContentId}"
                                                           Title="Locals"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="McpServersAnchorable"
+                                                          ContentId="{x:Static toolPanes:McpServersPaneViewModel.PaneContentId}"
+                                                          Title="MCP Servers"
                                                           CanClose="False" />
                         </avalonDock:LayoutAnchorablePane>
                     </avalonDock:LayoutPanel>

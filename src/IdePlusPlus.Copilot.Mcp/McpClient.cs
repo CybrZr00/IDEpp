@@ -24,6 +24,7 @@ public sealed class McpClient : IAsyncDisposable
     private readonly Dictionary<long, TaskCompletionSource<JsonNode?>> _pending = [];
     private readonly object _pendingLock = new();
     private long _nextId;
+    private int _closedRaised;
 
     private McpClient(Process process)
     {
@@ -31,11 +32,17 @@ public sealed class McpClient : IAsyncDisposable
         _stdin = process.StandardInput;
         _stdin.NewLine = "\n"; // messages must be newline-delimited; avoid StreamWriter's default \r\n on Windows
         _stdout = process.StandardOutput;
+        _process.EnableRaisingEvents = true;
+        _process.Exited += (_, _) => RaiseClosed();
         _ = Task.Run(ReadLoopAsync);
         _ = Task.Run(DrainStderrAsync);
     }
 
     public event Action<string>? OnLog;
+
+    /// <summary>Raised at most once when the server process exits or its stdout closes - whichever is
+    /// noticed first. Lets the connection notice a crash instead of reporting the server as alive.</summary>
+    public event Action? OnClosed;
 
     // Encoding.UTF8 (the static instance) emits a UTF-8 BOM preamble - ProcessStartInfo writes that
     // preamble as the literal first bytes into the child's stdin, corrupting the framing of the
@@ -136,6 +143,7 @@ public sealed class McpClient : IAsyncDisposable
                 if (line is null)
                 {
                     FailAllPending("The MCP server's stdout closed unexpectedly.");
+                    RaiseClosed();
                     return;
                 }
 
@@ -172,6 +180,15 @@ public sealed class McpClient : IAsyncDisposable
         catch (IOException)
         {
             FailAllPending("The MCP server's process exited unexpectedly.");
+            RaiseClosed();
+        }
+    }
+
+    private void RaiseClosed()
+    {
+        if (Interlocked.Exchange(ref _closedRaised, 1) == 0)
+        {
+            OnClosed?.Invoke();
         }
     }
 

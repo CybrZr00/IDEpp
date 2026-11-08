@@ -84,6 +84,7 @@ public partial class MainWindow : Window
         LocalsAnchorable.Content = viewModel.Locals;
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
         ScheduledAutomationsAnchorable.Content = viewModel.ScheduledAutomations;
+        McpServersAnchorable.Content = viewModel.McpServers;
         WelcomeDocument.Content = viewModel.Welcome;
 
         _contentById = new Dictionary<string, object>
@@ -100,6 +101,7 @@ public partial class MainWindow : Window
             [LocalsPaneViewModel.PaneContentId] = viewModel.Locals,
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
             [ScheduledAutomationsPaneViewModel.PaneContentId] = viewModel.ScheduledAutomations,
+            [McpServersPaneViewModel.PaneContentId] = viewModel.McpServers,
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
