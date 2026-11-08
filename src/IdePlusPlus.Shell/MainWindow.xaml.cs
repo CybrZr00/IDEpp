@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
+    private readonly ExternalToolchainStore _externalToolchainStore;
     private readonly PluginHost _pluginHost;
 
     // Plugins register tool windows during LoadPlugins(), which App.xaml.cs calls after this
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
         DeepSeekFimClient deepSeekFimClient,
+        ExternalToolchainStore externalToolchainStore,
         PluginHost pluginHost,
         PluginToolWindowRegistry pluginToolWindowRegistry,
         PluginKeyBindingRegistry pluginKeyBindingRegistry)
@@ -64,6 +66,7 @@ public partial class MainWindow : Window
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
         _deepSeekFimClient = deepSeekFimClient;
+        _externalToolchainStore = externalToolchainStore;
         _pluginHost = pluginHost;
 
         DataContext = viewModel;
@@ -522,7 +525,7 @@ public partial class MainWindow : Window
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient);
+        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient, _externalToolchainStore);
         var window = new SettingsWindow(settingsViewModel) { Owner = this };
         window.ShowDialog();
     }

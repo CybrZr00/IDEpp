@@ -126,6 +126,56 @@
             </StackPanel>
             <Button Content="Save Sub-agent Settings" Command="{Binding SaveSubAgentSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
+            <TextBlock Text="Reverse engineering tools" FontWeight="Bold" Margin="0,0,0,4" />
+            <TextBlock Text="Ghidra and a JDK power the native decompiler. If they are already on this machine they are detected and nothing is downloaded; otherwise IDE++ can install a pinned, checksum-verified copy on demand."
+                       FontSize="11"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8" />
+            <ItemsControl ItemsSource="{Binding Toolchains}" Margin="0,0,0,16">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="6"
+                                Margin="0,0,0,6">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="Bold" />
+                                        <TextBlock Text="{Binding Description}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource MutedForegroundBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            Content="{Binding InstallButtonText}"
+                                            Padding="8,2"
+                                            Margin="6,0,0,0"
+                                            VerticalAlignment="Top"
+                                            IsEnabled="{Binding CanInstall}"
+                                            Click="InstallTool_OnClick" />
+                                </Grid>
+                                <TextBlock Text="{Binding StateText}"
+                                           FontSize="10"
+                                           Margin="0,4,0,0"
+                                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                                <TextBlock Text="{Binding Progress}"
+                                           FontSize="10"
+                                           Margin="0,2,0,0"
+                                           TextWrapping="Wrap"
+                                           Foreground="{DynamicResource MutedForegroundBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
             <TextBlock Text="NuGet" FontWeight="Bold" Margin="0,0,0,8" />
             <CheckBox Content="Restore NuGet packages on solution load"
                       IsChecked="{Binding RestoreNuGetOnSolutionLoad}"

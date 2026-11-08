@@ -420,6 +420,7 @@ public partial class App : Application
         services.AddSingleton<ScheduledAutomationService>();
         services.AddSingleton<ScheduledAutomationsPaneViewModel>();
         services.AddSingleton<McpServersPaneViewModel>();
+        services.AddSingleton<ExternalToolchainStore>();
         services.AddSingleton<ChatHistoryStore>();
         services.AddSingleton(sp => new LmStudioEmbeddingClient(
             modelHttpClient, sp.GetRequiredService<AppSettingsStore>(), sp.GetRequiredService<SecureSettingsStore>()));

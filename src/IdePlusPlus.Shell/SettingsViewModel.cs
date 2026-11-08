@@ -25,19 +25,22 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
+    private readonly ExternalToolchainStore _externalToolchainStore;
 
     public SettingsViewModel(
         SecureSettingsStore secureSettingsStore,
         AppSettingsStore appSettingsStore,
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
-        DeepSeekFimClient deepSeekFimClient)
+        DeepSeekFimClient deepSeekFimClient,
+        ExternalToolchainStore externalToolchainStore)
     {
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
         _deepSeekFimClient = deepSeekFimClient;
+        _externalToolchainStore = externalToolchainStore;
 
         hasApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName));
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
@@ -67,6 +70,28 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
 
         RefreshMcpServerStatuses();
+
+        foreach (var tool in _externalToolchainStore.Tools)
+        {
+            Toolchains.Add(new ToolRowViewModel(tool));
+        }
+
+        RefreshToolchains();
+    }
+
+    /// <summary>The reverse-engineering toolchains (Ghidra, JDK) shown in the Tools section.</summary>
+    public ObservableCollection<ToolRowViewModel> Toolchains { get; } = [];
+
+    /// <summary>Exposed so the dialog's code-behind can run an install (which needs a window owner for
+    /// the consent dialog) against the same store.</summary>
+    public ExternalToolchainStore ToolchainStore => _externalToolchainStore;
+
+    public void RefreshToolchains()
+    {
+        foreach (var row in Toolchains)
+        {
+            row.State = _externalToolchainStore.State(row.Id);
+        }
     }
 
     [ObservableProperty]
