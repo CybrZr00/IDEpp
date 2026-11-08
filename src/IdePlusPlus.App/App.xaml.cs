@@ -125,15 +125,22 @@ public partial class App : Application
         EditorServices.StatusLog = line => output.AppendLine(line);
 
         var dispatcher = Dispatcher;
+
+        // From here on the Output pane is written from background threads (MCP stderr, plugin logs,
+        // task processes). The pane updates its buffers under a lock on the caller's thread and
+        // marshals only the UI refresh, so every logger - including PluginHost.LogInfo, which was
+        // never marshalled before - is safe without each call site wrapping in dispatcher.Invoke.
+        output.Post = action => dispatcher.BeginInvoke(action);
+
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
-        mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        mcpServerManager.OnLog += line => output.AppendLine(OutputPaneViewModel.McpChannel, line);
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
 
         // Resolved before the chat pane: SetSolutionContext (which loads a solution's hooks and may
         // prompt) can run as soon as the pane exists, and the prompt has to be wired by then.
         var hookService = _serviceProvider.GetRequiredService<HookService>();
-        hookService.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        hookService.OnLog += line => output.AppendLine(OutputPaneViewModel.PluginsChannel, line);
         hookService.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectHooks(mainWindow, request)));
 
@@ -150,10 +157,10 @@ public partial class App : Application
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.
         _serviceProvider.GetRequiredService<TemplateCatalog>().OnLog +=
-            line => dispatcher.Invoke(() => output.AppendLine(line));
+            line => output.AppendLine(line);
 
         var javaScriptTaskDiscovery = _serviceProvider.GetRequiredService<JavaScriptTaskDiscoveryService>();
-        javaScriptTaskDiscovery.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        javaScriptTaskDiscovery.OnLog += line => output.AppendLine(OutputPaneViewModel.TasksChannel, line);
         javaScriptTaskDiscovery.TrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmJavaScriptTaskDiscovery(mainWindow, request)));
         _ = mcpServerManager.ReconnectAllAsync();

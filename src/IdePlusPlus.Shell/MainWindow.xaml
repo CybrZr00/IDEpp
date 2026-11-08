@@ -240,16 +240,28 @@
             </TreeView>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
-            <TextBox Text="{Binding Text, Mode=OneWay}"
-                     Background="{DynamicResource PanelBackgroundBrush}"
-                     Foreground="{DynamicResource WindowForegroundBrush}"
-                     IsReadOnly="True"
-                     BorderThickness="0"
-                     FontFamily="Consolas"
-                     TextWrapping="NoWrap"
-                     VerticalScrollBarVisibility="Auto"
-                     HorizontalScrollBarVisibility="Auto"
-                     TextChanged="OutputTextBox_OnTextChanged" />
+            <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
+                <DockPanel DockPanel.Dock="Top" Margin="4,3" LastChildFill="False">
+                    <TextBlock Text="Show output from:"
+                               VerticalAlignment="Center"
+                               Margin="0,0,6,0"
+                               Foreground="{DynamicResource WindowForegroundBrush}" />
+                    <ComboBox ItemsSource="{Binding Channels}"
+                              SelectedItem="{Binding SelectedChannel, Mode=TwoWay}"
+                              MinWidth="140"
+                              VerticalAlignment="Center" />
+                </DockPanel>
+                <TextBox Text="{Binding Text, Mode=OneWay}"
+                         Background="{DynamicResource PanelBackgroundBrush}"
+                         Foreground="{DynamicResource WindowForegroundBrush}"
+                         IsReadOnly="True"
+                         BorderThickness="0"
+                         FontFamily="Consolas"
+                         TextWrapping="NoWrap"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         TextChanged="OutputTextBox_OnTextChanged" />
+            </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:ErrorListPaneViewModel}">
             <ListBox ItemsSource="{Binding Diagnostics}"

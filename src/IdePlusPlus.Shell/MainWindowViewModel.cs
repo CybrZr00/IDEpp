@@ -165,7 +165,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // so it gets the same dispatch treatment as build output rather than touching Output directly.
         // Deliberately not OnBuildOutputLine: that also feeds ErrorList.AddIfDiagnostic, whose parser
         // is MSBuild-specific, and npm output is not MSBuild output.
-        TaskExplorer.OutputLine = line => _dispatcher.Invoke(() => Output.AppendLine(line));
+        TaskExplorer.OutputLine = line => _dispatcher.Invoke(() => Output.AppendLine(OutputPaneViewModel.TasksChannel, line));
 
         // ConnectionsExplorerPaneViewModel has no reference to this view model (same as every other
         // pane), so "open the file this connection string came from" is wired the same way
@@ -207,7 +207,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             // Single-session (today's only case) output stays byte-for-byte unchanged; only once a
             // second session is running does output get a "[DisplayName] " prefix to stay distinguishable.
-            Output.AppendLine(_debugSessionManager.Sessions.Count > 1 ? $"[{session.DisplayName}] {trimmed}" : trimmed);
+            Output.AppendLine(OutputPaneViewModel.DebugChannel, _debugSessionManager.Sessions.Count > 1 ? $"[{session.DisplayName}] {trimmed}" : trimmed);
 
             // Keyed by the specific session this line came from - not a single shared flag/profile -
             // so a multi-project launch detects each project's own "Now listening on" independently,
@@ -960,10 +960,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         if (clearOutput)
         {
-            Output.Clear();
+            Output.Clear(OutputPaneViewModel.SolutionChannel);
         }
 
-        Output.AppendLine($"Loading {solutionPath}...");
+        Output.AppendLine(OutputPaneViewModel.SolutionChannel, $"Loading {solutionPath}...");
         try
         {
             var root = await Task.Run(() => SolutionLoader.Load(solutionPath));
@@ -1071,7 +1071,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             SyncPublishProfiles();
             RunCommand.NotifyCanExecuteChanged();
             StartDebuggingCommand.NotifyCanExecuteChanged();
-            Output.AppendLine("Solution loaded.");
+            Output.AppendLine(OutputPaneViewModel.SolutionChannel, "Solution loaded.");
 
             // Best-effort: a solution opened in a fresh session has never been built by this
             // session, but may already have build output on disk from a prior one - so discovery
@@ -1105,7 +1105,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            Output.AppendLine($"Failed to load solution: {ex.Message}");
+            Output.AppendLine(OutputPaneViewModel.SolutionChannel, $"Failed to load solution: {ex.Message}");
         }
     }
 
@@ -1115,12 +1115,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         try
         {
-            var (success, output) = await _nuGetService.RestoreAsync(solutionPath, line => _dispatcher.Invoke(() => Output.AppendLine(line)));
-            Output.AppendLine(success ? "NuGet restore completed." : "NuGet restore failed.");
+            var (success, output) = await _nuGetService.RestoreAsync(solutionPath, line => _dispatcher.Invoke(() => Output.AppendLine(OutputPaneViewModel.NuGetChannel, line)));
+            Output.AppendLine(OutputPaneViewModel.NuGetChannel, success ? "NuGet restore completed." : "NuGet restore failed.");
         }
         catch (Exception ex)
         {
-            Output.AppendLine($"NuGet restore failed: {ex.Message}");
+            Output.AppendLine(OutputPaneViewModel.NuGetChannel, $"NuGet restore failed: {ex.Message}");
         }
     }
 
@@ -1153,12 +1153,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             await _roslynWorkspaceService.LoadSolutionAsync(solutionPath);
             if (IsCurrentSolution(solutionPath))
             {
-                Output.AppendLine("Roslyn workspace loaded (IntelliSense/diagnostics ready).");
+                Output.AppendLine(OutputPaneViewModel.SolutionChannel, "Roslyn workspace loaded (IntelliSense/diagnostics ready).");
             }
         }
         catch (Exception ex)
         {
-            Output.AppendLine($"Roslyn workspace load failed (IntelliSense/diagnostics may be unavailable): {ex.Message}");
+            Output.AppendLine(OutputPaneViewModel.SolutionChannel, $"Roslyn workspace load failed (IntelliSense/diagnostics may be unavailable): {ex.Message}");
         }
         finally
         {
@@ -1554,7 +1554,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void OnBuildOutputLine(string line) => _dispatcher.Invoke(() =>
     {
-        Output.AppendLine(line);
+        Output.AppendLine(OutputPaneViewModel.BuildChannel, line);
         ErrorList.AddIfDiagnostic(line);
     });
 
@@ -1580,23 +1580,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (_buildService.IsRunning)
         {
-            Output.AppendLine($"{label} skipped - a build is already running.");
+            Output.AppendLine(OutputPaneViewModel.BuildChannel, $"{label} skipped - a build is already running.");
             return null;
         }
 
-        Output.Clear();
+        Output.Clear(OutputPaneViewModel.BuildChannel);
         ErrorList.ClearBuildDiagnostics();
-        Output.AppendLine($"{label} started ({configurationLabel ?? Configuration}): {targetPath ?? CurrentSolutionPath}");
+        Output.AppendLine(OutputPaneViewModel.BuildChannel, $"{label} started ({configurationLabel ?? Configuration}): {targetPath ?? CurrentSolutionPath}");
 
         try
         {
             var exitCode = await run();
-            Output.AppendLine($"{label} finished with exit code {exitCode}.");
+            Output.AppendLine(OutputPaneViewModel.BuildChannel, $"{label} finished with exit code {exitCode}.");
             return exitCode;
         }
         catch (InvalidOperationException ex)
         {
-            Output.AppendLine($"{label} skipped - {ex.Message}");
+            Output.AppendLine(OutputPaneViewModel.BuildChannel, $"{label} skipped - {ex.Message}");
             return null;
         }
     }
@@ -1699,15 +1699,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
             .FirstOrDefault(n => n.Kind == SolutionTreeNodeKind.Project && n.FullPath == entry.ProjectPath)
             ?.TargetFramework;
 
-        Output.Clear();
-        Output.AppendLine($"Running ({Configuration}): {entry.ProjectPath}");
+        Output.Clear(OutputPaneViewModel.RunChannel);
+        Output.AppendLine(OutputPaneViewModel.RunChannel, $"Running ({Configuration}): {entry.ProjectPath}");
         IsRunning = true;
         _runService.Start(
             entry.ProjectPath,
-            line => _dispatcher.Invoke(() => Output.AppendLine(line)),
+            line => _dispatcher.Invoke(() => Output.AppendLine(OutputPaneViewModel.RunChannel, line)),
             exitCode => _dispatcher.Invoke(() =>
             {
-                Output.AppendLine($"Process exited with code {exitCode}.");
+                Output.AppendLine(OutputPaneViewModel.RunChannel, $"Process exited with code {exitCode}.");
                 IsRunning = false;
             }),
             targetFramework,
@@ -1870,7 +1870,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void StartWithoutDebugging(StartupConfigurationEntry entry, string? targetFramework, bool isSingleEntry)
     {
         var projectName = Path.GetFileNameWithoutExtension(entry.ProjectPath);
-        Output.AppendLine(isSingleEntry ? "Running (no debugger)..." : $"Running (no debugger): {entry.ProjectPath}...");
+        Output.AppendLine(OutputPaneViewModel.RunChannel, isSingleEntry ? "Running (no debugger)..." : $"Running (no debugger): {entry.ProjectPath}...");
 
         var runService = new RunService();
         _multiProjectRunServices.Add(runService);
@@ -1888,10 +1888,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             runService.Start(
                 entry.ProjectPath,
-                line => _dispatcher.Invoke(() => Output.AppendLine(isSingleEntry ? line : $"[{projectName}] {line}")),
+                line => _dispatcher.Invoke(() => Output.AppendLine(OutputPaneViewModel.RunChannel, isSingleEntry ? line : $"[{projectName}] {line}")),
                 exitCode => _dispatcher.Invoke(() =>
                 {
-                    Output.AppendLine(isSingleEntry
+                    Output.AppendLine(OutputPaneViewModel.RunChannel, isSingleEntry
                         ? $"Process exited with code {exitCode}."
                         : $"[{projectName}] Process exited with code {exitCode}.");
                     Cleanup();
@@ -1902,7 +1902,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            Output.AppendLine($"Failed to run {entry.ProjectPath}: {ex.Message}");
+            Output.AppendLine(OutputPaneViewModel.RunChannel, $"Failed to run {entry.ProjectPath}: {ex.Message}");
             Cleanup();
         }
     }
