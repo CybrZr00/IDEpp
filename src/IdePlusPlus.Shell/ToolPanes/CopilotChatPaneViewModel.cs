@@ -191,6 +191,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
     private readonly ManagedDecompiler _managedDecompiler = new();
+    private readonly ShimGenerator _shimGenerator = new();
 
     // Lazily built; ExternalToolchainStore uses fixed paths, so a fresh instance sees the same
     // detected/installed toolchains as the DI singleton Settings uses.
@@ -1550,6 +1551,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case ReverseEngineeringTools.ManagedOverviewToolName:
             case ReverseEngineeringTools.ManagedTypesToolName:
             case ReverseEngineeringTools.ManagedDecompileToolName:
+            case ReverseEngineeringTools.GenerateShimToolName:
                 return await RunManagedReverseEngineeringAsync(call.Name!, arguments, cancellationToken);
 
             case ReverseEngineeringTools.OpenToolName:
@@ -2058,6 +2060,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 ReverseEngineeringTools.ManagedDecompileToolName => arguments?["type"]?.GetValue<string>() is { } typeName && !string.IsNullOrWhiteSpace(typeName)
                     ? (false, ToolReports.Cap(_managedDecompiler.DecompileType(resolved, typeName), ReverseEngineeringTools.MaxOutputChars, "decompiled C#"))
                     : (true, "A 'type' to decompile is required."),
+                ReverseEngineeringTools.GenerateShimToolName => (false, FormatShim(_shimGenerator.GenerateManagedForwarder(
+                    resolved, ResolveShimOutputDirectory(arguments, resolved)))),
                 _ => (true, $"Unknown reverse-engineering tool '{toolName}'."),
             }, cancellationToken);
         }
@@ -2080,6 +2084,21 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 types.Count == 0 ? "No matching types." : $"{types.Count} type(s):\n{string.Join("\n", types)}",
                 ReverseEngineeringTools.MaxOutputChars,
                 "type list");
+
+        static string ResolveShimOutputDirectory(JsonNode? arguments, string assemblyPath)
+        {
+            if (arguments?["outputDir"]?.GetValue<string>() is { } dir && !string.IsNullOrWhiteSpace(dir))
+            {
+                return dir;
+            }
+
+            var directory = Path.GetDirectoryName(assemblyPath) ?? ".";
+            return Path.Combine(directory, Path.GetFileNameWithoutExtension(assemblyPath) + ".Shim");
+        }
+
+        static string FormatShim(ShimResult result) =>
+            $"Generated a shim forwarding {result.ForwardedTypeCount} type(s):\n"
+            + $"  {result.ProjectPath}\n  {result.ForwardersPath}\n  {result.ReadmePath}";
     }
 
     /// <summary>Runs one native (Ghidra-backed) reverse-engineering tool. re_open imports and analyzes

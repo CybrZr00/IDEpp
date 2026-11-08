@@ -12,6 +12,7 @@ public static class ReverseEngineeringTools
     public const string ManagedOverviewToolName = "re_managed_overview";
     public const string ManagedTypesToolName = "re_managed_types";
     public const string ManagedDecompileToolName = "re_managed_decompile";
+    public const string GenerateShimToolName = "re_generate_shim";
 
     public const int MaxOutputChars = 60_000;
 
@@ -144,8 +145,24 @@ public static class ReverseEngineeringTools
             }
             """)!);
 
+    public static readonly ToolDefinition GenerateShim = new(
+        Name: GenerateShimToolName,
+        Description: "Generate a type-forwarding shim (facade) project for a managed .NET assembly: a .csproj plus " +
+                     "Forwarders.cs with [assembly: TypeForwardedTo(...)] for every public top-level type. Reads " +
+                     "metadata only; never runs the assembly.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Path to the managed .dll/.exe to shim." },
+                "outputDir": { "type": "string", "description": "Where to write the shim project. Defaults to a '<name>.Shim' folder next to the assembly." }
+              },
+              "required": ["path"]
+            }
+            """)!);
+
     /// <summary>The managed (.NET) reverse-engineering tools - in-process, no toolchain needed.</summary>
-    public static IReadOnlyList<ToolDefinition> Managed { get; } = [ManagedOverview, ManagedTypes, ManagedDecompile];
+    public static IReadOnlyList<ToolDefinition> Managed { get; } = [ManagedOverview, ManagedTypes, ManagedDecompile, GenerateShim];
 
     /// <summary>The native (Ghidra-backed) reverse-engineering tools.</summary>
     public static IReadOnlyList<ToolDefinition> Native { get; } =

@@ -10,6 +10,9 @@ namespace IdePlusPlus.ReverseEngineering;
 public sealed record ManagedAssemblyOverview(
     string Name, string Version, int TypeCount, IReadOnlyList<string> References);
 
+/// <summary>A public top-level type that can be forwarded from a shim facade.</summary>
+public sealed record ForwardableType(string Namespace, string Name, int Arity);
+
 /// <summary>
 /// Decompiles a .NET assembly in-process with ICSharpCode.Decompiler. It reads the assembly's
 /// metadata and IL only - the target is never loaded into the process or run - so it is safe to point
@@ -98,6 +101,17 @@ public sealed class ManagedDecompiler
         }
 
         return decompiler.DecompileTypeAsString(new FullTypeName(match.ReflectionName));
+    }
+
+    /// <summary>Public, top-level types - the ones a type-forwarding shim facade forwards. Nested
+    /// types ride along with their declaring type, so they are excluded.</summary>
+    public IReadOnlyList<ForwardableType> GetForwardableTypes(string assemblyPath)
+    {
+        var decompiler = CreateDecompiler(assemblyPath);
+        return decompiler.TypeSystem.MainModule.TypeDefinitions
+            .Where(type => type.DeclaringTypeDefinition is null && type.Accessibility == Accessibility.Public)
+            .Select(type => new ForwardableType(type.Namespace, type.Name, type.TypeParameterCount))
+            .ToList();
     }
 
     private static CSharpDecompiler CreateDecompiler(string assemblyPath)
