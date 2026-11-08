@@ -338,6 +338,73 @@
                 </Grid>
             </DockPanel>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type toolPanes:BinaryExplorerPaneViewModel}">
+            <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
+                <DockPanel DockPanel.Dock="Top" Margin="4,3" LastChildFill="True">
+                    <Button DockPanel.Dock="Right"
+                            Content="Load"
+                            Command="{Binding LoadCommand}"
+                            Padding="10,2"
+                            Margin="4,0,0,0" />
+                    <Button DockPanel.Dock="Right"
+                            Content="Browse…"
+                            Click="BrowseBinary_OnClick"
+                            Padding="8,2"
+                            Margin="4,0,0,0" />
+                    <TextBox Text="{Binding BinaryPath, UpdateSourceTrigger=PropertyChanged}"
+                             VerticalAlignment="Center"
+                             ToolTip="Path to a .NET assembly or a native binary." />
+                </DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="4,0,4,3" LastChildFill="True">
+                    <ProgressBar DockPanel.Dock="Left"
+                                 IsIndeterminate="True"
+                                 Width="60"
+                                 Height="4"
+                                 Margin="0,0,6,0"
+                                 Visibility="{Binding IsBusy, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+                    <TextBlock Text="{Binding StatusText}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
+                               FontSize="11" />
+                </DockPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="240" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <DockPanel Grid.Column="0">
+                        <TextBlock DockPanel.Dock="Top"
+                                   Text="{Binding ItemsHeader}"
+                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   Margin="4,0,0,2"
+                                   Foreground="{DynamicResource WindowForegroundBrush}" />
+                        <ListBox ItemsSource="{Binding Items}"
+                                 SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                                 Background="{DynamicResource PanelBackgroundBrush}"
+                                 Foreground="{DynamicResource WindowForegroundBrush}"
+                                 BorderThickness="0,0,1,0"
+                                 BorderBrush="{DynamicResource PanelBorderBrush}"
+                                 FontFamily="Consolas"
+                                 FontSize="11"
+                                 VirtualizingStackPanel.IsVirtualizing="True" />
+                    </DockPanel>
+                    <TextBox Grid.Column="1"
+                             Text="{Binding Code, Mode=OneWay}"
+                             IsReadOnly="True"
+                             BorderThickness="0"
+                             Margin="6,0,0,0"
+                             Background="{DynamicResource PanelBackgroundBrush}"
+                             Foreground="{DynamicResource WindowForegroundBrush}"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             TextWrapping="NoWrap"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto" />
+                </Grid>
+            </DockPanel>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:ErrorListPaneViewModel}">
             <ListBox ItemsSource="{Binding Diagnostics}"
                      Background="{DynamicResource PanelBackgroundBrush}"
@@ -772,6 +839,10 @@
                             <avalonDock:LayoutAnchorable x:Name="McpServersAnchorable"
                                                           ContentId="{x:Static toolPanes:McpServersPaneViewModel.PaneContentId}"
                                                           Title="MCP Servers"
+                                                          CanClose="False" />
+                            <avalonDock:LayoutAnchorable x:Name="BinaryExplorerAnchorable"
+                                                          ContentId="{x:Static toolPanes:BinaryExplorerPaneViewModel.PaneContentId}"
+                                                          Title="Binary Explorer"
                                                           CanClose="False" />
                         </avalonDock:LayoutAnchorablePane>
                     </avalonDock:LayoutPanel>

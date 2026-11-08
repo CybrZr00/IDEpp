@@ -88,6 +88,7 @@ public partial class MainWindow : Window
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
         ScheduledAutomationsAnchorable.Content = viewModel.ScheduledAutomations;
         McpServersAnchorable.Content = viewModel.McpServers;
+        BinaryExplorerAnchorable.Content = viewModel.BinaryExplorer;
         WelcomeDocument.Content = viewModel.Welcome;
 
         _contentById = new Dictionary<string, object>
@@ -105,6 +106,7 @@ public partial class MainWindow : Window
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
             [ScheduledAutomationsPaneViewModel.PaneContentId] = viewModel.ScheduledAutomations,
             [McpServersPaneViewModel.PaneContentId] = viewModel.McpServers,
+            [BinaryExplorerPaneViewModel.PaneContentId] = viewModel.BinaryExplorer,
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
@@ -531,6 +533,19 @@ public partial class MainWindow : Window
     }
 
     private void AboutMenuItem_OnClick(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();
+
+    private void BrowseBinary_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Open a binary",
+            Filter = "Binaries (*.dll;*.exe;*.so;*.dylib;*.bin)|*.dll;*.exe;*.so;*.dylib;*.bin|All files (*.*)|*.*",
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            ((MainWindowViewModel)DataContext).BinaryExplorer.BinaryPath = dialog.FileName;
+        }
+    }
 
     private void GoToLineCommand_OnCanExecute(object sender, CanExecuteRoutedEventArgs e) =>
         e.CanExecute = ((MainWindowViewModel)DataContext).ActiveDocument is not null;

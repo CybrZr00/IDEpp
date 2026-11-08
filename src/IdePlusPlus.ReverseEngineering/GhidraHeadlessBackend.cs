@@ -1,12 +1,16 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.ReverseEngineering;
 
 /// <summary>An opened native binary: the cached Ghidra project and the program name inside it.</summary>
 public sealed record GhidraSession(string BinaryPath, string ProgramName, string ProjectDirectory, string ProjectName);
+
+/// <summary>One function in a native binary.</summary>
+public sealed record GhidraFunction(string Name, string Address);
 
 /// <summary>The result of opening a binary: the session (null on failure) and a message (the overview, or the error).</summary>
 public sealed record GhidraOpenResult(GhidraSession? Session, bool IsError, string Text);
@@ -105,6 +109,7 @@ public sealed class GhidraHeadlessBackend
         return new GhidraSession(binaryPath, Path.GetFileName(binaryPath), Path.Combine(_projectsRoot, hash), ProjectName);
     }
 
+    /// <summary>Runs an operation and returns its formatted, model-ready text.</summary>
     private async Task<(bool IsError, string Text)> RunOperationAsync(
         GhidraSession session, string op, Dictionary<string, string?> input, Action<string> onProgress, CancellationToken cancellationToken)
     {
@@ -113,6 +118,45 @@ public sealed class GhidraHeadlessBackend
             return (true, UnavailableMessage);
         }
 
+        var (json, error) = await RunRawAsync(session, op, input, onProgress, cancellationToken);
+        return json is null ? (true, error) : GhidraResultFormatter.Format(op, json);
+    }
+
+    /// <summary>The function list as structured data (for the Binary Explorer), rather than formatted text.</summary>
+    public async Task<IReadOnlyList<GhidraFunction>> ListFunctionsStructuredAsync(
+        GhidraSession session, string? filter, int limit, Action<string> onProgress, CancellationToken cancellationToken)
+    {
+        var (json, _) = await RunRawAsync(
+            session, "functions", new Dictionary<string, string?> { ["filter"] = filter, ["limit"] = limit.ToString() }, onProgress, cancellationToken);
+        if (json is null)
+        {
+            return [];
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.TryGetProperty("functions", out var array) && array.ValueKind == JsonValueKind.Array)
+            {
+                return array.EnumerateArray()
+                    .Select(e => new GhidraFunction(
+                        e.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        e.TryGetProperty("address", out var a) ? a.GetString() ?? "" : ""))
+                    .Where(f => f.Name.Length > 0)
+                    .ToList();
+            }
+        }
+        catch (JsonException)
+        {
+            // Fall through to empty.
+        }
+
+        return [];
+    }
+
+    private async Task<(string? Json, string Error)> RunRawAsync(
+        GhidraSession session, string op, Dictionary<string, string?> input, Action<string> onProgress, CancellationToken cancellationToken)
+    {
         var inputPath = Path.Combine(Path.GetTempPath(), $"ideppre-{Guid.NewGuid():N}.in");
         var outputPath = Path.Combine(Path.GetTempPath(), $"ideppre-{Guid.NewGuid():N}.out");
         try
@@ -123,11 +167,10 @@ public sealed class GhidraHeadlessBackend
 
             if (!File.Exists(outputPath) || new FileInfo(outputPath).Length == 0)
             {
-                return (true, $"Ghidra produced no result (exit {result.ExitCode}).\n{result.Output}");
+                return (null, $"Ghidra produced no result (exit {result.ExitCode}).\n{result.Output}");
             }
 
-            var json = await File.ReadAllTextAsync(outputPath, cancellationToken);
-            return GhidraResultFormatter.Format(op, json);
+            return (await File.ReadAllTextAsync(outputPath, cancellationToken), "");
         }
         finally
         {

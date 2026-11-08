@@ -135,6 +135,7 @@ public partial class App : Application
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
         mcpServerManager.OnLog += line => output.AppendLine(OutputPaneViewModel.McpChannel, line);
         _serviceProvider.GetRequiredService<McpServersPaneViewModel>().Post = action => dispatcher.BeginInvoke(action);
+        _serviceProvider.GetRequiredService<BinaryExplorerPaneViewModel>().Post = action => dispatcher.BeginInvoke(action);
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
 
@@ -437,6 +438,7 @@ public partial class App : Application
         services.AddSingleton<ScheduledAutomationService>();
         services.AddSingleton<ScheduledAutomationsPaneViewModel>();
         services.AddSingleton<McpServersPaneViewModel>();
+        services.AddSingleton<BinaryExplorerPaneViewModel>();
         services.AddSingleton<ExternalToolchainStore>();
         services.AddSingleton<ChatHistoryStore>();
         services.AddSingleton(sp => new LmStudioEmbeddingClient(
