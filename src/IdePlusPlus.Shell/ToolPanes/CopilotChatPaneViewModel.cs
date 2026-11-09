@@ -20,6 +20,7 @@ using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Infrastructure.Hooks;
 using IdePlusPlus.Publish;
+using IdePlusPlus.ReverseEngineering;
 using IdePlusPlus.Roslyn;
 using IdePlusPlus.Shell;
 using IdePlusPlus.SourceControl;
@@ -46,8 +47,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private const string DeepSeekModelSettingKey = "DeepSeekChatModel";
     private const string EffortSettingKey = "ChatEffort";
     private const string AutoModeSettingKey = "ChatAutoMode";
+    private const string CloseReviewTabsSettingKey = "ChatCloseReviewTabs";
     private const string ShellCommandsSettingKey = "ChatShellCommands";
     private const string WebFetchSettingKey = "ChatWebFetch";
+    private const string ReverseEngineeringSettingKey = "ChatReverseEngineering";
     private const string PlanModeSettingKey = "ChatPlanMode";
 
     /// <summary>Public so SettingsViewModel can read/write the same key - re-read fresh on every
@@ -187,6 +190,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly TestRunService _testRunService;
     private readonly RoslynWorkspaceService _roslynWorkspaceService;
     private readonly ShellCommandRunner _shellCommandRunner = new();
+    private readonly ManagedDecompiler _managedDecompiler = new();
+    private readonly ShimGenerator _shimGenerator = new();
+
+    // Lazily built; ExternalToolchainStore uses fixed paths, so a fresh instance sees the same
+    // detected/installed toolchains as the DI singleton Settings uses.
+    private GhidraHeadlessBackend? _ghidraBackend;
+    private GhidraHeadlessBackend GhidraBackend =>
+        _ghidraBackend ??= new GhidraHeadlessBackend(new GhidraToolchain(new ExternalToolchainStore()));
+    private GhidraSession? _activeGhidraSession;
+    private readonly HashSet<string> _approvedBinaries = new(StringComparer.OrdinalIgnoreCase);
     private readonly WebContentFetcher _webContentFetcher = new();
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly HookService _hookService;
@@ -287,7 +300,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _templateInstantiation = templateInstantiation;
         // Falls back to the constructing thread's dispatcher where there is no Application - tests.
         _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
-        Messages.CollectionChanged += (_, _) => NewConversationCommand.NotifyCanExecuteChanged();
+        Messages.CollectionChanged += OnMessagesCollectionChanged;
 
         selectedProvider = _appSettingsStore.Get(ProviderSettingKey) is { } savedProvider && AvailableProviders.Contains(savedProvider)
             ? savedProvider
@@ -297,10 +310,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             ? savedEffort
             : ChatEffort.None;
         isAutoMode = bool.TryParse(_appSettingsStore.Get(AutoModeSettingKey), out var savedAutoMode) && savedAutoMode;
+        closeReviewTabs = !bool.TryParse(_appSettingsStore.Get(CloseReviewTabsSettingKey), out var savedCloseTabs) || savedCloseTabs;
         areShellCommandsEnabled =
             bool.TryParse(_appSettingsStore.Get(ShellCommandsSettingKey), out var savedShell) && savedShell;
         areWebFetchEnabled =
             bool.TryParse(_appSettingsStore.Get(WebFetchSettingKey), out var savedWebFetch) && savedWebFetch;
+        areReverseEngineeringToolsEnabled =
+            bool.TryParse(_appSettingsStore.Get(ReverseEngineeringSettingKey), out var savedRe) && savedRe;
         isPlanMode = bool.TryParse(_appSettingsStore.Get(PlanModeSettingKey), out var savedPlanMode) && savedPlanMode;
         isUltraRunUntilDone =
             bool.TryParse(_appSettingsStore.Get(UltraRunUntilDoneSettingKey), out var savedRunUntilDone) && savedRunUntilDone;
@@ -313,6 +329,29 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     }
 
     public ObservableCollection<ObservableObject> Messages { get; }  = [];
+
+    /// <summary>The tool-call card for the call currently executing, so the MCP branch of
+    /// ExecuteTool can route progress notifications to it. One call runs at a time, so a single field
+    /// is enough.</summary>
+    private McpToolCallViewModel? _activeToolCall;
+
+    /// <summary>Called by the chat view's timer to tick the elapsed time on any running tool-call
+    /// card. Returns whether at least one call is still running, so the view knows to keep the log
+    /// pinned to the bottom. UI-thread only.</summary>
+    public bool TickRunningToolCalls()
+    {
+        var anyRunning = false;
+        foreach (var toolCall in Messages.OfType<McpToolCallViewModel>())
+        {
+            if (toolCall.IsRunning)
+            {
+                toolCall.RefreshElapsed();
+                anyRunning = true;
+            }
+        }
+
+        return anyRunning;
+    }
 
     /// <summary>The model picker's dropdown contents - whatever the current provider's /models
     /// endpoint last reported. Previously a hardcoded four-model list for OpenRouter, which went
@@ -361,6 +400,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// one. Persisted the same way.</summary>
     [ObservableProperty]
     private bool areWebFetchEnabled;
+
+    /// <summary>Off by default - the reverse-engineering tools act on binaries the user points at, so
+    /// they are opt-in like the shell and web toggles. The managed (.NET) tools read metadata only
+    /// and never run the target; see the warning banner beside the toggle.</summary>
+    [ObservableProperty]
+    private bool areReverseEngineeringToolsEnabled;
 
     /// <summary>When on, the model gets propose_plan instead of propose_edit and is instructed to
     /// investigate and present a plan rather than touch any files - propose_edit only becomes
@@ -424,11 +469,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// model's stated reason. Unset, nothing is fetched - same rule as ShellCommandApprovalPrompt.</summary>
     public Func<string, string, Task<bool>>? WebFetchApprovalPrompt { get; set; }
 
+    /// <summary>Asked before re_open analyzes a binary (per path, once per session), with its path.
+    /// Unset, nothing is analyzed - same rule as the shell and web prompts.</summary>
+    public Func<string, Task<bool>>? ReverseEngineeringApprovalPrompt { get; set; }
+
     /// <summary>Asked before New Chat throws away something the saved transcript won't bring back - a
     /// response still running, edits or plans still waiting for a decision - with a description of
     /// exactly that. Unset, New Chat goes ahead: unlike the shell and web prompts this is a chance to
-    /// back out, not a safety gate.</summary>
-    public Func<string, bool>? NewConversationConfirmation { get; set; }
+    /// back out, not a safety gate. The bool says whether undecided edits are among what would be
+    /// lost, i.e. whether "accept all and start new" is on offer.</summary>
+    public Func<string, bool, NewConversationChoice>? NewConversationConfirmation { get; set; }
 
     public void SetActiveDocument(DocumentViewModel? document) => _currentDocument = document;
 
@@ -691,6 +741,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             // `.\build.ps1` in one repository is a different command from the same text in another.
             _approvedCommands.Clear();
             _approvedWebHosts.Clear();
+            _approvedBinaries.Clear();
+            _activeGhidraSession = null;
         }
     }
 
@@ -873,11 +925,26 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         var epoch = _conversationEpoch;
 
+        var acceptAll = false;
         if (DescribeWhatNewConversationDiscards() is { } warning
-            && NewConversationConfirmation is { } confirm
-            && !confirm(warning))
+            && NewConversationConfirmation is { } confirm)
         {
-            return;
+            var choice = confirm(warning, UndecidedEdits().Any());
+            if (choice == NewConversationChoice.Cancel)
+            {
+                return;
+            }
+
+            acceptAll = choice == NewConversationChoice.AcceptAllThenStart;
+        }
+
+        if (acceptAll)
+        {
+            // Sequential: edits to one file are applied against the buffer the previous one left.
+            foreach (var proposal in UndecidedEdits().ToList())
+            {
+                await proposal.AcceptCommand.ExecuteAsync(null);
+            }
         }
 
         await StopActiveTurnAsync();
@@ -916,6 +983,137 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             : "New conversation.";
     }
 
+    private IEnumerable<EditProposalViewModel> UndecidedEdits() =>
+        Messages.OfType<EditProposalViewModel>().Where(p => p.IsComplete && !p.IsDecided && !p.AcceptCommand.IsRunning);
+
+    // ---- Pending edits bar: decide every waiting edit at once, instead of one card (and one editor
+    // tab) at a time. The same Accept All that New Chat offers, available without starting over.
+
+    /// <summary>How many proposed edits are complete and still waiting for Accept or Reject.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPendingEdits))]
+    [NotifyPropertyChangedFor(nameof(PendingEditsText))]
+    private int pendingEditCount;
+
+    public bool HasPendingEdits => PendingEditCount > 0;
+
+    public string PendingEditsText => PendingEditCount == 1
+        ? "1 edit is waiting for your decision"
+        : $"{PendingEditCount} edits are waiting for your decision";
+
+    private void OnMessagesCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        NewConversationCommand.NotifyCanExecuteChanged();
+
+        if (e.NewItems is not null)
+        {
+            foreach (var proposal in e.NewItems.OfType<EditProposalViewModel>())
+            {
+                proposal.PropertyChanged += OnProposalPropertyChanged;
+            }
+        }
+
+        RefreshPendingEdits();
+    }
+
+    private void OnProposalPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(EditProposalViewModel.IsComplete) or nameof(EditProposalViewModel.IsDecided))
+        {
+            RefreshPendingEdits();
+        }
+
+        if (e.PropertyName == nameof(EditProposalViewModel.IsDecided)
+            && sender is EditProposalViewModel { IsDecided: true } decided)
+        {
+            CloseReviewTabIfDone(decided);
+        }
+    }
+
+    /// <summary>
+    /// Whether a tab that was opened only to review an edit is closed once that edit is decided, so
+    /// deciding a run of them does not leave a run of tabs to close by hand.
+    /// </summary>
+    [ObservableProperty]
+    private bool closeReviewTabs = true;
+
+    /// <summary>Set by MainWindowViewModel: closes an editor tab and returns whether it did. It
+    /// refuses a tab with unsaved changes or one that is already gone.</summary>
+    public Func<DocumentViewModel, bool>? CloseReviewDocumentRequested { get; set; }
+
+    /// <summary>
+    /// Closes the tab a decided proposal opened for review - but not while another edit to the same
+    /// file is still waiting on it, and not a tab the user had open themselves. Deferred past the
+    /// decision itself: Accept is still finishing (saving, refreshing the panel) when IsDecided flips.
+    /// </summary>
+    private void CloseReviewTabIfDone(EditProposalViewModel decided)
+    {
+        if (!CloseReviewTabs || decided.ReviewDocument is not { } document)
+        {
+            return;
+        }
+
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            var stillNeeded = Messages.OfType<EditProposalViewModel>()
+                .Any(p => !ReferenceEquals(p, decided) && !p.IsDecided && ReferenceEquals(p.ReviewDocument, document));
+            if (!stillNeeded)
+            {
+                CloseReviewDocumentRequested?.Invoke(document);
+            }
+        });
+    }
+
+    private void RefreshPendingEdits() => PendingEditCount = UndecidedEdits().Count();
+
+    /// <summary>
+    /// Accepts every waiting edit, one after another (edits to one file are applied against the buffer
+    /// the previous one left). An edit that removes most of its file is left for a look of its own -
+    /// the same edits Auto Mode holds back - and the status line says how many were.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(HasPendingEdits))]
+    private async Task AcceptAllPendingAsync()
+    {
+        var waiting = UndecidedEdits().ToList();
+        var held = 0;
+        var accepted = 0;
+
+        foreach (var proposal in waiting)
+        {
+            if (proposal.IsLargeDeletion)
+            {
+                held++;
+                continue;
+            }
+
+            await proposal.AcceptCommand.ExecuteAsync(null);
+            accepted++;
+        }
+
+        StatusMessage = held == 0
+            ? $"Accepted {accepted} edit{(accepted == 1 ? "" : "s")}."
+            : $"Accepted {accepted}; {held} left for review because {(held == 1 ? "it removes" : "they remove")} most of a file.";
+    }
+
+    /// <summary>Rejects every waiting edit. The model is told each was rejected, as for a single Reject.</summary>
+    [RelayCommand(CanExecute = nameof(HasPendingEdits))]
+    private void RejectAllPending()
+    {
+        var waiting = UndecidedEdits().ToList();
+        foreach (var proposal in waiting)
+        {
+            proposal.RejectCommand.Execute(null);
+        }
+
+        StatusMessage = $"Rejected {waiting.Count} edit{(waiting.Count == 1 ? "" : "s")}.";
+    }
+
+    partial void OnPendingEditCountChanged(int value)
+    {
+        AcceptAllPendingCommand.NotifyCanExecuteChanged();
+        RejectAllPendingCommand.NotifyCanExecuteChanged();
+    }
+
     private string? DescribeWhatNewConversationDiscards()
     {
         var losses = new List<string>();
@@ -927,8 +1125,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         // An edit already being accepted (a PreToolUse hook still deciding) is left to finish by
         // Discard, so it isn't one this would discard.
-        var undecidedEdits = Messages.OfType<EditProposalViewModel>()
-            .Count(p => p.IsComplete && !p.IsDecided && !p.AcceptCommand.IsRunning);
+        var undecidedEdits = UndecidedEdits().Count();
         if (undecidedEdits > 0)
         {
             losses.Add(undecidedEdits == 1
@@ -1144,7 +1341,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                             Messages.Add(callViewModel);
                         });
 
+                        // Lets the MCP branch of ExecuteTool route progress notifications to this
+                        // card. Safe as a single field because tool calls run one at a time here.
+                        _activeToolCall = callViewModel;
                         var (isError, text) = await ExecuteToolAsync(call, turn.Token);
+                        _activeToolCall = null;
                         _dispatcher.Invoke(() => callViewModel.Complete(isError, text));
 
                         history.Add(new ChatMessage(ChatRole.Tool, text, ToolCallId: call.EffectiveId));
@@ -1326,7 +1527,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // advertised and then quietly forwarded to MCP as an unknown tool.
         if (!BuiltInTools.IsBuiltIn(call.Name!))
         {
-            var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), cancellationToken);
+            var card = _activeToolCall;
+            Action<double?, double?, string?>? onProgress = card is null
+                ? null
+                : (progress, total, message) => _dispatcher.Invoke(() => card.ReportProgress(message, progress, total));
+            var mcpResult = await _mcpServerManager.CallToolAsync(call.Name!, call.Arguments.ToString(), onProgress, cancellationToken);
             return (mcpResult.IsError, mcpResult.Text);
         }
 
@@ -1344,6 +1549,23 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             case SymbolTools.FindReferencesToolName:
             case DiagnosticTools.GetDiagnosticsToolName:
                 return await _readOnlyToolDispatcher.ExecuteAsync(call.Name!, arguments, _solutionDirectory, cancellationToken);
+
+            case ReverseEngineeringTools.ManagedOverviewToolName:
+            case ReverseEngineeringTools.ManagedTypesToolName:
+            case ReverseEngineeringTools.ManagedDecompileToolName:
+            case ReverseEngineeringTools.GenerateShimToolName:
+                return await RunManagedReverseEngineeringAsync(call.Name!, arguments, cancellationToken);
+
+            case ReverseEngineeringTools.OpenToolName:
+            case ReverseEngineeringTools.CloseToolName:
+            case ReverseEngineeringTools.OverviewToolName:
+            case ReverseEngineeringTools.FunctionsToolName:
+            case ReverseEngineeringTools.DecompileToolName:
+            case ReverseEngineeringTools.XrefsToolName:
+            case ReverseEngineeringTools.CallGraphToolName:
+            case ReverseEngineeringTools.RenameToolName:
+            case ReverseEngineeringTools.CommentToolName:
+                return await RunNativeReverseEngineeringAsync(call.Name!, arguments, cancellationToken);
 
             case GitTools.DiffToolName:
                 return await RunGitDiffAsync(
@@ -1807,14 +2029,249 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         return null;
     }
 
+    /// <summary>Runs one of the managed (.NET) reverse-engineering tools. The decompiler reads
+    /// metadata/IL only and never loads the target, but the work is CPU-bound so it runs off the UI
+    /// thread. The path is resolved against the solution when relative, but may be absolute - a user
+    /// often points these at a DLL outside the workspace (a downloaded build output).</summary>
+    private async Task<(bool IsError, string Text)> RunManagedReverseEngineeringAsync(
+        string toolName, JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        if (!AreReverseEngineeringToolsEnabled)
+        {
+            return (true, "Reverse-engineering tools are turned off. Enable 'Reverse engineering' in the chat options to use them.");
+        }
+
+        if (arguments?["path"]?.GetValue<string>() is not { } path || string.IsNullOrWhiteSpace(path))
+        {
+            return (true, "A 'path' to a .NET assembly is required.");
+        }
+
+        var resolved = Path.IsPathRooted(path) ? path : Path.Combine(_solutionDirectory ?? "", path);
+        if (!File.Exists(resolved))
+        {
+            return (true, $"No file found at '{resolved}'.");
+        }
+
+        try
+        {
+            return await Task.Run<(bool, string)>(() => toolName switch
+            {
+                ReverseEngineeringTools.ManagedOverviewToolName => (false, FormatOverview(_managedDecompiler.Overview(resolved))),
+                ReverseEngineeringTools.ManagedTypesToolName => (false, FormatTypes(
+                    _managedDecompiler.ListTypes(resolved, arguments?["filter"]?.GetValue<string>()))),
+                ReverseEngineeringTools.ManagedDecompileToolName => arguments?["type"]?.GetValue<string>() is { } typeName && !string.IsNullOrWhiteSpace(typeName)
+                    ? (false, ToolReports.Cap(_managedDecompiler.DecompileType(resolved, typeName), ReverseEngineeringTools.MaxOutputChars, "decompiled C#"))
+                    : (true, "A 'type' to decompile is required."),
+                ReverseEngineeringTools.GenerateShimToolName => (false, FormatShim(_shimGenerator.GenerateForwarder(
+                    resolved, ResolveShimOutputDirectory(arguments, resolved)))),
+                _ => (true, $"Unknown reverse-engineering tool '{toolName}'."),
+            }, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Reverse engineering failed: {ex.Message}");
+        }
+
+        static string FormatOverview(ManagedAssemblyOverview overview)
+        {
+            var references = overview.References.Count > 25
+                ? string.Join(", ", overview.References.Take(25)) + $", +{overview.References.Count - 25} more"
+                : string.Join(", ", overview.References);
+            return $"{overview.Name} {overview.Version}\nTypes: {overview.TypeCount}\n"
+                + $"References ({overview.References.Count}): {references}";
+        }
+
+        static string FormatTypes(IReadOnlyList<string> types) =>
+            ToolReports.Cap(
+                types.Count == 0 ? "No matching types." : $"{types.Count} type(s):\n{string.Join("\n", types)}",
+                ReverseEngineeringTools.MaxOutputChars,
+                "type list");
+
+        static string ResolveShimOutputDirectory(JsonNode? arguments, string assemblyPath)
+        {
+            if (arguments?["outputDir"]?.GetValue<string>() is { } dir && !string.IsNullOrWhiteSpace(dir))
+            {
+                return dir;
+            }
+
+            var directory = Path.GetDirectoryName(assemblyPath) ?? ".";
+            return Path.Combine(directory, Path.GetFileNameWithoutExtension(assemblyPath) + ".Shim");
+        }
+
+        static string FormatShim(ShimResult result) =>
+            $"Generated a shim forwarding {result.ForwardedCount} export(s)/type(s):\n"
+            + string.Join("\n", result.Files.Select(file => $"  {file}"));
+    }
+
+    /// <summary>Runs one native (Ghidra-backed) reverse-engineering tool. re_open imports and analyzes
+    /// a binary into a cached project (after a per-binary consent); the rest operate on the currently
+    /// open session. Ghidra's progress streams to the active tool-call card.</summary>
+    private async Task<(bool IsError, string Text)> RunNativeReverseEngineeringAsync(
+        string toolName, JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        if (!AreReverseEngineeringToolsEnabled)
+        {
+            return (true, "Reverse-engineering tools are turned off. Enable 'RE' in the chat options to use them.");
+        }
+
+        var backend = GhidraBackend;
+        var card = _activeToolCall;
+        void OnProgress(string line)
+        {
+            if (card is not null)
+            {
+                _dispatcher.Invoke(() => card.ReportProgress(line, null, null));
+            }
+        }
+
+        try
+        {
+            switch (toolName)
+            {
+                case ReverseEngineeringTools.OpenToolName:
+                {
+                    if (arguments?["path"]?.GetValue<string>() is not { } path || string.IsNullOrWhiteSpace(path))
+                    {
+                        return (true, "A 'path' to a binary is required.");
+                    }
+
+                    var resolved = Path.IsPathRooted(path) ? path : Path.Combine(_solutionDirectory ?? "", path);
+                    if (!File.Exists(resolved))
+                    {
+                        return (true, $"No file found at '{resolved}'.");
+                    }
+
+                    if (!backend.IsAvailable)
+                    {
+                        return (true, GhidraHeadlessBackend.UnavailableMessage);
+                    }
+
+                    if (!await ApproveBinaryAsync(resolved))
+                    {
+                        return (true, "The user did not approve analyzing this binary.");
+                    }
+
+                    var open = await backend.OpenAsync(resolved, OnProgress, cancellationToken);
+                    if (open.Session is not null)
+                    {
+                        _activeGhidraSession = open.Session;
+                    }
+
+                    return (open.IsError, open.Text);
+                }
+
+                case ReverseEngineeringTools.CloseToolName:
+                    _activeGhidraSession = null;
+                    return (false, "Closed the open binary.");
+
+                default:
+                {
+                    if (_activeGhidraSession is not { } session)
+                    {
+                        return (true, "No binary is open. Call re_open first.");
+                    }
+
+                    return toolName switch
+                    {
+                        ReverseEngineeringTools.OverviewToolName => await backend.OverviewAsync(session, OnProgress, cancellationToken),
+                        ReverseEngineeringTools.FunctionsToolName => await backend.FunctionsAsync(
+                            session, arguments?["filter"]?.GetValue<string>(), ReadLimit(arguments), OnProgress, cancellationToken),
+                        ReverseEngineeringTools.DecompileToolName => await RequireTargetAsync(arguments, target => backend.DecompileAsync(session, target, OnProgress, cancellationToken)),
+                        ReverseEngineeringTools.XrefsToolName => await RequireTargetAsync(arguments, target => backend.XrefsAsync(session, target, OnProgress, cancellationToken)),
+                        ReverseEngineeringTools.CallGraphToolName => await RequireTargetAsync(arguments, target => backend.CallGraphAsync(session, target, OnProgress, cancellationToken)),
+                        ReverseEngineeringTools.RenameToolName => await RenameNativeAsync(backend, session, arguments, OnProgress, cancellationToken),
+                        ReverseEngineeringTools.CommentToolName => await CommentNativeAsync(backend, session, arguments, OnProgress, cancellationToken),
+                        _ => (true, $"Unknown reverse-engineering tool '{toolName}'."),
+                    };
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (true, $"Reverse engineering failed: {ex.Message}");
+        }
+    }
+
+    private async Task<bool> ApproveBinaryAsync(string path)
+    {
+        if (_approvedBinaries.Contains(path))
+        {
+            return true;
+        }
+
+        if (ReverseEngineeringApprovalPrompt is not { } prompt || !await prompt(path))
+        {
+            return false;
+        }
+
+        _approvedBinaries.Add(path);
+        return true;
+    }
+
+    private static int ReadLimit(JsonNode? arguments)
+    {
+        try
+        {
+            return arguments?["limit"]?.GetValue<int>() ?? 200;
+        }
+        catch (Exception)
+        {
+            return 200;
+        }
+    }
+
+    private static async Task<(bool IsError, string Text)> RequireTargetAsync(
+        JsonNode? arguments, Func<string, Task<(bool IsError, string Text)>> operation)
+    {
+        if (arguments?["target"]?.GetValue<string>() is not { } target || string.IsNullOrWhiteSpace(target))
+        {
+            return (true, "A 'target' (function name or hex address) is required.");
+        }
+
+        return await operation(target);
+    }
+
+    private static async Task<(bool IsError, string Text)> RenameNativeAsync(
+        GhidraHeadlessBackend backend, GhidraSession session, JsonNode? arguments, Action<string> onProgress, CancellationToken cancellationToken)
+    {
+        var target = arguments?["target"]?.GetValue<string>();
+        var name = arguments?["name"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(name))
+        {
+            return (true, "Both 'target' and 'name' are required.");
+        }
+
+        return await backend.RenameAsync(session, target, name, onProgress, cancellationToken);
+    }
+
+    private static async Task<(bool IsError, string Text)> CommentNativeAsync(
+        GhidraHeadlessBackend backend, GhidraSession session, JsonNode? arguments, Action<string> onProgress, CancellationToken cancellationToken)
+    {
+        var target = arguments?["target"]?.GetValue<string>();
+        var comment = arguments?["comment"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(comment))
+        {
+            return (true, "Both 'target' and 'comment' are required.");
+        }
+
+        return await backend.CommentAsync(session, target, comment, onProgress, cancellationToken);
+    }
+
     private async Task<(bool IsError, string Text)> RunApprovedShellCommandAsync(
         string command, string workingDirectory, CancellationToken cancellationToken)
     {
+        // Streams each line to the active tool-call card so run_command shows live output instead of
+        // appearing frozen until it finishes. Null during an Ultra run, which has no such card.
+        var card = _activeToolCall;
+        Action<string>? onLine = card is null
+            ? null
+            : line => _dispatcher.Invoke(() => card.ReportProgress(line, null, null));
+
         ShellCommandResult result;
         try
         {
             result = await _shellCommandRunner.RunAsync(
-                command, workingDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, cancellationToken);
+                command, workingDirectory, ShellCommandTimeout, ShellTools.MaxOutputChars, onLine, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1974,6 +2431,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // Read once: the sub-agents run on the thread pool and outlive any single check of the field.
         var solutionDirectory = _solutionDirectory;
         IChatClient client = CurrentChatClient;
+
+        // Their own model and effort when configured (Settings > Sub-agents); investigations are
+        // often well served by something cheaper and faster than the chat's own.
+        var subAgentModel = ReadSubAgentModel(_appSettingsStore) ?? SelectedModel;
+        var subAgentEffort = ReadSubAgentEffort(_appSettingsStore) ?? SelectedEffort;
         using var concurrencyLimit = new SemaphoreSlim(SubAgentTools.MaxConcurrency);
 
         var runs = tasks.Select(async task =>
@@ -1982,7 +2444,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             try
             {
                 var loop = new HeadlessAgentLoop(
-                    client, SelectedModel, SelectedEffort, SubAgentTools.AllowedTools,
+                    client, subAgentModel, subAgentEffort, SubAgentTools.AllowedTools,
                     (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, solutionDirectory, ct));
                 var result = await loop.RunAsync(
                     SubAgentSystemPrompt, task, SubAgentTools.MaxIterationsPerTask, cancellationToken);
@@ -2060,6 +2522,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         if (AreWebFetchEnabled)
         {
             tools.AddRange(BuiltInTools.WebOptIn);
+        }
+        if (AreReverseEngineeringToolsEnabled)
+        {
+            tools.AddRange(BuiltInTools.ReOptIn);
         }
         tools.AddRange(_mcpServerManager.GetToolDefinitions());
         tools.AddRange(_pluginChatToolRegistry.GetToolDefinitions());
@@ -2206,6 +2672,36 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         Mcp,
     }
 
+    /// <summary>Open/focus the target file and hand the proposal its editor tab to show the diff in -
+    /// review happens there instead of the chat pane, whose card is only a status line. A proposal
+    /// that is never opened has nowhere to be accepted from. Skipped only for one refused on arrival
+    /// (ResolvedFullPath null), which has no valid file to open.</summary>
+    private void OpenProposalInEditor(EditProposalViewModel proposal)
+    {
+        if (proposal.ResolvedFullPath is not { } fullPath)
+        {
+            return;
+        }
+
+        // Captured before opening, for ShowInEditor's openedForReview - see its remarks on why
+        // Accept() needs to know whether opening the file for review is what made it "open".
+        var wasAlreadyOpen = _editApplicationService.IsOpen(fullPath);
+
+        // Several proposals can arrive in one turn, each flipping the active tab - that shouldn't
+        // steal keyboard focus away from the chat input if the user is still typing there.
+        var previouslyFocused = Keyboard.FocusedElement as IInputElement;
+        var openedDocument = OpenFileRequested?.Invoke(fullPath);
+        if (openedDocument is not null)
+        {
+            proposal.ShowInEditor(openedDocument, openedForReview: !wasAlreadyOpen);
+        }
+
+        if (previouslyFocused is not null)
+        {
+            _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => previouslyFocused.Focus());
+        }
+    }
+
     private void HandleToolCallDelta(
         TurnScope turn,
         ToolCallDelta delta,
@@ -2232,35 +2728,17 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return;
         }
 
+        if (proposalEvent.Status == EditProposalStatus.Oversized)
+        {
+            proposal.RefuseOversized(proposalEvent);
+            return;
+        }
+
         if (proposalEvent.Status == EditProposalStatus.Complete)
         {
             proposal.Complete(proposalEvent, turn.SolutionDirectory);
 
-            // Open/focus the target file and hand the proposal its editor tab to show the diff in -
-            // review now happens there instead of the chat pane. Skipped only for a proposal refused
-            // on arrival (ResolvedFullPath null), which has no valid file to open.
-            if (proposal.ResolvedFullPath is { } fullPath)
-            {
-                // Captured before opening, for ShowInEditor's openedForReview - see its remarks on
-                // why Accept() needs to know whether opening the file for review is what made it
-                // "open" (this call), rather than it already being open independently.
-                var wasAlreadyOpen = _editApplicationService.IsOpen(fullPath);
-
-                // Auto Mode can process several proposals in one turn, each flipping the active tab
-                // for visibility even when nothing needs approving - that shouldn't steal keyboard
-                // focus away from the chat input if the user is still typing there.
-                var previouslyFocused = Keyboard.FocusedElement as IInputElement;
-                var openedDocument = OpenFileRequested?.Invoke(fullPath);
-                if (openedDocument is not null)
-                {
-                    proposal.ShowInEditor(openedDocument, openedForReview: !wasAlreadyOpen);
-                }
-
-                if (previouslyFocused is not null)
-                {
-                    _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => previouslyFocused.Focus());
-                }
-            }
+            OpenProposalInEditor(proposal);
 
             // A saved skill's raw text later gets injected straight into the model's own context as
             // trusted instruction-shaped content (see PrependContextAsync/read_skill) - so unlike an
@@ -2461,6 +2939,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 directory,
                 "Built from a code block in the reply - this model did not call the edit tool, so where it "
                 + "goes was inferred. Check the diff before accepting; Auto Mode does not apply these.");
+            OpenProposalInEditor(proposal);
         }
     }
 
@@ -2878,6 +3357,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     partial void OnIsAutoModeChanged(bool value) => _appSettingsStore.Set(AutoModeSettingKey, value.ToString());
 
+    partial void OnCloseReviewTabsChanged(bool value) => _appSettingsStore.Set(CloseReviewTabsSettingKey, value.ToString());
+
     partial void OnAreShellCommandsEnabledChanged(bool value)
     {
         _appSettingsStore.Set(ShellCommandsSettingKey, value.ToString());
@@ -2899,6 +3380,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             _approvedWebHosts.Clear();
         }
     }
+
+    partial void OnAreReverseEngineeringToolsEnabledChanged(bool value) =>
+        _appSettingsStore.Set(ReverseEngineeringSettingKey, value.ToString());
 
     partial void OnIsPlanModeChanged(bool value) => _appSettingsStore.Set(PlanModeSettingKey, value.ToString());
 

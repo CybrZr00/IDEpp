@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
+    private readonly ExternalToolchainStore _externalToolchainStore;
     private readonly PluginHost _pluginHost;
 
     // Plugins register tool windows during LoadPlugins(), which App.xaml.cs calls after this
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
         DeepSeekFimClient deepSeekFimClient,
+        ExternalToolchainStore externalToolchainStore,
         PluginHost pluginHost,
         PluginToolWindowRegistry pluginToolWindowRegistry,
         PluginKeyBindingRegistry pluginKeyBindingRegistry)
@@ -64,6 +66,7 @@ public partial class MainWindow : Window
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
         _deepSeekFimClient = deepSeekFimClient;
+        _externalToolchainStore = externalToolchainStore;
         _pluginHost = pluginHost;
 
         DataContext = viewModel;
@@ -84,6 +87,8 @@ public partial class MainWindow : Window
         LocalsAnchorable.Content = viewModel.Locals;
         CopilotChatAnchorable.Content = viewModel.CopilotChat;
         ScheduledAutomationsAnchorable.Content = viewModel.ScheduledAutomations;
+        McpServersAnchorable.Content = viewModel.McpServers;
+        BinaryExplorerAnchorable.Content = viewModel.BinaryExplorer;
         WelcomeDocument.Content = viewModel.Welcome;
 
         _contentById = new Dictionary<string, object>
@@ -100,6 +105,8 @@ public partial class MainWindow : Window
             [LocalsPaneViewModel.PaneContentId] = viewModel.Locals,
             [CopilotChatPaneViewModel.PaneContentId] = viewModel.CopilotChat,
             [ScheduledAutomationsPaneViewModel.PaneContentId] = viewModel.ScheduledAutomations,
+            [McpServersPaneViewModel.PaneContentId] = viewModel.McpServers,
+            [BinaryExplorerPaneViewModel.PaneContentId] = viewModel.BinaryExplorer,
             [WelcomeDocumentViewModel.ContentId] = viewModel.Welcome,
         };
 
@@ -520,12 +527,25 @@ public partial class MainWindow : Window
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient);
+        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient, _externalToolchainStore);
         var window = new SettingsWindow(settingsViewModel) { Owner = this };
         window.ShowDialog();
     }
 
     private void AboutMenuItem_OnClick(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();
+
+    private void BrowseBinary_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Open a binary",
+            Filter = "Binaries (*.dll;*.exe;*.so;*.dylib;*.bin)|*.dll;*.exe;*.so;*.dylib;*.bin|All files (*.*)|*.*",
+        };
+        if (dialog.ShowDialog(this) == true && sender is FrameworkElement { DataContext: BinaryViewerViewModel viewer })
+        {
+            viewer.BinaryPath = dialog.FileName;
+        }
+    }
 
     private void GoToLineCommand_OnCanExecute(object sender, CanExecuteRoutedEventArgs e) =>
         e.CanExecute = ((MainWindowViewModel)DataContext).ActiveDocument is not null;

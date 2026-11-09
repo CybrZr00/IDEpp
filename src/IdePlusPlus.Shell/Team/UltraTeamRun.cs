@@ -88,6 +88,28 @@ public sealed record UltraTeamOptions(
 
     /// <summary>How often the stall check looks. Short only in tests.</summary>
     public TimeSpan StallCheckInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Run with a lead: it plans the work onto the board before any worker starts, checks in
+    /// on the team, and reviews each merge before it lands. Costs the lead's own model calls on top of
+    /// the workers', and serialises merges behind its review.</summary>
+    public bool Orchestrated { get; init; }
+
+    /// <summary>The model workers use, when it should differ from the run's own. Null: the same.</summary>
+    public string? WorkerModel { get; init; }
+
+    /// <summary>The effort workers use, when it should differ from <see cref="Effort"/>. Null: the same.</summary>
+    public ChatEffort? WorkerEffort { get; init; }
+
+    /// <summary>The lead's model. Null: the run's own.</summary>
+    public string? OrchestratorModel { get; init; }
+
+    public ChatEffort OrchestratorEffort { get; init; } = ChatEffort.High;
+
+    /// <summary>How often the lead checks in on the team while it works.</summary>
+    public TimeSpan SuperviseInterval { get; init; } = TimeSpan.FromMinutes(4);
+
+    /// <summary>How many times in a row the lead may turn down one worker's merge before it lands anyway.</summary>
+    public int MaxConsecutiveRejections { get; init; } = 2;
 }
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could
@@ -146,7 +168,10 @@ public sealed record UltraTeamResult(
 ///
 /// This is the "runner" from Agensh, not an orchestrator: it never decides who does what. It opens
 /// the run, keeps each worker cycling, says when time is short, and closes the run - the same four
-/// jobs as the paper's runner (kickoff, idle nudges, the two deadline reminders, export).
+/// jobs as the paper's runner (kickoff, idle nudges, the two deadline reminders, export). When
+/// <see cref="UltraTeamOptions.Orchestrated"/> is set, a separate <see cref="UltraOrchestrator"/> - the
+/// lead - does the deciding instead: it plans onto the board, checks in on the workers and reviews
+/// each merge. The runner's own jobs are unchanged either way.
 ///
 /// Each cycle is a fresh conversation - system prompt plus a user message carrying the goal, the
 /// time left, new channel posts and the board. A worker's knowledge crosses cycles only via the
@@ -171,6 +196,7 @@ public sealed class UltraTeamRun
     private readonly string _runDirectory;
     private readonly string _ultraRootDirectory;
     private readonly Func<CancellationToken, Task<bool>>? _askToContinue;
+    private UltraOrchestrator? _orchestrator;
     private int _promptTokens;
     private int _completionTokens;
     private int _cachedPromptTokens;
@@ -250,7 +276,7 @@ public sealed class UltraTeamRun
         var names = Enumerable.Range(1, startingWorkers).Select(n => $"w{n}").ToList();
         _workers.AddRange(names.Select(n => new TeamWorkerState(n)));
         Board = new TeamBoard(time, options.ClaimLifetime, Path.Combine(_runDirectory, "board.jsonl"));
-        Bus = new TeamMessageBus(time, names);
+        Bus = new TeamMessageBus(time, options.Orchestrated ? [.. names, LeadTools.LeadName] : names);
         Board.EntryAdded += _ => OnChanged();
         Bus.MessageSent += _ => OnChanged();
     }
@@ -258,6 +284,9 @@ public sealed class UltraTeamRun
     public string RunId { get; }
 
     public TeamBoard Board { get; }
+
+    /// <summary>The lead, for an orchestrated run once it has started - null otherwise.</summary>
+    public UltraOrchestrator? Orchestrator => _orchestrator;
 
     public TeamMessageBus Bus { get; }
 
@@ -397,6 +426,22 @@ public sealed class UltraTeamRun
         _worktreeBytes = _checkoutBytes * BuildOutputFactor;
         EnsureDiskSpace(Workers.Count, _worktreeBytes, "the team's worktrees");
 
+        if (_options.Orchestrated)
+        {
+            _orchestrator = new UltraOrchestrator(
+                _client,
+                _options.OrchestratorModel ?? _model,
+                _options.OrchestratorEffort,
+                _readOnlyTools,
+                Path.GetDirectoryName(solutionPath)!,
+                Board,
+                Bus,
+                Workers,
+                _time,
+                _options.MaxConsecutiveRejections);
+            _orchestrator.Changed += OnChanged;
+        }
+
         EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, start, cancellationToken), "create the team branch");
 
         var keptWorkerBranches = new List<string>();
@@ -410,6 +455,28 @@ public sealed class UltraTeamRun
                 foreach (var state in Workers)
                 {
                     await CreateWorkerAsync(state, start, cancellationToken);
+                }
+
+                if (_orchestrator is { } lead)
+                {
+                    foreach (var dispatcher in dispatchers)
+                    {
+                        dispatcher.MergeReview = async (worker, teamHead, head, ct) =>
+                        {
+                            string diff;
+                            try
+                            {
+                                diff = await _teamGit.GetDiffTextAsync(
+                                    repositoryRoot, teamHead, head, UltraOrchestrator.MaxReviewDiffChars, ct);
+                            }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                return (true, ""); // Nothing to review against; the build gate already passed.
+                            }
+
+                            return await lead.ReviewMergeAsync(goal, worker, diff, ct);
+                        };
+                    }
                 }
 
                 // The one check that would have saved three whole 16-worker runs whose every merge-gate
@@ -437,7 +504,16 @@ public sealed class UltraTeamRun
                     EnsureDiskSpace(Workers.Count - 1, Math.Max(0, _worktreeBytes - _checkoutBytes), "the team's builds");
                 }
 
+<<<<<<< HEAD
                 endReason = await RunWorkersAsync(goal, cancellationToken);
+=======
+                if (_orchestrator is { } planner)
+                {
+                    await planner.PlanAsync(goal, cancellationToken);
+                }
+
+                endReason = await RunWorkersAsync(goal, dispatchers, cancellationToken);
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
             }
             finally
             {
@@ -808,6 +884,7 @@ public sealed class UltraTeamRun
 
         var reminders = SendRemindersAsync(stopReminders.Token);
         var stallWatch = WatchForStallAsync(stopReminders.Token);
+<<<<<<< HEAD
         List<(TeamWorkerState State, TeamToolDispatcher Dispatcher, int Index)> starting;
         lock (_teamLock)
         {
@@ -829,6 +906,16 @@ public sealed class UltraTeamRun
                 _roundTasks!.Add(task);
             }
         }
+=======
+        var supervision = _orchestrator is { } lead
+            ? lead.SuperviseAsync(goal, () => TimeLeft, _options.SuperviseInterval, stopReminders.Token)
+            : Task.CompletedTask;
+        var workers = dispatchers
+            .Select((dispatcher, i) => (Dispatcher: dispatcher, State: Workers[i], Index: i))
+            .Where(w => !w.State.IsDone)
+            .Select(w => RunWorkerAsync(goal, w.State, w.Dispatcher, staggerStarts ? w.Index : 0, runToken.Token))
+            .ToList();
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
         try
         {
@@ -868,7 +955,7 @@ public sealed class UltraTeamRun
             }
 
             await stopReminders.CancelAsync();
-            foreach (var background in new[] { reminders, stallWatch })
+            foreach (var background in new[] { reminders, stallWatch, supervision })
             {
                 try
                 {
@@ -946,15 +1033,20 @@ public sealed class UltraTeamRun
         OnChanged();
 
         var systemPrompt = TeamPrompts.WorkerSystemPrompt(
+<<<<<<< HEAD
             state.Name,
             Workers.Select(w => w.Name).ToList(),
             _options.ClaimLifetime,
             dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName),
             maxTeamSize: _options.AutoScale ? MaxWorkers : 0);
+=======
+            state.Name, Workers.Select(w => w.Name).ToList(), _options.ClaimLifetime,
+            dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName), _options.Orchestrated);
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
         var loop = new HeadlessAgentLoop(
             _client,
-            _model,
-            _options.Effort,
+            _options.WorkerModel ?? _model,
+            _options.WorkerEffort ?? _options.Effort,
             dispatcher.Tools,
             async (tool, arguments, ct) =>
             {

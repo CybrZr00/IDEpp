@@ -53,14 +53,16 @@ public sealed class McpServerManager
     /// user's approval first; see LoadMergedConfigsAsync.</summary>
     public void SetSolutionDirectory(string? solutionDirectory) => _solutionDirectory = solutionDirectory;
 
-    public IReadOnlyList<(string Name, bool IsConnected, string? Error, int ToolCount)> ServerStatuses
+    public IReadOnlyList<McpServerStatus> ServerStatuses
     {
         get
         {
             lock (_connectionsLock)
             {
                 return _connections
-                    .Select(c => (c.ServerName, c.IsConnected, c.ConnectionError, c.Tools.Count))
+                    .Select(c => new McpServerStatus(
+                        c.ServerName, c.IsConnected, c.ConnectionError, c.Tools.Count,
+                        c.LastCallAt, c.LastDurationMs, c.RecentStderr))
                     .ToList();
             }
         }
@@ -176,11 +178,59 @@ public sealed class McpServerManager
         return McpConfigMerger.Merge(configs, projectConfigs);
     }
 
+    /// <summary>Restarts one server in place, leaving the others untouched. Serialized by the same
+    /// lock as ReconnectAllAsync so it can't race a full reconnect.</summary>
+    public async Task RestartServerAsync(string name)
+    {
+        await _reconnectLock.WaitAsync();
+        try
+        {
+            McpServerConnection? old;
+            lock (_connectionsLock)
+            {
+                old = _connections.FirstOrDefault(c => string.Equals(c.ServerName, name, StringComparison.Ordinal));
+            }
+
+            if (old is null)
+            {
+                return;
+            }
+
+            var config = old.Config;
+            lock (_connectionsLock)
+            {
+                _connections.Remove(old);
+            }
+
+            await old.DisposeAsync();
+
+            var fresh = await ConnectOneAsync(config);
+            lock (_connectionsLock)
+            {
+                _connections.Add(fresh);
+            }
+
+            Changed?.Invoke();
+        }
+        finally
+        {
+            _reconnectLock.Release();
+        }
+    }
+
     private async Task<McpServerConnection> ConnectOneAsync(McpServerConfig config)
     {
         using var cts = new CancellationTokenSource(ConnectTimeout);
-        var connection = await McpServerConnection.ConnectAsync(config, workingDirectory: null, cts.Token);
-        connection.OnLog += line => OnLog?.Invoke($"[MCP:{config.Name}] {line}");
+        var connection = await McpServerConnection.ConnectAsync(
+            config,
+            workingDirectory: null,
+            onLog: line => OnLog?.Invoke($"[MCP:{config.Name}] {line}"),
+            onClosed: () =>
+            {
+                OnLog?.Invoke($"[MCP:{config.Name}] disconnected.");
+                Changed?.Invoke();
+            },
+            cts.Token);
 
         OnLog?.Invoke(connection.IsConnected
             ? $"[MCP:{config.Name}] Connected - {connection.Tools.Count} tool(s)."
@@ -209,7 +259,11 @@ public sealed class McpServerManager
         }
     }
 
-    public async Task<McpToolCallResult> CallToolAsync(string qualifiedName, string argumentsJson, CancellationToken cancellationToken)
+    public Task<McpToolCallResult> CallToolAsync(string qualifiedName, string argumentsJson, CancellationToken cancellationToken) =>
+        CallToolAsync(qualifiedName, argumentsJson, onProgress: null, cancellationToken);
+
+    public async Task<McpToolCallResult> CallToolAsync(
+        string qualifiedName, string argumentsJson, Action<double?, double?, string?>? onProgress, CancellationToken cancellationToken)
     {
         McpServerConnection? connection;
         string? toolName;
@@ -234,6 +288,6 @@ public sealed class McpServerManager
             return new McpToolCallResult(true, $"Malformed arguments JSON for '{qualifiedName}'.");
         }
 
-        return await connection.CallToolAsync(toolName, arguments, cancellationToken);
+        return await connection.CallToolAsync(toolName, arguments, onProgress, cancellationToken);
     }
 }

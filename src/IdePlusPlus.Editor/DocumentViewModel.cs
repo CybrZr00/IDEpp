@@ -5,9 +5,16 @@ using ICSharpCode.AvalonEdit.Highlighting;
 
 namespace IdePlusPlus.Editor;
 
-public sealed partial class DocumentViewModel : ObservableObject
+public partial class DocumentViewModel : ObservableObject
 {
     private readonly string _untitledDisplayName;
+
+    /// <summary>For a subclass that is not a text document (e.g. a binary viewer): an empty, read-only
+    /// backing TextDocument, with the content id and file path it should report to the shell.</summary>
+    protected DocumentViewModel(string contentId, string? initialFilePath)
+        : this(contentId, initialFilePath, new TextDocument())
+    {
+    }
 
     private DocumentViewModel(string contentId, string? initialFilePath, TextDocument textDocument, string untitledDisplayName = "Untitled")
     {

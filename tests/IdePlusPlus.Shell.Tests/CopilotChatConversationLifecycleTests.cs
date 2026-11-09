@@ -397,10 +397,10 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         var send = await StartTurnInSolutionAAsync(viewModel);
         string? askedAbout = null;
-        viewModel.NewConversationConfirmation = warning =>
+        viewModel.NewConversationConfirmation = (warning, _) =>
         {
             askedAbout = warning;
-            return true;
+            return NewConversationChoice.Discard;
         };
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
@@ -421,10 +421,11 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
         var proposal = UndecidedProposal(viewModel);
-        viewModel.NewConversationConfirmation = warning =>
+        viewModel.NewConversationConfirmation = (warning, canAcceptAll) =>
         {
             warning.ShouldContain("1 proposed edit");
-            return false;
+            canAcceptAll.ShouldBeTrue();
+            return NewConversationChoice.Cancel;
         };
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
@@ -444,10 +445,10 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
         UndecidedProposal(viewModel);
-        viewModel.NewConversationConfirmation = _ =>
+        viewModel.NewConversationConfirmation = (_, _) =>
         {
             viewModel.SetSolutionContext(_solutionB, _directoryB, () => "Debug");
-            return true;
+            return NewConversationChoice.Discard;
         };
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
@@ -463,7 +464,7 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         var viewModel = CreateViewModel();
         viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
         var proposal = UndecidedProposal(viewModel);
-        viewModel.NewConversationConfirmation = _ => true;
+        viewModel.NewConversationConfirmation = (_, _) => NewConversationChoice.Discard;
 
         await viewModel.NewConversationCommand.ExecuteAsync(null);
 
@@ -472,6 +473,134 @@ public sealed class CopilotChatConversationLifecycleTests : IDisposable
         proposal.DecisionText.ShouldNotBeNull().ShouldContain("new conversation");
         File.ReadAllText(Path.Combine(_directoryA, "Foo.cs")).ShouldBe("a\nb\nc");
     });
+
+    [Fact]
+    public void PendingEditsBar_CountsWaitingEditsAndClearsWhenEachIsDecided() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        viewModel.HasPendingEdits.ShouldBeFalse();
+
+        var proposal = UndecidedProposal(viewModel);
+
+        viewModel.PendingEditCount.ShouldBe(1);
+        viewModel.HasPendingEdits.ShouldBeTrue();
+        viewModel.PendingEditsText.ShouldContain("1 edit");
+
+        await proposal.AcceptCommand.ExecuteAsync(null);
+
+        viewModel.PendingEditCount.ShouldBe(0);
+        viewModel.HasPendingEdits.ShouldBeFalse();
+    });
+
+    [Fact]
+    public void AcceptAllPending_AppliesTheWaitingEdit() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var proposal = UndecidedProposal(viewModel);
+
+        await viewModel.AcceptAllPendingCommand.ExecuteAsync(null);
+
+        proposal.WasApplied.ShouldBeTrue();
+        viewModel.PendingEditCount.ShouldBe(0);
+        File.ReadAllText(Path.Combine(_directoryA, "Foo.cs")).ShouldBe("a\nB\nc");
+    });
+
+    [Fact]
+    public void RejectAllPending_WritesNothingAndTellsTheModel() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var proposal = UndecidedProposal(viewModel);
+
+        viewModel.RejectAllPendingCommand.Execute(null);
+
+        proposal.WasRejectedByUser.ShouldBeTrue();
+        proposal.ToolResultText.ShouldContain("rejected");
+        viewModel.PendingEditCount.ShouldBe(0);
+        File.ReadAllText(Path.Combine(_directoryA, "Foo.cs")).ShouldBe("a\nb\nc");
+        await Task.CompletedTask;
+    });
+
+    [Fact]
+    public void DecidingAnEdit_ClosesTheTabItWasOpenedInForReview() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var closed = new List<DocumentViewModel>();
+        viewModel.CloseReviewDocumentRequested = document => { closed.Add(document); return true; };
+
+        var proposal = UndecidedProposal(viewModel);
+        var document = DocumentViewModel.ForExistingFile(Path.Combine(_directoryA, "Foo.cs"));
+        proposal.ShowInEditor(document, openedForReview: true);
+
+        viewModel.RejectAllPendingCommand.Execute(null);
+        await WaitUntilAsync(() => closed.Count > 0);
+
+        closed.ShouldHaveSingleItem().ShouldBeSameAs(document);
+    });
+
+    [Fact]
+    public void DecidingAnEdit_LeavesATabTheUserAlreadyHadOpen() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var closed = new List<DocumentViewModel>();
+        viewModel.CloseReviewDocumentRequested = document => { closed.Add(document); return true; };
+
+        var proposal = UndecidedProposal(viewModel);
+        proposal.ShowInEditor(DocumentViewModel.ForExistingFile(Path.Combine(_directoryA, "Foo.cs")), openedForReview: false);
+
+        viewModel.RejectAllPendingCommand.Execute(null);
+        await Task.Delay(200);
+
+        closed.ShouldBeEmpty();
+    });
+
+    [Fact]
+    public void DecidingAnEdit_LeavesTheTabWhileAnotherEditToTheSameFileIsWaiting() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetSolutionContext(_solutionA, _directoryA, () => "Debug");
+        var closed = new List<DocumentViewModel>();
+        viewModel.CloseReviewDocumentRequested = document => { closed.Add(document); return true; };
+
+        var first = UndecidedProposal(viewModel);
+        var document = DocumentViewModel.ForExistingFile(Path.Combine(_directoryA, "Foo.cs"));
+        first.ShowInEditor(document, openedForReview: true);
+        var second = UndecidedProposal(viewModel);
+        second.ShowInEditor(document, openedForReview: true);
+
+        first.RejectCommand.Execute(null);
+        await Task.Delay(200);
+        closed.ShouldBeEmpty();
+
+        second.RejectCommand.Execute(null);
+        await WaitUntilAsync(() => closed.Count > 0);
+    });
+
+    [Fact]
+    public void RefuseOversized_ClosesTheProposalWithoutAnAcceptButton()
+    {
+        var proposal = new EditProposalViewModel(
+            "call-big", new EditApplicationService(new EditorWorkspace(Path.Combine(_root, "oversized-recent.json"))));
+
+        proposal.RefuseOversized(new EditProposalEvent
+        {
+            ToolCallId = "call-big",
+            Status = EditProposalStatus.Oversized,
+            SpillPath = "C:\\temp\\spill.json",
+            TotalChars = 85_000_000,
+        });
+
+        proposal.IsComplete.ShouldBeTrue();
+        proposal.IsDecided.ShouldBeTrue();
+        proposal.WasApplied.ShouldBeFalse();
+        proposal.AcceptCommand.CanExecute(null).ShouldBeFalse();
+        proposal.ToolResultText.ShouldContain("too large");
+        proposal.SpillPath.ShouldBe("C:\\temp\\spill.json");
+    }
 
     private EditProposalViewModel UndecidedProposal(CopilotChatPaneViewModel viewModel)
     {

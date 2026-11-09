@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Threading;
 using System.Windows;
 using IdePlusPlus.Shell;
 
@@ -34,6 +36,53 @@ public partial class SettingsWindow : Window
 
     private async void TestDeepSeekConnectionButton_OnClick(object sender, RoutedEventArgs e) =>
         await _viewModel.TestDeepSeekConnectionAsync(DeepSeekApiKeyBox.Password);
+
+    /// <summary>Installs one reverse-engineering toolchain after the user approves the download. The
+    /// consent dialog is shown from here (not the view model) because it needs this window as its
+    /// owner. The download is verified against a pinned checksum inside the store.</summary>
+    private async void InstallTool_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ToolRowViewModel row })
+        {
+            return;
+        }
+
+        var tool = row.Tool;
+        var approved = ApprovalDialog.Ask(
+            this,
+            $"Install {tool.DisplayName}?",
+            $"IDE++ will download {tool.DisplayName} {tool.Version} (about {tool.DownloadBytes / 1_000_000} MB) and "
+            + "verify it against a pinned checksum before using it.",
+            tool.DownloadUrl,
+            warning: "This downloads and runs third-party software. Only continue if you trust the source above.");
+        if (!approved)
+        {
+            return;
+        }
+
+        row.IsBusy = true;
+        row.Progress = "Starting...";
+        try
+        {
+            using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("IDE++");
+            await _viewModel.ToolchainStore.InstallAsync(
+                tool.Id,
+                httpClient,
+                message => Dispatcher.Invoke(() => row.Progress = message),
+                CancellationToken.None);
+            row.Progress = null;
+        }
+        catch (Exception ex)
+        {
+            row.Progress = $"Failed: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
+            _viewModel.RefreshToolchains();
+        }
+    }
 
     private void CloseButton_OnClick(object sender, RoutedEventArgs e) => Close();
 }

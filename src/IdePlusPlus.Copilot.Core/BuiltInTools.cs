@@ -41,8 +41,15 @@ public static class BuiltInTools
     /// </summary>
     public static IReadOnlyList<ToolDefinition> WebOptIn { get; } = [.. WebTools.All];
 
+    /// <summary>
+    /// The reverse-engineering tools, gated by their own toggle (off by default) because they act on
+    /// binaries the user points at. Like the other opt-in lists, routing must recognise them even when
+    /// the list isn't currently offered, or a call made while enabled would be forwarded to MCP.
+    /// </summary>
+    public static IReadOnlyList<ToolDefinition> ReOptIn { get; } = [.. ReverseEngineeringTools.All];
+
     private static readonly HashSet<string> Names =
-        All.Concat(OptIn).Concat(WebOptIn).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+        All.Concat(OptIn).Concat(WebOptIn).Concat(ReOptIn).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
     public static bool IsBuiltIn(string toolName) => Names.Contains(toolName);
 }

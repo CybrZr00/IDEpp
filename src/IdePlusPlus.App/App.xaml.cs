@@ -125,15 +125,23 @@ public partial class App : Application
         EditorServices.StatusLog = line => output.AppendLine(line);
 
         var dispatcher = Dispatcher;
+
+        // From here on the Output pane is written from background threads (MCP stderr, plugin logs,
+        // task processes). The pane updates its buffers under a lock on the caller's thread and
+        // marshals only the UI refresh, so every logger - including PluginHost.LogInfo, which was
+        // never marshalled before - is safe without each call site wrapping in dispatcher.Invoke.
+        output.Post = action => dispatcher.BeginInvoke(action);
+
         var mcpServerManager = _serviceProvider.GetRequiredService<McpServerManager>();
-        mcpServerManager.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        mcpServerManager.OnLog += line => output.AppendLine(OutputPaneViewModel.McpChannel, line);
+        _serviceProvider.GetRequiredService<McpServersPaneViewModel>().Post = action => dispatcher.BeginInvoke(action);
         mcpServerManager.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectMcpServers(mainWindow, request)));
 
         // Resolved before the chat pane: SetSolutionContext (which loads a solution's hooks and may
         // prompt) can run as soon as the pane exists, and the prompt has to be wired by then.
         var hookService = _serviceProvider.GetRequiredService<HookService>();
-        hookService.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        hookService.OnLog += line => output.AppendLine(OutputPaneViewModel.PluginsChannel, line);
         hookService.ProjectTrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmProjectHooks(mainWindow, request)));
 
@@ -144,6 +152,7 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmTeamShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
+<<<<<<< HEAD
         copilotChatPane.NewConversationConfirmation = warning =>
             MessageBox.Show(
                 mainWindow,
@@ -153,14 +162,20 @@ public partial class App : Application
                 MessageBoxImage.Question,
                 MessageBoxResult.No) == MessageBoxResult.Yes;
         copilotChatPane.LaterTeamBranchPrompt = (chosen, later, laterCommits) => ConfirmUltraStartFrom(mainWindow, chosen, later, laterCommits);
+=======
+        copilotChatPane.ReverseEngineeringApprovalPrompt =
+            path => dispatcher.Invoke(() => Task.FromResult(ConfirmReverseEngineering(mainWindow, path)));
+        copilotChatPane.NewConversationConfirmation = (warning, canAcceptAll) =>
+            ConfirmNewConversation(mainWindow, warning, canAcceptAll);
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.
         _serviceProvider.GetRequiredService<TemplateCatalog>().OnLog +=
-            line => dispatcher.Invoke(() => output.AppendLine(line));
+            line => output.AppendLine(line);
 
         var javaScriptTaskDiscovery = _serviceProvider.GetRequiredService<JavaScriptTaskDiscoveryService>();
-        javaScriptTaskDiscovery.OnLog += line => dispatcher.Invoke(() => output.AppendLine(line));
+        javaScriptTaskDiscovery.OnLog += line => output.AppendLine(OutputPaneViewModel.TasksChannel, line);
         javaScriptTaskDiscovery.TrustPrompt = request =>
             dispatcher.Invoke(() => Task.FromResult(ConfirmJavaScriptTaskDiscovery(mainWindow, request)));
         _ = mcpServerManager.ReconnectAllAsync();
@@ -232,6 +247,32 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// New Chat's warning about what it would throw away. When edits are among it, "Accept all and
+    /// exit" applies them first instead - the way out for a pile of reviews that would otherwise have
+    /// to be clicked through one by one. Defaults to Cancel.
+    /// </summary>
+    private static NewConversationChoice ConfirmNewConversation(Window owner, string warning, bool canAcceptAll)
+    {
+        var dialog = ApprovalDialog.Create(
+            owner, "IDE++ - new conversation", "Start a new conversation?", warning);
+        dialog.AllowButton.Content = "_Discard and start new";
+        dialog.DenyButton.Content = "_Cancel";
+        if (canAcceptAll)
+        {
+            dialog.OfferAllowAll("Accept _all and exit");
+        }
+
+        if (dialog.ShowDialog() != true)
+        {
+            return NewConversationChoice.Cancel;
+        }
+
+        return dialog.Choice == ApprovalChoice.AllowAll
+            ? NewConversationChoice.AcceptAllThenStart
+            : NewConversationChoice.Discard;
+    }
+
+    /// <summary>
     /// Asks before the copilot runs a shell command. The command line is shown verbatim and never
     /// summarized: the exact text is the only thing worth consenting to, and a paraphrase of it is
     /// precisely how something unwanted gets waved through. Defaults to No.
@@ -246,6 +287,21 @@ public partial class App : Application
             note: $"Its reason: {reason}",
             warning: "It runs as you, in the solution directory, with your permissions. Only allow it if the "
                      + "command above is something you would be willing to run yourself.");
+    }
+
+    /// <summary>
+    /// Asked before the copilot opens a binary in Ghidra. The full path is shown verbatim. Analyzing a
+    /// binary runs Ghidra (Java) over it on this machine; the path is the thing to consent to. No.
+    /// </summary>
+    private static bool ConfirmReverseEngineering(Window owner, string path)
+    {
+        return ApprovalDialog.Ask(
+            owner,
+            "IDE++ - analyze this binary?",
+            "The AI assistant wants to open and analyze a binary with Ghidra:",
+            path,
+            warning: "Ghidra imports and disassembles the file on your machine. Only allow it for a file you "
+                     + "mean to reverse engineer.");
     }
 
     /// <summary>
@@ -416,6 +472,9 @@ public partial class App : Application
         services.AddSingleton<ReadOnlyToolDispatcher>();
         services.AddSingleton<ScheduledAutomationService>();
         services.AddSingleton<ScheduledAutomationsPaneViewModel>();
+        services.AddSingleton<McpServersPaneViewModel>();
+        services.AddSingleton<BinaryExplorerPaneViewModel>();
+        services.AddSingleton<ExternalToolchainStore>();
         services.AddSingleton<ChatHistoryStore>();
         services.AddSingleton(sp => new LmStudioEmbeddingClient(
             modelHttpClient, sp.GetRequiredService<AppSettingsStore>(), sp.GetRequiredService<SecureSettingsStore>()));

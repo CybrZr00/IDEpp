@@ -69,4 +69,61 @@ public class EditProposalParserTests
         second.ToolCallId.ShouldBe("call-b");
         second.Operation!.FilePath.ShouldBe("b.txt");
     }
+
+    [Fact]
+    public void OnToolCallDelta_SpillsAnOversizedCallToATempFileInsteadOfKeepingItInMemory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "ideplusplus-parser-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var parser = new EditProposalParser(maxArgumentChars: 1_000, spillDirectory: directory);
+            parser.OnToolCallDelta(new ToolCallDelta(0, "call-big", "propose_edit", ""));
+
+            var first = parser.OnToolCallDelta(new ToolCallDelta(0, null, null, "{\"file\": \"big.txt\", \"mode\": \"whole_file\", \"new_text\": \""));
+            first.Status.ShouldBe(EditProposalStatus.Streaming);
+
+            EditProposalEvent? last = null;
+            for (var i = 0; i < 5; i++)
+            {
+                last = parser.OnToolCallDelta(new ToolCallDelta(0, null, null, new string('x', 400)));
+            }
+
+            last!.Status.ShouldBe(EditProposalStatus.Oversized);
+            last.SpillPath.ShouldNotBeNull();
+            last.TotalChars.ShouldBeGreaterThan(1_000);
+            File.ReadAllText(last.SpillPath!).Length.ShouldBe((int)last.TotalChars);
+
+            // Later fragments, including the one that would have closed the object, keep going to the
+            // file and never produce an operation.
+            var closing = parser.OnToolCallDelta(new ToolCallDelta(0, null, null, "\"}"));
+            closing.Status.ShouldBe(EditProposalStatus.Oversized);
+            closing.Operation.ShouldBeNull();
+            File.ReadAllText(closing.SpillPath!).ShouldEndWith("\"}");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void OnToolCallDelta_StillCompletesALargeButUnderLimitCall()
+    {
+        var parser = new EditProposalParser();
+        var body = new string('y', 200_000);
+
+        parser.OnToolCallDelta(new ToolCallDelta(0, "call-large", "propose_edit", "{\"file\": \"a.txt\", \"mode\": \"whole_file\", \"new_text\": \""));
+        for (var i = 0; i < 20; i++)
+        {
+            parser.OnToolCallDelta(new ToolCallDelta(0, null, null, body[..10_000]));
+        }
+
+        var done = parser.OnToolCallDelta(new ToolCallDelta(0, null, null, "\"}"));
+
+        done.Status.ShouldBe(EditProposalStatus.Complete);
+        done.Operation!.NewText.Length.ShouldBe(200_000);
+    }
 }

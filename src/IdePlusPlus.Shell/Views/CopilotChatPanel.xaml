@@ -426,8 +426,20 @@
                             <Run Text="{Binding ToolName, Mode=OneWay}" FontWeight="Bold" FontFamily="Consolas" FontSize="11" />
                             <Run Text="—" />
                             <Run Text="{Binding Status, Mode=OneWay}" FontStyle="Italic" />
+                            <Run Text="{Binding ElapsedText, Mode=OneWay}" FontSize="10" Foreground="{DynamicResource MutedForegroundBrush}" />
                         </TextBlock>
                     </DockPanel>
+                    <ProgressBar IsIndeterminate="True"
+                                 Height="2"
+                                 Margin="0,3,0,0"
+                                 Visibility="{Binding IsRunning, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+                    <TextBlock Text="{Binding ProgressText, Mode=OneWay}"
+                               FontSize="10"
+                               FontStyle="Italic"
+                               Margin="0,2,0,0"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedForegroundBrush}"
+                               Visibility="{Binding HasProgress, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
                     <TextBox Text="{Binding ResultPreview, Mode=OneWay}"
                              FontFamily="Consolas"
                              FontSize="10"
@@ -439,6 +451,23 @@
                              BorderThickness="0"
                              Padding="0"
                              Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <Expander Header="Arguments"
+                              FontSize="10"
+                              IsExpanded="False"
+                              Margin="0,2,0,0"
+                              Visibility="{Binding HasArguments, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                        <TextBox Text="{Binding ArgumentsJson, Mode=OneWay}"
+                                 FontFamily="Consolas"
+                                 FontSize="10"
+                                 TextWrapping="Wrap"
+                                 MaxHeight="140"
+                                 IsReadOnly="True"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Padding="0"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Foreground="{DynamicResource MutedForegroundBrush}" />
+                    </Expander>
                 </StackPanel>
             </Border>
         </DataTemplate>
@@ -535,6 +564,12 @@
                           FontSize="11"
                           Margin="12,0,0,0"
                           ToolTip="Accepts edit proposals automatically instead of waiting for Accept/Reject" />
+                <CheckBox Content="Close tabs"
+                          IsChecked="{Binding CloseReviewTabs}"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Margin="12,0,0,0"
+                          ToolTip="Closes the editor tab an edit was opened in once you accept or reject it. Files you already had open are left alone." />
                 <CheckBox Content="Shell"
                           IsChecked="{Binding AreShellCommandsEnabled}"
                           VerticalAlignment="Center"
@@ -547,6 +582,12 @@
                           FontSize="11"
                           Margin="12,0,0,0"
                           ToolTip="Lets the assistant fetch public webpages. You confirm each new host before it's fetched." />
+                <CheckBox Content="RE"
+                          IsChecked="{Binding AreReverseEngineeringToolsEnabled}"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Margin="12,0,0,0"
+                          ToolTip="Lets the assistant decompile .NET assemblies you point it at (metadata only, never run). Native (Ghidra) tools need the toolchain installed in Settings." />
             </StackPanel>
             <TextBlock Text="📝 Plan Mode is on - investigating and proposing a plan, no edits yet"
                        FontSize="10"
@@ -597,6 +638,12 @@
                        Margin="0,2,0,0"
                        TextWrapping="Wrap"
                        Visibility="{Binding AreWebFetchEnabled, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
+            <TextBlock Text="🧬 Reverse engineering is on - the assistant can decompile .NET assemblies you point it at. It reads metadata only and never runs them."
+                       FontSize="10"
+                       Foreground="OrangeRed"
+                       Margin="0,2,0,0"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding AreReverseEngineeringToolsEnabled, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}" />
 
             <!-- The one thing that actually answers "is it still working, or has it silently died?" -
                  an indeterminate spinner plus what it's doing right now, visible for the whole
@@ -622,9 +669,41 @@
             </DockPanel>
         </StackPanel>
 
-        <ScrollViewer Grid.Row="3" x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Messages}" />
-        </ScrollViewer>
+        <Grid Grid.Row="3">
+            <ScrollViewer x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Messages}" />
+            </ScrollViewer>
+
+            <!-- Floats over the bottom of the conversation so a decision on every waiting edit is one
+                 click away wherever the list is scrolled to. Hidden when nothing is waiting. -->
+            <Border VerticalAlignment="Bottom"
+                    Margin="6"
+                    Padding="8,4"
+                    CornerRadius="4"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource MutedForegroundBrush}"
+                    Background="{DynamicResource ChatBubbleAssistantBackgroundBrush}"
+                    Visibility="{Binding HasPendingEdits, Converter={x:Static toolPanes:BoolToVisibilityConverter.Instance}}">
+                <DockPanel LastChildFill="True">
+                    <Button DockPanel.Dock="Right"
+                            Content="Reject all"
+                            Command="{Binding RejectAllPendingCommand}"
+                            Margin="6,0,0,0"
+                            Padding="8,2"
+                            ToolTip="Rejects every edit that is waiting. Nothing is written, and the assistant is told." />
+                    <Button DockPanel.Dock="Right"
+                            Content="Accept all"
+                            Command="{Binding AcceptAllPendingCommand}"
+                            Margin="6,0,0,0"
+                            Padding="8,2"
+                            ToolTip="Accepts every waiting edit in order. An edit that removes most of a file is left for you to review." />
+                    <TextBlock Text="{Binding PendingEditsText}"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               FontSize="11" />
+                </DockPanel>
+            </Border>
+        </Grid>
 
         <Grid Grid.Row="4" Margin="4,0">
             <Grid.ColumnDefinitions>

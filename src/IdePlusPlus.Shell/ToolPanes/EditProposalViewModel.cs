@@ -109,6 +109,10 @@ public sealed partial class EditProposalViewModel : ObservableObject
     private bool _openedForReview;
     private bool _isDiscarded;
 
+    /// <summary>The editor tab, but only when opening this proposal for review is what opened it - a
+    /// file the user already had open is theirs and is never closed on their behalf.</summary>
+    public DocumentViewModel? ReviewDocument => _openedForReview ? _attachedDocument : null;
+
     /// <summary>Called once the target file has been opened/focused in the editor - pushes this
     /// proposal's diff into that document's editor tab, docked above the code. Accept()/Reject() call
     /// RefreshEditorAndStatus() again once decided, so the panel there stays in sync with the
@@ -249,6 +253,31 @@ public sealed partial class EditProposalViewModel : ObservableObject
             PreviewText = newTextPreview;
         }
     }
+
+    /// <summary>
+    /// Closes this proposal as refused because its arguments outgrew what is held in memory - see
+    /// <see cref="EditProposalParser.DefaultMaxArgumentChars"/>. Nothing was parsed, so there is no diff
+    /// and no Accept button; the text so far is in a temp file, and the model is told so it can split
+    /// the change up instead of resending the same thing.
+    /// </summary>
+    public void RefuseOversized(EditProposalEvent proposalEvent)
+    {
+        var megabytes = proposalEvent.TotalChars / 1_000_000.0;
+        PreviewText = "";
+        IsComplete = true;
+        IsDecided = true;
+        DecisionText = $"Refused - too large to review (over {EditProposalParser.DefaultMaxArgumentChars / 1_000_000.0:0.#}M characters).";
+        ToolResultText =
+            $"Not applied: this edit's content is far too large to review ({megabytes:0.#}M+ characters "
+            + "and still arriving), so it was cut off and nothing was written. Do not write generated "
+            + "output, disassembly or other bulk data into the project with propose_edit; write it with "
+            + "a command if it is really needed, or propose smaller edits.";
+        SpillPath = proposalEvent.SpillPath;
+        RefreshEditorAndStatus();
+    }
+
+    /// <summary>Where an oversized proposal's content was written instead of being kept in memory.</summary>
+    public string? SpillPath { get; private set; }
 
     /// <summary>Set for a proposal built from a code block in the reply rather than from an edit
     /// tool call, so the card can say where it came from and that the placement was inferred.</summary>

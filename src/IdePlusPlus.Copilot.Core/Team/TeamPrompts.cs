@@ -27,13 +27,26 @@ public static class TeamPrompts
     /// <param name="maxTeamSize">In auto mode, how big the team may grow - and so whether the prompt
     /// explains team_request_help at all; 0 when the team is fixed.</param>
     public static string WorkerSystemPrompt(
+<<<<<<< HEAD
         string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled, int maxTeamSize = 0)
+=======
+        string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled,
+        bool orchestrated = false)
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
     {
         var peers = string.Join(", ", team.Where(n => n != workerName));
+        var leadership = orchestrated
+            ? """
+              A lead ("lead") has already split the goal into TASKs on the board, and supervises the team. Take
+              the TASKs, one at a time, rather than inventing work. The lead reviews every team_merge: if it
+              is refused with the lead's feedback, make that change and merge again. Ask the lead with
+              team_dm when you are blocked or a TASK is unclear - it answers between steps, not instantly.
+              """
+            : "There is no lead and no orchestrator: each of you chooses what to work on, does it, merges it, and\npicks the next thing.";
         var prompt = new StringBuilder($"""
             You are {workerName}, one of {team.Count} equal workers on an Ultra team in IDE++ (your peers: {peers}).
-            There is no lead and no orchestrator: each of you chooses what to work on, does it, merges it, and
-            picks the next thing. The user gave the team one goal and is not available while you work - never
+            {leadership}
+            The user gave the team one goal and is not available while you work - never
             wait for them or ask them anything; decide and proceed.
 
             Where you work
@@ -197,6 +210,63 @@ public static class TeamPrompts
     public static string FinalReminder(TimeSpan timeLeft) =>
         $"About {FormatMinutes(timeLeft)} left - merge now if your work builds; otherwise post a FAIL or FACT saying "
         + "where you got to, and call team_done.";
+
+    // ---- The lead (orchestrated runs) ----
+
+    private const string LeadIntro =
+        "You are lead, the planner and overseer of an Ultra team in IDE++. You do not write code and have no "
+        + "worktree: the workers do the work, each in their own git worktree, and merge it into a shared team "
+        + "branch. The user gave the team one goal and is not available - never ask them anything.";
+
+    public static string LeadPlanningPrompt(IReadOnlyCollection<string> workers) =>
+        $"{LeadIntro}\n\nThe workers are: {string.Join(", ", workers)}.\n\n"
+        + "Your job now is to plan. Read the parts of the code the goal touches (read_file, list_files, "
+        + "search_codebase, find_symbol) - enough to split the goal sensibly, not to solve it - then call "
+        + "lead_submit_plan once. Good tasks are independent: each names the files or area it owns, so two workers "
+        + "rarely edit the same thing, and each is small enough to finish and merge in one sitting. Put anything "
+        + "that must happen first (a shared interface, a rename) in an early task and say that others depend on it. "
+        + "Do not plan more tasks than the work needs, and do not plan polish the goal did not ask for.";
+
+    public static string LeadPlanningOpening(string goal, int workerCount) =>
+        $"Goal:\n{goal.Trim()}\n\nThere are {workerCount} workers. Investigate, then submit the plan.";
+
+    public static string LeadSupervisionPrompt(IReadOnlyCollection<string> workers) =>
+        $"{LeadIntro}\n\nThe workers are: {string.Join(", ", workers)}.\n\n"
+        + "You are checking in on the team. You are given the board and what each worker is doing. Step in only "
+        + "when something is wrong: a worker has gone quiet on a task, two workers are on the same thing, a FAIL "
+        + "means a TASK needs a different approach, a worker asked you a question, or the plan missed work the "
+        + "board now shows is needed. Use lead_message to redirect or answer, lead_add_task for missed work. "
+        + "If everything is on track, change nothing and reply with one line. Be brief - the workers read what "
+        + "you send between their steps.";
+
+    public static string LeadSupervisionOpening(
+        string goal, TimeSpan timeLeft, string workerStatus, IReadOnlyList<TeamMessage> questions, string board)
+    {
+        var message = new StringBuilder();
+        message.Append("Goal:\n").Append(goal.Trim()).Append("\n\n");
+        message.Append($"Time left: {FormatMinutes(timeLeft)}.\n\nWorkers:\n").Append(workerStatus).Append('\n');
+        if (questions.Count > 0)
+        {
+            message.Append("\nMessages to you:\n");
+            foreach (var question in questions)
+            {
+                message.Append($"  {question.From}: {question.Text}\n");
+            }
+        }
+
+        message.Append("\nBoard:\n").Append(board);
+        return message.ToString();
+    }
+
+    public static string LeadReviewPrompt() =>
+        $"{LeadIntro}\n\nA worker is about to merge a change into the team branch, and it already builds. Your job is to "
+        + "review it against the goal and the plan, then call lead_verdict. Approve unless the change is wrong, goes "
+        + "beyond the goal, breaks something the diff shows, or would clash with the plan. Style nits are not a "
+        + "reason to reject. If you reject, say exactly what to change - the worker acts on your feedback and "
+        + "tries again. You may read files for context, but the diff is what you are judging.";
+
+    public static string LeadReviewOpening(string goal, string worker, string tasks, string diff) =>
+        $"Goal:\n{goal.Trim()}\n\nTasks on the board:\n{tasks}\n\n{worker} wants to merge this:\n\n{diff}";
 
     private static string FormatMinutes(TimeSpan span) =>
         span.TotalMinutes >= 1 ? $"{(int)Math.Ceiling(span.TotalMinutes)} min" : "under a minute";

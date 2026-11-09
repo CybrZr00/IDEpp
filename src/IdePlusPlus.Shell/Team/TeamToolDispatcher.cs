@@ -58,6 +58,13 @@ public sealed class TeamToolDispatcher
 
     private bool _warnedAboutUnmergedWork;
 
+    /// <summary>
+    /// Set for an orchestrated run: asked after a commit builds and before it is fast-forwarded onto
+    /// the team branch, with (worker name, team head, this commit). A refusal comes back to the worker
+    /// as the lead's feedback and the merge does not happen. Null for an ordinary run.
+    /// </summary>
+    public Func<string, string, string, CancellationToken, Task<(bool Approved, string Feedback)>>? MergeReview { get; set; }
+
     /// <param name="runCommand">run_command's implementation - (command, reason, working directory,
     /// token) - or null when shell commands are off for this run.</param>
     /// <param name="buildTimeout">How long one build may run once it has a build slot - not
@@ -576,6 +583,17 @@ public sealed class TeamToolDispatcher
 
             _changedSinceBuild = false;
             _state.LastGoodCommit = head;
+        }
+
+        if (MergeReview is { } review)
+        {
+            var verdict = await review(_context.Name, teamHead, head, cancellationToken);
+            if (!verdict.Approved)
+            {
+                return (true,
+                    "Not merged - the lead reviewed your commit and wants changes:\n\n" + verdict.Feedback
+                    + "\n\nMake them, team_commit, and team_merge again.");
+            }
         }
 
         var result = await _teamGit.FastForwardBranchAsync(

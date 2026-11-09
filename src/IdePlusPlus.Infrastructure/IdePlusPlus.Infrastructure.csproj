@@ -5,4 +5,8 @@
     <PackageReference Include="HtmlAgilityPack" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="IdePlusPlus.Infrastructure.Tests" />
+  </ItemGroup>
+
 </Project>

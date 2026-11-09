@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.Mcp;
@@ -24,19 +25,22 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
+    private readonly ExternalToolchainStore _externalToolchainStore;
 
     public SettingsViewModel(
         SecureSettingsStore secureSettingsStore,
         AppSettingsStore appSettingsStore,
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
-        DeepSeekFimClient deepSeekFimClient)
+        DeepSeekFimClient deepSeekFimClient,
+        ExternalToolchainStore externalToolchainStore)
     {
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
         _deepSeekFimClient = deepSeekFimClient;
+        _externalToolchainStore = externalToolchainStore;
 
         hasApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName));
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
@@ -48,11 +52,19 @@ public sealed partial class SettingsViewModel : ObservableObject
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
         ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraWorkerCount(_appSettingsStore);
         ultraTimeBudgetMinutes = CopilotChatPaneViewModel.ReadUltraTimeBudgetMinutes(_appSettingsStore);
+<<<<<<< HEAD
         ultraConcurrentRequests = CopilotChatPaneViewModel.ReadUltraConcurrentRequests(_appSettingsStore);
         ultraMaxRunMinutes = CopilotChatPaneViewModel.ReadUltraMaxRunMinutes(_appSettingsStore);
         ultraMaxTokensMillions = CopilotChatPaneViewModel.ReadUltraMaxTokensMillions(_appSettingsStore);
         ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
         ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
+=======
+        ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
+        ultraOrchestratorModel = CopilotChatPaneViewModel.ReadUltraOrchestratorModel(_appSettingsStore) ?? "";
+        ultraOrchestratorEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey));
+        subAgentModel = CopilotChatPaneViewModel.ReadSubAgentModel(_appSettingsStore) ?? "";
+        subAgentEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.SubAgentEffortSettingKey));
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -60,12 +72,34 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 Name = config.Name,
                 Command = config.Command,
-                ArgsText = string.Join(' ', config.Args),
+                ArgsText = FormatArgs(config.Args),
                 EnvText = config.Env is null ? "" : string.Join(';', config.Env.Select(kv => $"{kv.Key}={kv.Value}")),
             });
         }
 
         RefreshMcpServerStatuses();
+
+        foreach (var tool in _externalToolchainStore.Tools)
+        {
+            Toolchains.Add(new ToolRowViewModel(tool));
+        }
+
+        RefreshToolchains();
+    }
+
+    /// <summary>The reverse-engineering toolchains (Ghidra, JDK) shown in the Tools section.</summary>
+    public ObservableCollection<ToolRowViewModel> Toolchains { get; } = [];
+
+    /// <summary>Exposed so the dialog's code-behind can run an install (which needs a window owner for
+    /// the consent dialog) against the same store.</summary>
+    public ExternalToolchainStore ToolchainStore => _externalToolchainStore;
+
+    public void RefreshToolchains()
+    {
+        foreach (var row in Toolchains)
+        {
+            row.State = _externalToolchainStore.State(row.Id);
+        }
     }
 
     [ObservableProperty]
@@ -119,6 +153,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int ultraTimeBudgetMinutes;
 
+<<<<<<< HEAD
     [ObservableProperty]
     private int ultraConcurrentRequests;
 
@@ -137,6 +172,42 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraStartWorkers;
+=======
+    /// <summary>Run Ultra with a lead that plans the work, checks in on the team and reviews each merge
+    /// before it lands. Costs the lead's own model calls on top of the workers'.</summary>
+    [ObservableProperty]
+    private bool ultraOrchestrated;
+
+    /// <summary>The lead's model id; blank means the chat's own.</summary>
+    [ObservableProperty]
+    private string ultraOrchestratorModel;
+
+    /// <summary>The lead's effort; <see cref="DefaultEffortChoice"/> means High.</summary>
+    [ObservableProperty]
+    private string ultraOrchestratorEffort;
+
+    /// <summary>The model id for sub-agents - investigate_parallel's investigators and Ultra's workers;
+    /// blank means the chat's own. It is a model on the provider the chat is using.</summary>
+    [ObservableProperty]
+    private string subAgentModel;
+
+    /// <summary>The effort for sub-agents; <see cref="DefaultEffortChoice"/> means the chat's own.</summary>
+    [ObservableProperty]
+    private string subAgentEffort;
+
+    public const string DefaultEffortChoice = "Default";
+
+    /// <summary>What the effort boxes offer. Ultra is left out: it is a mode, not an effort one request can run at.</summary>
+    public IReadOnlyList<string> EffortChoices { get; } =
+        [DefaultEffortChoice, nameof(ChatEffort.None), nameof(ChatEffort.Low), nameof(ChatEffort.Medium), nameof(ChatEffort.High)];
+
+    private static string EffortChoiceFor(string? stored) =>
+        Enum.TryParse<ChatEffort>(stored, ignoreCase: true, out var effort) && effort != ChatEffort.Ultra
+            ? effort.ToString()
+            : DefaultEffortChoice;
+
+    private static string StoredEffort(string choice) => choice == DefaultEffortChoice ? "" : choice;
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -228,6 +299,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraStartWorkersSettingKey, UltraStartWorkers.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
+<<<<<<< HEAD
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConcurrentRequestsSettingKey, UltraConcurrentRequests.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxTokensMillionsSettingKey, UltraMaxTokensMillions.ToString());
@@ -237,6 +309,20 @@ public sealed partial class SettingsViewModel : ObservableObject
                         + $"{UltraConcurrentRequests} model requests at a time; run until done stops after "
                         + $"{UltraMaxRunMinutes} minutes"
                         + (UltraMaxTokensMillions > 0 ? $" or {UltraMaxTokensMillions}M tokens." : ".");
+=======
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
+        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers{(UltraOrchestrated ? " with a lead" : "")}, up to {UltraTimeBudgetMinutes} minutes.";
+    }
+
+    [RelayCommand]
+    private void SaveSubAgentSettings()
+    {
+        _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentModelSettingKey, SubAgentModel.Trim());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentEffortSettingKey, StoredEffort(SubAgentEffort));
+        StatusMessage = "Sub-agent settings saved.";
+>>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
     }
 
     [RelayCommand]
@@ -275,6 +361,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     });
 
     [RelayCommand]
+    private void AddReaMcpServer() => McpServers.Add(new McpServerRowViewModel
+    {
+        Name = "rea",
+        Command = @"C:\Program Files\nodejs\node.exe",
+        ArgsText = FormatArgs([@"C:\Users\markp\AppData\Roaming\npm\node_modules\rea-agents\scripts\rea.mjs", "mcp"]),
+        EnvText = @"GHIDRA_INSTALL_DIR=C:\ghidra\ghidra_12.1.4_PUBLIC;JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot",
+    });
+
+    [RelayCommand]
     private void RemoveMcpServer(McpServerRowViewModel row) => McpServers.Remove(row);
 
     [RelayCommand]
@@ -309,8 +404,31 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    private static List<string> ParseArgs(string argsText) =>
-        argsText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+    /// <summary>Splits on spaces, but a "double quoted" run stays one argument (for paths containing spaces).</summary>
+    internal static List<string> ParseArgs(string argsText)
+    {
+        var args = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inQuotes = false;
+        var hasToken = false;
+        foreach (var ch in argsText)
+        {
+            if (ch == '"') { inQuotes = !inQuotes; hasToken = true; }
+            else if (ch == ' ' && !inQuotes)
+            {
+                if (hasToken) args.Add(current.ToString());
+                current.Clear();
+                hasToken = false;
+            }
+            else { current.Append(ch); hasToken = true; }
+        }
+        if (hasToken) args.Add(current.ToString());
+        return args;
+    }
+
+    /// <summary>Inverse of <see cref="ParseArgs"/>: quotes any argument containing a space.</summary>
+    internal static string FormatArgs(IEnumerable<string> args) =>
+        string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
 
     private static Dictionary<string, string>? ParseEnv(string envText)
     {

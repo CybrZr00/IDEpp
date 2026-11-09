@@ -59,6 +59,7 @@
     <ProjectReference Include="..\IdePlusPlus.Templates\IdePlusPlus.Templates.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Roslyn\IdePlusPlus.Roslyn.csproj" />
     <ProjectReference Include="..\IdePlusPlus.Connections\IdePlusPlus.Connections.csproj" />
+    <ProjectReference Include="..\IdePlusPlus.ReverseEngineering\IdePlusPlus.ReverseEngineering.csproj" />
   </ItemGroup>
 
 </Project>
