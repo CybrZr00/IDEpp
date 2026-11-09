@@ -52,19 +52,16 @@ public sealed partial class SettingsViewModel : ObservableObject
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
         ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraWorkerCount(_appSettingsStore);
         ultraTimeBudgetMinutes = CopilotChatPaneViewModel.ReadUltraTimeBudgetMinutes(_appSettingsStore);
-<<<<<<< HEAD
         ultraConcurrentRequests = CopilotChatPaneViewModel.ReadUltraConcurrentRequests(_appSettingsStore);
         ultraMaxRunMinutes = CopilotChatPaneViewModel.ReadUltraMaxRunMinutes(_appSettingsStore);
         ultraMaxTokensMillions = CopilotChatPaneViewModel.ReadUltraMaxTokensMillions(_appSettingsStore);
         ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
         ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
-=======
         ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
         ultraOrchestratorModel = CopilotChatPaneViewModel.ReadUltraOrchestratorModel(_appSettingsStore) ?? "";
         ultraOrchestratorEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey));
         subAgentModel = CopilotChatPaneViewModel.ReadSubAgentModel(_appSettingsStore) ?? "";
         subAgentEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.SubAgentEffortSettingKey));
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
         foreach (var config in _mcpServerConfigStore.Load())
         {
@@ -153,7 +150,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int ultraTimeBudgetMinutes;
 
-<<<<<<< HEAD
     [ObservableProperty]
     private int ultraConcurrentRequests;
 
@@ -172,7 +168,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraStartWorkers;
-=======
+
     /// <summary>Run Ultra with a lead that plans the work, checks in on the team and reviews each merge
     /// before it lands. Costs the lead's own model calls on top of the workers'.</summary>
     [ObservableProperty]
@@ -207,7 +203,6 @@ public sealed partial class SettingsViewModel : ObservableObject
             : DefaultEffortChoice;
 
     private static string StoredEffort(string choice) => choice == DefaultEffortChoice ? "" : choice;
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
     public ObservableCollection<McpServerRowViewModel> McpServers { get; } = [];
 
@@ -299,21 +294,19 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraStartWorkersSettingKey, UltraStartWorkers.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
-<<<<<<< HEAD
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConcurrentRequestsSettingKey, UltraConcurrentRequests.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxTokensMillionsSettingKey, UltraMaxTokensMillions.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
         StatusMessage = $"Ultra settings saved - "
                         + (UltraAutoScale ? $"auto mode, {UltraStartWorkers} workers growing to {UltraWorkerCount}" : $"{UltraWorkerCount} workers")
+                        + (UltraOrchestrated ? " with a lead" : "")
                         + $", up to {UltraTimeBudgetMinutes} minutes, "
                         + $"{UltraConcurrentRequests} model requests at a time; run until done stops after "
                         + $"{UltraMaxRunMinutes} minutes"
                         + (UltraMaxTokensMillions > 0 ? $" or {UltraMaxTokensMillions}M tokens." : ".");
-=======
-        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
-        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
-        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
-        StatusMessage = $"Ultra settings saved - {UltraWorkerCount} workers{(UltraOrchestrated ? " with a lead" : "")}, up to {UltraTimeBudgetMinutes} minutes.";
     }
 
     [RelayCommand]
@@ -322,7 +315,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentModelSettingKey, SubAgentModel.Trim());
         _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentEffortSettingKey, StoredEffort(SubAgentEffort));
         StatusMessage = "Sub-agent settings saved.";
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
     }
 
     [RelayCommand]

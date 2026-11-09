@@ -303,6 +303,19 @@ public sealed class UltraTeamRun
         }
     }
 
+    /// <summary>The team as it is whenever it is read - for the lead, which holds on to it for the
+    /// whole run and so must see the workers auto mode adds, where <see cref="Workers"/> is a copy.</summary>
+    private sealed class LiveTeam(UltraTeamRun run) : IReadOnlyList<TeamWorkerState>
+    {
+        public TeamWorkerState this[int index] => run.Workers[index];
+
+        public int Count => run.Workers.Count;
+
+        public IEnumerator<TeamWorkerState> GetEnumerator() => run.Workers.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     /// <summary>How big the team may get - its size from the start, unless it is in auto mode.</summary>
     public int MaxWorkers => _options.AutoScale ? Math.Max(1, _options.WorkerCount) : Workers.Count;
 
@@ -436,7 +449,7 @@ public sealed class UltraTeamRun
                 Path.GetDirectoryName(solutionPath)!,
                 Board,
                 Bus,
-                Workers,
+                new LiveTeam(this),
                 _time,
                 _options.MaxConsecutiveRejections);
             _orchestrator.Changed += OnChanged;
@@ -455,28 +468,6 @@ public sealed class UltraTeamRun
                 foreach (var state in Workers)
                 {
                     await CreateWorkerAsync(state, start, cancellationToken);
-                }
-
-                if (_orchestrator is { } lead)
-                {
-                    foreach (var dispatcher in dispatchers)
-                    {
-                        dispatcher.MergeReview = async (worker, teamHead, head, ct) =>
-                        {
-                            string diff;
-                            try
-                            {
-                                diff = await _teamGit.GetDiffTextAsync(
-                                    repositoryRoot, teamHead, head, UltraOrchestrator.MaxReviewDiffChars, ct);
-                            }
-                            catch (Exception ex) when (ex is not OperationCanceledException)
-                            {
-                                return (true, ""); // Nothing to review against; the build gate already passed.
-                            }
-
-                            return await lead.ReviewMergeAsync(goal, worker, diff, ct);
-                        };
-                    }
                 }
 
                 // The one check that would have saved three whole 16-worker runs whose every merge-gate
@@ -504,16 +495,12 @@ public sealed class UltraTeamRun
                     EnsureDiskSpace(Workers.Count - 1, Math.Max(0, _worktreeBytes - _checkoutBytes), "the team's builds");
                 }
 
-<<<<<<< HEAD
-                endReason = await RunWorkersAsync(goal, cancellationToken);
-=======
                 if (_orchestrator is { } planner)
                 {
                     await planner.PlanAsync(goal, cancellationToken);
                 }
 
-                endReason = await RunWorkersAsync(goal, dispatchers, cancellationToken);
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
+                endReason = await RunWorkersAsync(goal, cancellationToken);
             }
             finally
             {
@@ -597,6 +584,27 @@ public sealed class UltraTeamRun
             context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, _buildSlots!,
             _options.Configuration, _runCommand,
             requestHelp: _options.AutoScale ? RequestHelpAsync : null);
+
+        // Here rather than once the team is created, so the lead also reviews the merges of
+        // workers auto mode adds later.
+        if (_orchestrator is { } lead)
+        {
+            dispatcher.MergeReview = async (worker, teamHead, head, ct) =>
+            {
+                string diff;
+                try
+                {
+                    diff = await _teamGit.GetDiffTextAsync(
+                        repositoryRoot, teamHead, head, UltraOrchestrator.MaxReviewDiffChars, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return (true, ""); // Nothing to review against; the build gate already passed.
+                }
+
+                return await lead.ReviewMergeAsync(_goal, worker, diff, ct);
+            };
+        }
 
         lock (_teamLock)
         {
@@ -884,7 +892,9 @@ public sealed class UltraTeamRun
 
         var reminders = SendRemindersAsync(stopReminders.Token);
         var stallWatch = WatchForStallAsync(stopReminders.Token);
-<<<<<<< HEAD
+        var supervision = _orchestrator is { } lead
+            ? lead.SuperviseAsync(goal, () => TimeLeft, _options.SuperviseInterval, stopReminders.Token)
+            : Task.CompletedTask;
         List<(TeamWorkerState State, TeamToolDispatcher Dispatcher, int Index)> starting;
         lock (_teamLock)
         {
@@ -906,16 +916,6 @@ public sealed class UltraTeamRun
                 _roundTasks!.Add(task);
             }
         }
-=======
-        var supervision = _orchestrator is { } lead
-            ? lead.SuperviseAsync(goal, () => TimeLeft, _options.SuperviseInterval, stopReminders.Token)
-            : Task.CompletedTask;
-        var workers = dispatchers
-            .Select((dispatcher, i) => (Dispatcher: dispatcher, State: Workers[i], Index: i))
-            .Where(w => !w.State.IsDone)
-            .Select(w => RunWorkerAsync(goal, w.State, w.Dispatcher, staggerStarts ? w.Index : 0, runToken.Token))
-            .ToList();
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
         try
         {
@@ -1033,16 +1033,12 @@ public sealed class UltraTeamRun
         OnChanged();
 
         var systemPrompt = TeamPrompts.WorkerSystemPrompt(
-<<<<<<< HEAD
             state.Name,
             Workers.Select(w => w.Name).ToList(),
             _options.ClaimLifetime,
             dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName),
-            maxTeamSize: _options.AutoScale ? MaxWorkers : 0);
-=======
-            state.Name, Workers.Select(w => w.Name).ToList(), _options.ClaimLifetime,
-            dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName), _options.Orchestrated);
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
+            maxTeamSize: _options.AutoScale ? MaxWorkers : 0,
+            orchestrated: _options.Orchestrated);
         var loop = new HeadlessAgentLoop(
             _client,
             _options.WorkerModel ?? _model,

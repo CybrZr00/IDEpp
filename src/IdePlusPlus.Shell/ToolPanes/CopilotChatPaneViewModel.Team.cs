@@ -22,7 +22,6 @@ public sealed partial class CopilotChatPaneViewModel
 {
     public const string UltraWorkerCountSettingKey = "UltraWorkerCount";
     public const string UltraTimeBudgetSettingKey = "UltraTimeBudgetMinutes";
-<<<<<<< HEAD
     public const string UltraConcurrentRequestsSettingKey = "UltraMaxConcurrentRequests";
     public const string UltraRunUntilDoneSettingKey = "UltraRunUntilDone";
     public const string UltraMaxRunMinutesSettingKey = "UltraMaxRunMinutes";
@@ -30,7 +29,6 @@ public sealed partial class CopilotChatPaneViewModel
     public const string UltraAutoScaleSettingKey = "UltraAutoScale";
     public const string UltraStartWorkersSettingKey = "UltraStartWorkers";
     public const int DefaultUltraStartWorkers = 2;
-=======
     public const string UltraOrchestratedSettingKey = "UltraOrchestrated";
     public const string UltraOrchestratorModelSettingKey = "UltraOrchestratorModel";
     public const string UltraOrchestratorEffortSettingKey = "UltraOrchestratorEffort";
@@ -39,7 +37,6 @@ public sealed partial class CopilotChatPaneViewModel
     /// workers. Blank means the same as the chat's own.</summary>
     public const string SubAgentModelSettingKey = "SubAgentModel";
     public const string SubAgentEffortSettingKey = "SubAgentEffort";
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
     public const int DefaultUltraWorkerCount = 4;
     public const int MaxUltraWorkerCount = 64;
     public const int DefaultUltraConcurrentRequests = 16;
@@ -139,7 +136,6 @@ public sealed partial class CopilotChatPaneViewModel
             ? Math.Clamp(count, 1, MaxUltraWorkerCount)
             : DefaultUltraWorkerCount;
 
-<<<<<<< HEAD
     /// <summary>How many model requests a team may have in flight at once - its throttle on the
     /// provider, however many workers it has.</summary>
     public static int ReadUltraConcurrentRequests(AppSettingsStore settings) =>
@@ -180,7 +176,7 @@ public sealed partial class CopilotChatPaneViewModel
     private bool isUltraRunUntilDone;
 
     partial void OnIsUltraRunUntilDoneChanged(bool value) => _appSettingsStore.Set(UltraRunUntilDoneSettingKey, value.ToString());
-=======
+
     public static bool ReadUltraOrchestrated(AppSettingsStore settings) =>
         bool.TryParse(settings.Get(UltraOrchestratedSettingKey), out var orchestrated) && orchestrated;
 
@@ -204,7 +200,6 @@ public sealed partial class CopilotChatPaneViewModel
 
     public static ChatEffort ReadUltraOrchestratorEffort(AppSettingsStore settings) =>
         ReadEffortSetting(settings, UltraOrchestratorEffortSettingKey) ?? ChatEffort.High;
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
 
     public static int ReadUltraTimeBudgetMinutes(AppSettingsStore settings) =>
         int.TryParse(settings.Get(UltraTimeBudgetSettingKey), out var minutes)
@@ -318,18 +313,15 @@ public sealed partial class CopilotChatPaneViewModel
                     _currentConfiguration?.Invoke() ?? "Debug",
                     ChatEffort.Ultra)
                 {
-<<<<<<< HEAD
                     MaxConcurrentModelRequests = ReadUltraConcurrentRequests(_appSettingsStore),
                     MaxTokens = runUntilDone ? ReadUltraMaxTokensMillions(_appSettingsStore) * 1_000_000L : 0,
                     AutoScale = ReadUltraAutoScale(_appSettingsStore),
                     InitialWorkerCount = ReadUltraStartWorkers(_appSettingsStore),
-=======
                     Orchestrated = ReadUltraOrchestrated(_appSettingsStore),
                     WorkerModel = ReadSubAgentModel(_appSettingsStore),
                     WorkerEffort = ReadSubAgentEffort(_appSettingsStore),
                     OrchestratorModel = ReadUltraOrchestratorModel(_appSettingsStore),
                     OrchestratorEffort = ReadUltraOrchestratorEffort(_appSettingsStore),
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
                 };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();

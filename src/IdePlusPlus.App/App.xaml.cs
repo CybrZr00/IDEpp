@@ -152,22 +152,11 @@ public partial class App : Application
             (command, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmTeamShellCommand(mainWindow, command, reason)));
         copilotChatPane.WebFetchApprovalPrompt =
             (url, reason) => dispatcher.Invoke(() => Task.FromResult(ConfirmWebFetch(mainWindow, url, reason)));
-<<<<<<< HEAD
-        copilotChatPane.NewConversationConfirmation = warning =>
-            MessageBox.Show(
-                mainWindow,
-                warning,
-                "IDE++ - new conversation",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question,
-                MessageBoxResult.No) == MessageBoxResult.Yes;
-        copilotChatPane.LaterTeamBranchPrompt = (chosen, later, laterCommits) => ConfirmUltraStartFrom(mainWindow, chosen, later, laterCommits);
-=======
         copilotChatPane.ReverseEngineeringApprovalPrompt =
             path => dispatcher.Invoke(() => Task.FromResult(ConfirmReverseEngineering(mainWindow, path)));
         copilotChatPane.NewConversationConfirmation = (warning, canAcceptAll) =>
             ConfirmNewConversation(mainWindow, warning, canAcceptAll);
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
+        copilotChatPane.LaterTeamBranchPrompt = (chosen, later, laterCommits) => ConfirmUltraStartFrom(mainWindow, chosen, later, laterCommits);
 
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.

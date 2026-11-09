@@ -27,12 +27,8 @@ public static class TeamPrompts
     /// <param name="maxTeamSize">In auto mode, how big the team may grow - and so whether the prompt
     /// explains team_request_help at all; 0 when the team is fixed.</param>
     public static string WorkerSystemPrompt(
-<<<<<<< HEAD
-        string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled, int maxTeamSize = 0)
-=======
         string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled,
-        bool orchestrated = false)
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
+        int maxTeamSize = 0, bool orchestrated = false)
     {
         var peers = string.Join(", ", team.Where(n => n != workerName));
         var leadership = orchestrated

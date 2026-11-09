@@ -58,15 +58,10 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
     {
         var worker = WorkerName().Match(messages[0].Content) is { Success: true } match ? match.Groups[1].Value : "?";
         Requests.Enqueue((worker, [.. messages]));
-<<<<<<< HEAD
+        Models.Enqueue((worker, model, effort));
         var inFlight = Interlocked.Increment(ref _inFlight);
         int max;
         while (inFlight > (max = Volatile.Read(ref _maxInFlight)) && Interlocked.CompareExchange(ref _maxInFlight, inFlight, max) != max)
-=======
-        Models.Enqueue((worker, model, effort));
-
-        if (DelayPerReply > TimeSpan.Zero)
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
         {
         }
 
@@ -96,13 +91,9 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
         }
     }
 
-<<<<<<< HEAD
     /// <summary>The usage reported after every reply.</summary>
     public (int Prompt, int Completion) UsagePerReply { get; set; } = (100, 10);
 
-    [GeneratedRegex(@"^You are (w\d+),")]
-=======
     [GeneratedRegex(@"^You are (w\d+|lead),")]
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
     private static partial Regex WorkerName();
 }

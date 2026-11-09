@@ -96,7 +96,6 @@
                 <TextBlock Text="Time budget (minutes, 5-240):" VerticalAlignment="Center" Margin="16,0,6,0" />
                 <TextBox Text="{Binding UltraTimeBudgetMinutes, UpdateSourceTrigger=PropertyChanged}" Width="50" />
             </StackPanel>
-<<<<<<< HEAD
             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                 <CheckBox Content="Auto mode - start with" IsChecked="{Binding UltraAutoScale}" VerticalAlignment="Center" Margin="0,0,6,0"
                           ToolTip="The team starts small and its workers ask for more when the work left won't fit the time left. The runner grants at most 2 at a time, spaced out, up to the worker count above - and not when too little time, token budget or disk space is left." />
@@ -114,7 +113,7 @@
                 <TextBlock Text="or (million tokens, 0 = no limit):" VerticalAlignment="Center" Margin="16,0,6,0" />
                 <TextBox Text="{Binding UltraMaxTokensMillions, UpdateSourceTrigger=PropertyChanged}" Width="50"
                          ToolTip="The whole team's prompt plus completion tokens. At 90% the workers are told to finish and merge what they are on." />
-=======
+            </StackPanel>
             <CheckBox Content="Orchestrated - a lead plans the work, checks in on the team and reviews each merge"
                       IsChecked="{Binding UltraOrchestrated}"
                       Margin="0,0,0,4"
@@ -126,7 +125,6 @@
                 <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
                 <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraOrchestratorEffort}" Width="90"
                           ToolTip="Default is High." />
->>>>>>> f372e63c3d88d2e953712fee118c2282b9d6faa1
             </StackPanel>
             <Button Content="Save Ultra Settings" Command="{Binding SaveUltraSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
