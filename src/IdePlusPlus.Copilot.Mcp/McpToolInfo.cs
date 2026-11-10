@@ -9,7 +9,7 @@ namespace IdePlusPlus.Copilot.Mcp;
 /// </summary>
 public sealed record McpToolInfo(string ServerName, string Name, string? Description, JsonNode InputSchema)
 {
-    public string QualifiedName => $"{ServerName}__{Name}";
+    public string QualifiedName => Core.ToolNames.Sanitize($"{ServerName}__{Name}");
 }
 
 public sealed record McpToolCallResult(bool IsError, string Text);

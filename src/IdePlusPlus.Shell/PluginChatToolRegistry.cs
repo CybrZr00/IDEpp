@@ -9,7 +9,7 @@ public sealed record PluginChatToolRegistration(string PluginName, PluginToolDef
     /// <summary>The name the tool is exposed to the chat assistant under - mirrors
     /// <c>McpToolInfo.QualifiedName</c>'s <c>"{ServerName}__{Name}"</c> convention so a plugin tool
     /// can never collide with an MCP tool or another plugin's tool of the same short name.</summary>
-    public string QualifiedName => $"plugin__{PluginName}__{Definition.Name}";
+    public string QualifiedName => Copilot.Core.ToolNames.Sanitize($"plugin__{PluginName}__{Definition.Name}");
 }
 
 /// <summary>
