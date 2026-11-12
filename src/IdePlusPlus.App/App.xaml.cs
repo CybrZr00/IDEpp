@@ -158,6 +158,7 @@ public partial class App : Application
         copilotChatPane.NewConversationConfirmation = (warning, canAcceptAll) =>
             ConfirmNewConversation(mainWindow, warning, canAcceptAll);
         copilotChatPane.LaterTeamBranchPrompt = (chosen, later, laterCommits) => ConfirmUltraStartFrom(mainWindow, chosen, later, laterCommits);
+        copilotChatPane.UltraBuildFailedPrompt = report => ConfirmUltraBuildFailed(mainWindow, report);
 
         // Priming the SDK's template cache on a machine that has never run `dotnet new` takes a
         // second or two and is otherwise invisible, so it says so in the Output pane.
@@ -335,6 +336,38 @@ public partial class App : Application
             MessageBoxResult.Yes => UltraStartChoice.StartFromLater,
             MessageBoxResult.No => UltraStartChoice.StartFromChosen,
             _ => UltraStartChoice.Cancel,
+        };
+    }
+
+    /// <summary>
+    /// Asked when an Ultra message is sent and the solution does not build. Yes, the default, has the
+    /// copilot fix the build first - a team can only merge work that builds, and in Plan Mode the plan is
+    /// the expensive part. The start of the report is shown so the question is about something real.
+    /// </summary>
+    private static UltraBuildChoice ConfirmUltraBuildFailed(Window owner, string report)
+    {
+        var newLine = Environment.NewLine;
+        var lines = report.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).ToList();
+        var shown = string.Join(newLine, lines.Take(8).Select(line => line.Length <= 200 ? line : line[..200] + "..."));
+        if (lines.Count > 8)
+        {
+            shown += $"{newLine}... ({lines.Count - 8} more line(s) in the build report)";
+        }
+
+        return MessageBox.Show(
+                owner,
+                "The solution doesn't build as it stands. An Ultra team merges only work that builds, so it "
+                + $"can't get anywhere on it - and a plan made now would be wasted.{newLine}{newLine}{shown}{newLine}{newLine}"
+                + $"Yes - have the copilot fix the build first (your message is kept for after){newLine}"
+                + $"No - go ahead anyway{newLine}Cancel - don't start",
+                "IDE++ - the solution doesn't build",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Warning,
+                MessageBoxResult.Yes) switch
+        {
+            MessageBoxResult.Yes => UltraBuildChoice.FixFirst,
+            MessageBoxResult.No => UltraBuildChoice.Continue,
+            _ => UltraBuildChoice.Cancel,
         };
     }
 

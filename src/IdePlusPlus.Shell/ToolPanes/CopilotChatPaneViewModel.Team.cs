@@ -446,7 +446,7 @@ public sealed partial class CopilotChatPaneViewModel
         {
             card?.Abandon("Didn't start - the solution doesn't build.");
             assistantMessage.Text = $"**Ultra team** - didn't start. {ex.Message} No workers were started and "
-                                    + $"nothing was spent on them.\n\n```\n{ex.Report}\n```";
+                                    + $"nothing was spent on them.{DescribeWhyTheCopyMayNotBuild(ex)}\n\n```\n{ex.Report}\n```";
         }
         catch (UltraTeamDiskSpaceException ex)
         {
@@ -485,6 +485,27 @@ public sealed partial class CopilotChatPaneViewModel
             StatusMessage = $"{fallbackReason}, so this was answered by a single agent at High effort.";
             await RunAssistantTurnsAsync(fallbackHistory, assistantMessage, fallbackContextQuery);
         }
+    }
+
+    /// <summary>
+    /// The team builds its own copy of the working tree, so "doesn't build" can mean the copy and not
+    /// the solution: a build that passes in the user's tree fails there when it needs something the copy
+    /// lacks. Said after the failure, with the projects outside the repository that could not be linked
+    /// in when there are any, since that is the usual cause and the build report alone does not point at it.
+    /// </summary>
+    internal static string DescribeWhyTheCopyMayNotBuild(UltraTeamPreflightException failure)
+    {
+        var text = new StringBuilder(
+            "\n\nIf it builds in your own tree, the failure is in the team's copy of it: the team builds your "
+            + "working tree as git sees it, without git-ignored files (generated sources, local config), and "
+            + "with projects from outside the repository only where they could be linked in.");
+        if (failure.NotMirrored.Count > 0)
+        {
+            text.Append("\nThese could not be linked in:\n");
+            text.Append(string.Join("\n", failure.NotMirrored.Select(path => $"- {path}")));
+        }
+
+        return text.ToString();
     }
 
     /// <summary>

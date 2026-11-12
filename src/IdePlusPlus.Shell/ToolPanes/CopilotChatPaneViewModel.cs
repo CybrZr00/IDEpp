@@ -548,6 +548,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _solutionPath = solutionPath;
         _solutionDirectory = directory;
         _unreadableHistoryDirectory = null;
+        _ultraBuildVerifiedAt = null;
 
         // Cleared rather than just reloaded: a solution with no index file of its own must end up
         // with no index, not the previous solution's.
@@ -886,6 +887,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
 
         StatusMessage = null;
+
+        // Before the message is added to the conversation or any tokens are spent: a team (and a plan
+        // for one) is wasted on a solution that does not build. See EnsureBuildsBeforeUltraAsync.
+        if (SelectedEffort == ChatEffort.Ultra && !await EnsureBuildsBeforeUltraAsync(userText))
+        {
+            return;
+        }
+
         _lastUserRequestText = userText;
 
         var userMessage = new ChatMessageViewModel(ChatRole.User) { Text = userText };
@@ -1192,7 +1201,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             ChatRole.System,
             string.IsNullOrWhiteSpace(systemPrompt) ? DefaultSystemPrompt : systemPrompt));
 
-        if (IsPlanMode)
+        if (PlanToolsActive)
         {
             history.Insert(0, new ChatMessage(
                 ChatRole.System,
@@ -1319,7 +1328,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
                 // A model without tool calling can only show code. When a reply made no call at all
                 // but contains code that can be placed exactly, offer it as a normal reviewable edit.
-                if (result.Calls.Count == 0 && result.EditProposals.Count == 0 && !result.ProducedPlanProposal && !IsPlanMode)
+                if (result.Calls.Count == 0 && result.EditProposals.Count == 0 && !result.ProducedPlanProposal && !PlanToolsActive)
                 {
                     _dispatcher.Invoke(() => ProposeEditsFromReplyText(assistantMessage.Text));
                 }
@@ -1770,9 +1779,27 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private async Task<(bool IsError, string Text)> RunBuildAsync(
         string? project, CancellationToken cancellationToken)
     {
+        var outcome = await BuildCoreAsync(project, cancellationToken);
+        return (outcome.NotRun, outcome.Report);
+    }
+
+    /// <summary>
+    /// What a build came to. <see cref="ExitCode"/> is null when no build ran to completion (nothing to
+    /// build, a refusal, one already running, a timeout), and <see cref="Report"/> then says why - so
+    /// "the build failed" and "the build could not be checked" stay different things.
+    /// </summary>
+    private sealed record BuildOutcome(int? ExitCode, string Report)
+    {
+        public bool NotRun => ExitCode is null;
+
+        public bool Succeeded => ExitCode == 0;
+    }
+
+    private async Task<BuildOutcome> BuildCoreAsync(string? project, CancellationToken cancellationToken)
+    {
         if (_solutionDirectory is null || _solutionPath is null)
         {
-            return (true, "No solution is open, so there is nothing to build.");
+            return new BuildOutcome(null, "No solution is open, so there is nothing to build.");
         }
 
         var target = _solutionPath;
@@ -1780,12 +1807,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         {
             if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, project) is not { } projectPath)
             {
-                return (true, $"Refused: '{project}' resolves outside the open solution directory.");
+                return new BuildOutcome(null, $"Refused: '{project}' resolves outside the open solution directory.");
             }
 
             if (!File.Exists(projectPath))
             {
-                return (true, $"Project not found: {project}");
+                return new BuildOutcome(null, $"Project not found: {project}");
             }
 
             target = projectPath;
@@ -1793,7 +1820,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         if (_buildService.IsRunning)
         {
-            return (true, "A build is already running - wait for it to finish before starting another.");
+            return new BuildOutcome(null, "A build is already running - wait for it to finish before starting another.");
         }
 
         var saved = _dispatcher.Invoke(_editApplicationService.SaveDirtyDocuments);
@@ -1816,14 +1843,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return (true, $"The build was still running after {BuildTimeout.TotalMinutes:0} minutes and was stopped.");
+            return new BuildOutcome(null, $"The build was still running after {BuildTimeout.TotalMinutes:0} minutes and was stopped.");
         }
         catch (InvalidOperationException ex)
         {
-            return (true, ex.Message);
+            return new BuildOutcome(null, ex.Message);
         }
 
-        return (false, ToolReports.FormatBuildReport(exitCode, configuration, saved, outputLines));
+        return new BuildOutcome(exitCode, ToolReports.FormatBuildReport(exitCode, configuration, saved, outputLines));
     }
 
     /// <summary>
@@ -2527,7 +2554,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var routeByIndex = new Dictionary<int, ToolCallRoute>();
         var reportedError = false;
 
-        var tools = new List<ToolDefinition> { IsPlanMode ? ProposePlanTool.Definition : ProposeEditTool.Definition };
+        var tools = new List<ToolDefinition> { PlanToolsActive ? ProposePlanTool.Definition : ProposeEditTool.Definition };
         tools.AddRange(BuiltInTools.All);
         if (AreShellCommandsEnabled)
         {

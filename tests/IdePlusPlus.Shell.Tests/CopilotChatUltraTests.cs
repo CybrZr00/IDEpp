@@ -382,6 +382,93 @@ public sealed class CopilotChatUltraTests : IDisposable
         CopilotChatPaneViewModel.ComposeTeamGoal("Alone.", []).ShouldBe("Alone.");
     }
 
+    // --- The build check before an Ultra message ---
+
+    private void BreakTheBuild() =>
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs"), "public class Class1 { public int Value => ; }");
+
+    [Fact]
+    public void AnUltraMessage_OnASolutionThatDoesNotBuild_IsAskedAboutFirst_AndCancelKeepsTheMessageAndSpendsNothing() => RunOnUiThread(async () =>
+    {
+        BreakTheBuild();
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        string? reported = null;
+        viewModel.UltraBuildFailedPrompt = report =>
+        {
+            reported = report;
+            return UltraBuildChoice.Cancel;
+        };
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        reported.ShouldNotBeNull().ShouldContain("Build FAILED");
+        viewModel.Messages.ShouldBeEmpty();
+        viewModel.InputText.ShouldBe("Make Class1.Value return 2.");
+        viewModel.StatusMessage.ShouldNotBeNull().ShouldContain("Ultra not started");
+        viewModel.IsStreaming.ShouldBeFalse();
+        _http.FirstRequestBody.ShouldBeEmpty("no model should have been called");
+    });
+
+    [Fact]
+    public void AnUltraMessage_InPlanMode_OnASolutionThatDoesNotBuild_CanFixTheBuildFirst_WithEditsAvailable() => RunOnUiThread(async () =>
+    {
+        BreakTheBuild();
+        _http.Script = _ => Text("I will fix it.");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.IsPlanMode = true;
+        viewModel.UltraBuildFailedPrompt = _ => UltraBuildChoice.FixFirst;
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldBeEmpty();
+        viewModel.Messages.OfType<ChatMessageViewModel>().First().Text.ShouldBe("Fix the build before the Ultra run");
+
+        // Plan Mode would hand this turn propose_plan and no way to edit, which is no use for fixing.
+        _http.FirstRequestBody.ShouldContain("Fix the build errors first");
+        _http.FirstRequestBody.ShouldContain(ProposeEditTool.ToolName);
+        _http.FirstRequestBody.ShouldNotContain(ProposePlanTool.ToolName);
+
+        // The message waits in the input box for after the fix, and Plan Mode is still on for it.
+        viewModel.InputText.ShouldBe("Make Class1.Value return 2.");
+        viewModel.IsPlanMode.ShouldBeTrue();
+        viewModel.IsStreaming.ShouldBeFalse();
+    });
+
+    [Fact]
+    public void AnUltraMessage_OnASolutionThatBuilds_IsNotAskedAboutAnything_AndTheTeamRuns() => RunOnUiThread(async () =>
+    {
+        _http.Script = _ => ToolCall(TeamTools.DoneToolName, new { summary = "nothing to do" });
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.UltraBuildFailedPrompt = _ => throw new InvalidOperationException("the solution builds, so nobody should be asked");
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem();
+    });
+
+    [Fact]
+    public void AnUltraMessage_WhenTheUserGoesAheadAnyway_StartsTheTeam() => RunOnUiThread(async () =>
+    {
+        BreakTheBuild();
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.UltraBuildFailedPrompt = _ => UltraBuildChoice.Continue;
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        // The team's own preflight build then refuses it, with the copy-versus-tree explanation.
+        var text = viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text;
+        text.ShouldContain("**Ultra team** - didn't start");
+        text.ShouldContain("If it builds in your own tree");
+    });
+
     private CopilotChatPaneViewModel CreateViewModel(int workers, string? solutionPath = null, string? solutionDirectory = null)
     {
         SolutionLoader.EnsureMSBuildRegistered();
