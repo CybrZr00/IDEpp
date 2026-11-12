@@ -1,7 +1,9 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="IdePlusPlus.Copilot.Anthropic/IdePlusPlus.Copilot.Anthropic.csproj" Id="c51fdf88-65b6-4009-9631-906af39e88a8" />
     <Project Path="src/IdePlusPlus.App/IdePlusPlus.App.csproj" />
     <Project Path="src/IdePlusPlus.Build/IdePlusPlus.Build.csproj" />
+    <Project Path="src/IdePlusPlus.Connections/IdePlusPlus.Connections.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Core/IdePlusPlus.Copilot.Core.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.DeepSeek/IdePlusPlus.Copilot.DeepSeek.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Diff/IdePlusPlus.Copilot.Diff.csproj" />
@@ -10,7 +12,6 @@
     <Project Path="src/IdePlusPlus.Copilot.Mcp/IdePlusPlus.Copilot.Mcp.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.Memory/IdePlusPlus.Copilot.Memory.csproj" />
     <Project Path="src/IdePlusPlus.Copilot.OpenRouter/IdePlusPlus.Copilot.OpenRouter.csproj" />
-    <Project Path="src/IdePlusPlus.Connections/IdePlusPlus.Connections.csproj" />
     <Project Path="src/IdePlusPlus.Debug/IdePlusPlus.Debug.csproj" />
     <Project Path="src/IdePlusPlus.Editor/IdePlusPlus.Editor.csproj" />
     <Project Path="src/IdePlusPlus.Infrastructure/IdePlusPlus.Infrastructure.csproj" />
@@ -29,17 +30,17 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/IdePlusPlus.Build.Tests/IdePlusPlus.Build.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.Core.Tests/IdePlusPlus.Copilot.Core.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.Diff.Tests/IdePlusPlus.Copilot.Diff.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Editor.Tests/IdePlusPlus.Editor.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.LmStudio.Tests/IdePlusPlus.Copilot.LmStudio.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.Memory.Tests/IdePlusPlus.Copilot.Memory.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.DeepSeek.Tests/IdePlusPlus.Copilot.DeepSeek.Tests.csproj" />
-    <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Connections.Tests/IdePlusPlus.Connections.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.Core.Tests/IdePlusPlus.Copilot.Core.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.DeepSeek.Tests/IdePlusPlus.Copilot.DeepSeek.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.Diff.Tests/IdePlusPlus.Copilot.Diff.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.Embeddings.Tests/IdePlusPlus.Copilot.Embeddings.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.LmStudio.Tests/IdePlusPlus.Copilot.LmStudio.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.Mcp.Tests/IdePlusPlus.Copilot.Mcp.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.Memory.Tests/IdePlusPlus.Copilot.Memory.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Copilot.OpenRouter.Tests/IdePlusPlus.Copilot.OpenRouter.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Debug.Tests/IdePlusPlus.Debug.Tests.csproj" />
+    <Project Path="tests/IdePlusPlus.Editor.Tests/IdePlusPlus.Editor.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.Infrastructure.Tests/IdePlusPlus.Infrastructure.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.NuGet.Tests/IdePlusPlus.NuGet.Tests.csproj" />
     <Project Path="tests/IdePlusPlus.ProjectSystem.Tests/IdePlusPlus.ProjectSystem.Tests.csproj" />
