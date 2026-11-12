@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows.Threading;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Diff;
@@ -404,6 +405,7 @@ public sealed class CopilotChatUltraTests : IDisposable
             new OpenRouterChatClient(httpClient, secrets),
             new LmStudioChatClient(httpClient, appSettings, secrets),
             new DeepSeekChatClient(httpClient, secrets),
+            new AnthropicChatClient(httpClient, secrets),
             appSettings,
             editService,
             new ProjectMemoryStore(),

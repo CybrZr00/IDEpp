@@ -13,6 +13,7 @@ using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.Memory;
+using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Connections;
 using IdePlusPlus.Debug;
@@ -444,6 +445,7 @@ public partial class App : Application
         services.AddSingleton(sp => new LmStudioChatClient(
             modelHttpClient, sp.GetRequiredService<AppSettingsStore>(), sp.GetRequiredService<SecureSettingsStore>()));
         services.AddSingleton(sp => new DeepSeekChatClient(modelHttpClient, sp.GetRequiredService<SecureSettingsStore>()));
+        services.AddSingleton(sp => new AnthropicChatClient(modelHttpClient, sp.GetRequiredService<SecureSettingsStore>()));
         services.AddSingleton<McpServerConfigStore>();
         services.AddSingleton<McpProjectTrustStore>();
         services.AddSingleton<HookService>();

@@ -1,3 +1,4 @@
+using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.LmStudio;
@@ -44,6 +45,7 @@ public sealed class ScheduledAutomationService : IDisposable
     private readonly OpenRouterChatClient _openRouterClient;
     private readonly LmStudioChatClient _lmStudioClient;
     private readonly DeepSeekChatClient _deepSeekClient;
+    private readonly AnthropicChatClient _anthropicClient;
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
     private readonly Timer _timer;
 
@@ -69,6 +71,7 @@ public sealed class ScheduledAutomationService : IDisposable
         OpenRouterChatClient openRouterClient,
         LmStudioChatClient lmStudioClient,
         DeepSeekChatClient deepSeekClient,
+        AnthropicChatClient anthropicClient,
         ReadOnlyToolDispatcher readOnlyToolDispatcher)
     {
         _appSettingsStore = appSettingsStore;
@@ -76,6 +79,7 @@ public sealed class ScheduledAutomationService : IDisposable
         _openRouterClient = openRouterClient;
         _lmStudioClient = lmStudioClient;
         _deepSeekClient = deepSeekClient;
+        _anthropicClient = anthropicClient;
         _readOnlyToolDispatcher = readOnlyToolDispatcher;
         _timer = new Timer(_ => _ = TickAsync(), null, TickInterval, TickInterval);
     }
@@ -202,6 +206,7 @@ public sealed class ScheduledAutomationService : IDisposable
         {
             CopilotChatPaneViewModel.ProviderLmStudio => _lmStudioClient,
             CopilotChatPaneViewModel.ProviderDeepSeek => _deepSeekClient,
+            CopilotChatPaneViewModel.ProviderAnthropic => _anthropicClient,
             _ => _openRouterClient,
         };
         var loop = new HeadlessAgentLoop(

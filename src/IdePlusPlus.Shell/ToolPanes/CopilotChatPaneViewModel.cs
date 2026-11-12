@@ -8,6 +8,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Build;
+using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Diff;
@@ -40,11 +41,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     public const string ProviderOpenRouter = "OpenRouter";
     public const string ProviderLmStudio = "LM Studio";
     public const string ProviderDeepSeek = "DeepSeek";
+    public const string ProviderAnthropic = "Anthropic";
+
+    /// <summary>Every provider, in picker order - also offered by Settings for the Ultra lead and
+    /// sub-agents, which may run on a different provider from the chat.</summary>
+    public static IReadOnlyList<string> AllProviders { get; } =
+        [ProviderOpenRouter, ProviderAnthropic, ProviderLmStudio, ProviderDeepSeek];
 
     private const string ProviderSettingKey = "ChatProvider";
     private const string OpenRouterModelSettingKey = "OpenRouterChatModel";
     private const string LmStudioModelSettingKey = "LmStudioChatModel";
     private const string DeepSeekModelSettingKey = "DeepSeekChatModel";
+    private const string AnthropicModelSettingKey = "AnthropicChatModel";
     private const string EffortSettingKey = "ChatEffort";
     private const string AutoModeSettingKey = "ChatAutoMode";
     private const string CloseReviewTabsSettingKey = "ChatCloseReviewTabs";
@@ -176,6 +184,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private readonly OpenRouterChatClient _openRouterClient;
     private readonly LmStudioChatClient _lmStudioClient;
     private readonly DeepSeekChatClient _deepSeekClient;
+    private readonly AnthropicChatClient _anthropicClient;
     private readonly AppSettingsStore _appSettingsStore;
     private readonly EditApplicationService _editApplicationService;
     private readonly ProjectMemoryStore _projectMemoryStore;
@@ -257,6 +266,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         OpenRouterChatClient openRouterClient,
         LmStudioChatClient lmStudioClient,
         DeepSeekChatClient deepSeekClient,
+        AnthropicChatClient anthropicClient,
         AppSettingsStore appSettingsStore,
         EditApplicationService editApplicationService,
         ProjectMemoryStore projectMemoryStore,
@@ -280,6 +290,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         _openRouterClient = openRouterClient;
         _lmStudioClient = lmStudioClient;
         _deepSeekClient = deepSeekClient;
+        _anthropicClient = anthropicClient;
         _appSettingsStore = appSettingsStore;
         _editApplicationService = editApplicationService;
         _workspaceFileReader = workspaceFileReader;
@@ -359,14 +370,18 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// longer existed on OpenRouter at all, so picking it could only fail).</summary>
     public ObservableCollection<string> AvailableModels { get; }
 
-    public IReadOnlyList<string> AvailableProviders { get; } = [ProviderOpenRouter, ProviderLmStudio, ProviderDeepSeek];
+    public IReadOnlyList<string> AvailableProviders { get; } = AllProviders;
 
-    /// <summary>The chat client for the selected provider - the one place that maps a provider name to
-    /// a client, so a new provider cannot be wired into some calls and not others.</summary>
-    private IChatClient CurrentChatClient => SelectedProvider switch
+    /// <summary>The chat client for the selected provider.</summary>
+    private IChatClient CurrentChatClient => ClientFor(SelectedProvider);
+
+    /// <summary>The one place that maps a provider name to a client, so a new provider cannot be
+    /// wired into some calls and not others. Unknown names get OpenRouter, the default provider.</summary>
+    private IChatClient ClientFor(string? provider) => provider switch
     {
         ProviderLmStudio => _lmStudioClient,
         ProviderDeepSeek => _deepSeekClient,
+        ProviderAnthropic => _anthropicClient,
         _ => _openRouterClient,
     };
 
@@ -3262,6 +3277,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         ProviderLmStudio => LmStudioModelSettingKey,
         ProviderDeepSeek => DeepSeekModelSettingKey,
+        ProviderAnthropic => AnthropicModelSettingKey,
         _ => OpenRouterModelSettingKey,
     };
 
@@ -3269,6 +3285,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     {
         ProviderLmStudio => "",
         ProviderDeepSeek => DeepSeekChatClient.DefaultModel,
+        ProviderAnthropic => AnthropicChatClient.DefaultModel,
         _ => "anthropic/claude-sonnet-4.5",
     };
 
@@ -3293,6 +3310,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             {
                 ProviderLmStudio => await _lmStudioClient.GetAvailableModelsAsync(),
                 ProviderDeepSeek => await _deepSeekClient.GetAvailableModelsAsync(),
+                ProviderAnthropic => await _anthropicClient.GetAvailableModelsAsync(),
                 _ => await _openRouterClient.GetAvailableModelsAsync(),
             };
 
@@ -3310,6 +3328,8 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     ProviderLmStudio => "Couldn't reach LM Studio - check the base URL in Tools > Settings and that it's running.",
                     ProviderDeepSeek => "Couldn't fetch DeepSeek's model list - check the DeepSeek API key in Tools > Settings. "
                                         + "You can still type a model id directly.",
+                    ProviderAnthropic => "Couldn't fetch Anthropic's model list - check the Anthropic API key in Tools > Settings. "
+                                         + "You can still type a model id directly.",
                     _ => "Couldn't fetch the model list from OpenRouter - you can still type a model id directly.",
                 };
                 return;
