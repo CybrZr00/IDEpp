@@ -2445,11 +2445,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
         // Read once: the sub-agents run on the thread pool and outlive any single check of the field.
         var solutionDirectory = _solutionDirectory;
-        IChatClient client = CurrentChatClient;
 
-        // Their own model and effort when configured (Settings > Sub-agents); investigations are
-        // often well served by something cheaper and faster than the chat's own.
-        var subAgentModel = ReadSubAgentModel(_appSettingsStore) ?? SelectedModel;
+        // Their own provider, model and effort when configured (Settings > Sub-agents); investigations
+        // are often well served by something cheaper and faster than the chat's own.
+        var (_, client, subAgentModel) = ResolveRole(ReadSubAgentProvider(_appSettingsStore), ReadSubAgentModel(_appSettingsStore));
         var subAgentEffort = ReadSubAgentEffort(_appSettingsStore) ?? SelectedEffort;
         using var concurrencyLimit = new SemaphoreSlim(SubAgentTools.MaxConcurrency);
 
@@ -3271,6 +3270,16 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         }
     }
 
+    /// <summary>A provider's model ids (null: the chat's provider) - empty when it can't be reached.
+    /// Also how Settings fills the lead's and sub-agents' model pickers.</summary>
+    internal async Task<IReadOnlyList<string>> FetchModelsAsync(string? provider) => (provider ?? SelectedProvider) switch
+    {
+        ProviderLmStudio => await _lmStudioClient.GetAvailableModelsAsync(),
+        ProviderDeepSeek => await _deepSeekClient.GetAvailableModelsAsync(),
+        ProviderAnthropic => await _anthropicClient.GetAvailableModelsAsync(),
+        _ => await _openRouterClient.GetAvailableModelsAsync(),
+    };
+
     private string? ModelSettingFor(string provider) => _appSettingsStore.Get(ModelSettingKeyFor(provider));
 
     private static string ModelSettingKeyFor(string provider) => provider switch
@@ -3306,13 +3315,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         IsRefreshingModels = true;
         try
         {
-            var models = provider switch
-            {
-                ProviderLmStudio => await _lmStudioClient.GetAvailableModelsAsync(),
-                ProviderDeepSeek => await _deepSeekClient.GetAvailableModelsAsync(),
-                ProviderAnthropic => await _anthropicClient.GetAvailableModelsAsync(),
-                _ => await _openRouterClient.GetAvailableModelsAsync(),
-            };
+            var models = await FetchModelsAsync(provider);
 
             // The user can switch providers while a fetch is in flight; dropping the stale result
             // avoids briefly showing (or auto-selecting) the other provider's models.

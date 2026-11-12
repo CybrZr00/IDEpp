@@ -382,4 +382,20 @@ public sealed class SubAgentSettingTests : IDisposable
 
         IdePlusPlus.Shell.ToolPanes.CopilotChatPaneViewModel.ReadSubAgentModel(store).ShouldBeNull();
     }
+
+    [Theory]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("nonsense", null)]
+    [InlineData("anthropic", "Anthropic")]
+    [InlineData(" DeepSeek ", "DeepSeek")]
+    public void AProviderSetting_IsAKnownProvider_OrNullForTheChatsOwn(string stored, string? expected)
+    {
+        var store = Store(
+            (IdePlusPlus.Shell.ToolPanes.CopilotChatPaneViewModel.SubAgentProviderSettingKey, stored),
+            (IdePlusPlus.Shell.ToolPanes.CopilotChatPaneViewModel.UltraOrchestratorProviderSettingKey, stored));
+
+        IdePlusPlus.Shell.ToolPanes.CopilotChatPaneViewModel.ReadSubAgentProvider(store).ShouldBe(expected);
+        IdePlusPlus.Shell.ToolPanes.CopilotChatPaneViewModel.ReadUltraOrchestratorProvider(store).ShouldBe(expected);
+    }
 }

@@ -94,11 +94,17 @@ public sealed record UltraTeamOptions(
     /// the workers', and serialises merges behind its review.</summary>
     public bool Orchestrated { get; init; }
 
+    /// <summary>The client (provider) workers use, when it should differ from the run's own. Null: the same.</summary>
+    public IChatClient? WorkerClient { get; init; }
+
     /// <summary>The model workers use, when it should differ from the run's own. Null: the same.</summary>
     public string? WorkerModel { get; init; }
 
     /// <summary>The effort workers use, when it should differ from <see cref="Effort"/>. Null: the same.</summary>
     public ChatEffort? WorkerEffort { get; init; }
+
+    /// <summary>The lead's client (provider). Null: the run's own.</summary>
+    public IChatClient? OrchestratorClient { get; init; }
 
     /// <summary>The lead's model. Null: the run's own.</summary>
     public string? OrchestratorModel { get; init; }
@@ -185,7 +191,8 @@ public sealed class UltraTeamRun
     private const string UnfinishedWorkCommitMessage =
         "Uncommitted work when the Ultra run ended - kept so it is not lost; unverified";
 
-    private readonly IChatClient _client;
+    private readonly IChatClient _workerClient;
+    private readonly IChatClient _orchestratorClient;
     private readonly string _model;
     private readonly UltraTeamOptions _options;
     private readonly ReadOnlyToolDispatcher _readOnlyTools;
@@ -255,7 +262,14 @@ public sealed class UltraTeamRun
         Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand,
         Func<CancellationToken, Task<bool>>? askToContinue = null)
     {
-        _client = new UsageCountingChatClient(new ThrottlingChatClient(client, options, time), this);
+        // One throttle per provider: each has its own rate limits, and the run's usage counts them all.
+        var wrapped = new Dictionary<IChatClient, IChatClient>(ReferenceEqualityComparer.Instance);
+        IChatClient Wrap(IChatClient inner) =>
+            wrapped.TryGetValue(inner, out var existing)
+                ? existing
+                : wrapped[inner] = new UsageCountingChatClient(new ThrottlingChatClient(inner, options, time), this);
+        _workerClient = Wrap(options.WorkerClient ?? client);
+        _orchestratorClient = Wrap(options.OrchestratorClient ?? client);
         _askToContinue = askToContinue;
         _model = model;
         _options = options;
@@ -442,7 +456,7 @@ public sealed class UltraTeamRun
         if (_options.Orchestrated)
         {
             _orchestrator = new UltraOrchestrator(
-                _client,
+                _orchestratorClient,
                 _options.OrchestratorModel ?? _model,
                 _options.OrchestratorEffort,
                 _readOnlyTools,
@@ -1040,7 +1054,7 @@ public sealed class UltraTeamRun
             maxTeamSize: _options.AutoScale ? MaxWorkers : 0,
             orchestrated: _options.Orchestrated);
         var loop = new HeadlessAgentLoop(
-            _client,
+            _workerClient,
             _options.WorkerModel ?? _model,
             _options.WorkerEffort ?? _options.Effort,
             dispatcher.Tools,

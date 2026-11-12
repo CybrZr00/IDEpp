@@ -10,6 +10,10 @@
         Background="{DynamicResource WindowBackgroundBrush}"
         TextElement.Foreground="{DynamicResource WindowForegroundBrush}">
 
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="SettingsBoolToVisibility" />
+    </Window.Resources>
+
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="16">
             <TextBlock Text="Copilot" FontWeight="Bold" Margin="0,0,0,8" />
@@ -31,6 +35,18 @@
                 <PasswordBox x:Name="DeepSeekApiKeyBox" />
             </DockPanel>
             <TextBlock Text="{Binding DeepSeekApiKeyStatusText}"
+                       Foreground="{DynamicResource MutedForegroundBrush}"
+                       FontSize="11"
+                       Margin="0,0,0,12" />
+
+            <TextBlock Text="Anthropic API key (chat, the Ultra lead or sub-agents with the Anthropic provider):" Margin="0,0,0,2" />
+            <DockPanel Margin="0,0,0,4">
+                <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveAnthropicApiKeyButton_OnClick" />
+                <Button DockPanel.Dock="Right" Content="Test" Padding="10,2" Margin="6,0,0,0" Click="TestAnthropicConnectionButton_OnClick"
+                        ToolTip="Lists your available models with the typed key, or the saved key if the box is empty. Costs nothing." />
+                <PasswordBox x:Name="AnthropicApiKeyBox" />
+            </DockPanel>
+            <TextBlock Text="{Binding AnthropicApiKeyStatusText}"
                        Foreground="{DynamicResource MutedForegroundBrush}"
                        FontSize="11"
                        Margin="0,0,0,16" />
@@ -119,28 +135,46 @@
                       Margin="0,0,0,4"
                       ToolTip="A planner agent splits the goal into tasks before any worker starts, redirects workers that drift, and approves or sends back every merge. Better when the pieces need coordinating; costs the lead's calls on top of the workers', and merges wait for its review." />
             <StackPanel Orientation="Horizontal" Margin="20,0,0,8">
-                <TextBlock Text="Lead model:" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <TextBox Text="{Binding UltraOrchestratorModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
-                         ToolTip="A model id on the provider the chat is using. Blank uses the chat's own model." />
+                <TextBlock Text="Lead provider:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding UltraOrchestratorProvider}" Width="110"
+                          ToolTip="Which provider the lead runs on. 'Same as chat' follows the chat's provider dropdown." />
                 <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
                 <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraOrchestratorEffort}" Width="90"
                           ToolTip="Default is High." />
             </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="20,0,0,8">
+                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox IsEditable="True" ItemsSource="{Binding UltraOrchestratorModelOptions}"
+                          Text="{Binding UltraOrchestratorModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                          ToolTip="A model id on the lead's provider - type one, or Fetch to pick from the provider's list. Blank uses the chat's model, or on another provider the model last used with it in the chat (else its default)." />
+                <Button Content="Fetch" Command="{Binding FetchLeadModelsCommand}" Padding="8,0" Margin="6,0,0,0"
+                        Visibility="{Binding CanFetchModels, Converter={StaticResource SettingsBoolToVisibility}}"
+                        ToolTip="Fetch the latest model list from the lead's provider." />
+            </StackPanel>
             <Button Content="Save Ultra Settings" Command="{Binding SaveUltraSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 
             <TextBlock Text="Sub-agents" FontWeight="Bold" Margin="0,0,0,4" />
-            <TextBlock Text="The model and effort for investigate_parallel's investigators and for Ultra's workers. Leave blank to use the chat's own - a cheaper, faster model is often enough for these."
+            <TextBlock Text="The provider, model and effort for investigate_parallel's investigators and for Ultra's workers. Leave them as they are to use the chat's own - a cheaper, faster model is often enough for these."
                        FontSize="11"
                        Foreground="{DynamicResource MutedForegroundBrush}"
                        TextWrapping="Wrap"
                        Margin="0,0,0,8" />
             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <TextBox Text="{Binding SubAgentModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
-                         ToolTip="A model id on the provider the chat is using. Blank uses the chat's own model." />
+                <TextBlock Text="Provider:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding SubAgentProvider}" Width="110"
+                          ToolTip="Which provider sub-agents run on. 'Same as chat' follows the chat's provider dropdown." />
                 <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
                 <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding SubAgentEffort}" Width="90"
                           ToolTip="Default uses the chat's own effort." />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox IsEditable="True" ItemsSource="{Binding SubAgentModelOptions}"
+                          Text="{Binding SubAgentModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                          ToolTip="A model id on the sub-agents' provider - type one, or Fetch to pick from the provider's list. Blank uses the chat's model, or on another provider the model last used with it in the chat (else its default)." />
+                <Button Content="Fetch" Command="{Binding FetchSubAgentModelsCommand}" Padding="8,0" Margin="6,0,0,0"
+                        Visibility="{Binding CanFetchModels, Converter={StaticResource SettingsBoolToVisibility}}"
+                        ToolTip="Fetch the latest model list from the sub-agents' provider." />
             </StackPanel>
             <Button Content="Save Sub-agent Settings" Command="{Binding SaveSubAgentSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
 

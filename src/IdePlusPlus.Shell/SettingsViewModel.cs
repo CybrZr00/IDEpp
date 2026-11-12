@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Embeddings;
@@ -26,15 +28,23 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
     private readonly ExternalToolchainStore _externalToolchainStore;
+    private readonly AnthropicChatClient? _anthropicClient;
+    private readonly Func<string?, Task<IReadOnlyList<string>>>? _fetchModels;
 
+    /// <param name="fetchModels">A provider's model ids (null: the chat's provider), for the lead's
+    /// and sub-agents' model pickers. Without it they are plain text boxes.</param>
     public SettingsViewModel(
         SecureSettingsStore secureSettingsStore,
         AppSettingsStore appSettingsStore,
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
         DeepSeekFimClient deepSeekFimClient,
-        ExternalToolchainStore externalToolchainStore)
+        ExternalToolchainStore externalToolchainStore,
+        AnthropicChatClient? anthropicClient = null,
+        Func<string?, Task<IReadOnlyList<string>>>? fetchModels = null)
     {
+        _anthropicClient = anthropicClient;
+        _fetchModels = fetchModels;
         _secureSettingsStore = secureSettingsStore;
         _appSettingsStore = appSettingsStore;
         _mcpServerManager = mcpServerManager;
@@ -44,6 +54,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         hasApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(OpenRouterChatClient.ApiKeySettingName));
         hasDeepSeekApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(DeepSeekFimClient.ApiKeySettingName));
+        hasAnthropicApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(AnthropicChatClient.ApiKeySettingName));
         hasLmStudioApiKey = !string.IsNullOrWhiteSpace(_secureSettingsStore.GetSecret(LmStudioEmbeddingClient.ApiKeySettingName));
         lmStudioBaseUrl = _appSettingsStore.Get(LmStudioEmbeddingClient.BaseUrlSettingName) ?? LmStudioEmbeddingClient.DefaultBaseUrl;
         lmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
@@ -58,8 +69,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
         ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
         ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
+        ultraOrchestratorProvider = CopilotChatPaneViewModel.ReadUltraOrchestratorProvider(_appSettingsStore) ?? SameAsChatChoice;
         ultraOrchestratorModel = CopilotChatPaneViewModel.ReadUltraOrchestratorModel(_appSettingsStore) ?? "";
         ultraOrchestratorEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey));
+        subAgentProvider = CopilotChatPaneViewModel.ReadSubAgentProvider(_appSettingsStore) ?? SameAsChatChoice;
         subAgentModel = CopilotChatPaneViewModel.ReadSubAgentModel(_appSettingsStore) ?? "";
         subAgentEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.SubAgentEffortSettingKey));
 
@@ -110,6 +123,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string ApiKeyStatusText => HasApiKey ? "Key configured." : "No key set.";
 
     public string DeepSeekApiKeyStatusText => HasDeepSeekApiKey ? "Key configured." : "No key set.";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AnthropicApiKeyStatusText))]
+    private bool hasAnthropicApiKey;
+
+    public string AnthropicApiKeyStatusText => HasAnthropicApiKey ? "Key configured." : "No key set.";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LmStudioApiKeyStatusText))]
@@ -174,18 +193,86 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool ultraOrchestrated;
 
-    /// <summary>The lead's model id; blank means the chat's own.</summary>
+    /// <summary>The lead's provider; <see cref="SameAsChatChoice"/> means the chat's own.</summary>
+    [ObservableProperty]
+    private string ultraOrchestratorProvider;
+
+    /// <summary>The lead's model id; blank means the chat's own, or - on another provider - that
+    /// provider's last-used model in the chat, else its default.</summary>
     [ObservableProperty]
     private string ultraOrchestratorModel;
+
+    /// <summary>What the lead's model picker offers, once fetched from its provider.</summary>
+    public ObservableCollection<string> UltraOrchestratorModelOptions { get; } = [];
 
     /// <summary>The lead's effort; <see cref="DefaultEffortChoice"/> means High.</summary>
     [ObservableProperty]
     private string ultraOrchestratorEffort;
 
+    /// <summary>The provider for sub-agents; <see cref="SameAsChatChoice"/> means the chat's own.</summary>
+    [ObservableProperty]
+    private string subAgentProvider;
+
     /// <summary>The model id for sub-agents - investigate_parallel's investigators and Ultra's workers;
-    /// blank means the chat's own. It is a model on the provider the chat is using.</summary>
+    /// blank means the chat's own, or - on another provider - that provider's last-used model in the
+    /// chat, else its default.</summary>
     [ObservableProperty]
     private string subAgentModel;
+
+    /// <summary>What the sub-agents' model picker offers, once fetched from their provider.</summary>
+    public ObservableCollection<string> SubAgentModelOptions { get; } = [];
+
+    public const string SameAsChatChoice = "Same as chat";
+
+    /// <summary>What the lead's and sub-agents' provider boxes offer.</summary>
+    public IReadOnlyList<string> ProviderChoices { get; } = [SameAsChatChoice, .. CopilotChatPaneViewModel.AllProviders];
+
+    public bool CanFetchModels => _fetchModels is not null;
+
+    private static string StoredProvider(string choice) => choice == SameAsChatChoice ? "" : choice;
+
+    private static string? ProviderFor(string choice) => choice == SameAsChatChoice ? null : choice;
+
+    // A model list belongs to one provider - switching leaves the typed id alone but drops the list.
+    partial void OnUltraOrchestratorProviderChanged(string value) => UltraOrchestratorModelOptions.Clear();
+
+    partial void OnSubAgentProviderChanged(string value) => SubAgentModelOptions.Clear();
+
+    [RelayCommand]
+    private Task FetchLeadModelsAsync() => FetchModelsIntoAsync(UltraOrchestratorProvider, UltraOrchestratorModelOptions, "lead");
+
+    [RelayCommand]
+    private Task FetchSubAgentModelsAsync() => FetchModelsIntoAsync(SubAgentProvider, SubAgentModelOptions, "sub-agent");
+
+    private async Task FetchModelsIntoAsync(string providerChoice, ObservableCollection<string> into, string role)
+    {
+        if (_fetchModels is null)
+        {
+            return;
+        }
+
+        var label = providerChoice == SameAsChatChoice ? "the chat's provider" : providerChoice;
+        StatusMessage = $"Fetching {label} models...";
+        IReadOnlyList<string> models;
+        try
+        {
+            models = await _fetchModels(ProviderFor(providerChoice));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        {
+            models = [];
+        }
+
+        into.Clear();
+        foreach (var model in models)
+        {
+            into.Add(model);
+        }
+
+        StatusMessage = models.Count == 0
+            ? $"Couldn't fetch models from {label} - check its key or URL. You can still type a model id."
+            : $"{models.Count} {label} models available for the {role} model.";
+    }
 
     /// <summary>The effort for sub-agents; <see cref="DefaultEffortChoice"/> means the chat's own.</summary>
     [ObservableProperty]
@@ -228,6 +315,39 @@ public sealed partial class SettingsViewModel : ObservableObject
         _secureSettingsStore.SetSecret(DeepSeekFimClient.ApiKeySettingName, plaintextKey.Trim());
         HasDeepSeekApiKey = true;
         StatusMessage = "DeepSeek API key saved.";
+    }
+
+    public void SaveAnthropicApiKey(string plaintextKey)
+    {
+        if (string.IsNullOrWhiteSpace(plaintextKey))
+        {
+            return;
+        }
+
+        _secureSettingsStore.SetSecret(AnthropicChatClient.ApiKeySettingName, plaintextKey.Trim());
+        HasAnthropicApiKey = true;
+        StatusMessage = "Anthropic API key saved.";
+    }
+
+    /// <summary>Tests whatever key is typed in the box, or the saved key if the box is empty, by
+    /// listing models - free, unlike a completion.</summary>
+    public async Task TestAnthropicConnectionAsync(string typedKey)
+    {
+        var apiKey = string.IsNullOrWhiteSpace(typedKey) ? _secureSettingsStore.GetSecret(AnthropicChatClient.ApiKeySettingName) : typedKey.Trim();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            StatusMessage = "Enter or save an Anthropic API key first.";
+            return;
+        }
+
+        if (_anthropicClient is null)
+        {
+            return;
+        }
+
+        StatusMessage = "Testing Anthropic connection...";
+        var error = await _anthropicClient.TestConnectionAsync(apiKey, CancellationToken.None);
+        StatusMessage = error is null ? "Anthropic: connected." : $"Anthropic test failed: {error}";
     }
 
     public void SaveLmStudioApiKey(string plaintextKey)
@@ -298,6 +418,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxTokensMillionsSettingKey, UltraMaxTokensMillions.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorProviderSettingKey, StoredProvider(UltraOrchestratorProvider));
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
         StatusMessage = $"Ultra settings saved - "
@@ -312,6 +433,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void SaveSubAgentSettings()
     {
+        _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentProviderSettingKey, StoredProvider(SubAgentProvider));
         _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentModelSettingKey, SubAgentModel.Trim());
         _appSettingsStore.Set(CopilotChatPaneViewModel.SubAgentEffortSettingKey, StoredEffort(SubAgentEffort));
         StatusMessage = "Sub-agent settings saved.";

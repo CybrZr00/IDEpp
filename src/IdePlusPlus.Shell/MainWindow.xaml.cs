@@ -9,6 +9,7 @@ using AvalonDock.Serializer.Xml;
 using AvalonDock.Themes;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Build;
+using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Editor;
@@ -40,6 +41,7 @@ public partial class MainWindow : Window
     private readonly McpServerManager _mcpServerManager;
     private readonly McpServerConfigStore _mcpServerConfigStore;
     private readonly DeepSeekFimClient _deepSeekFimClient;
+    private readonly AnthropicChatClient _anthropicClient;
     private readonly ExternalToolchainStore _externalToolchainStore;
     private readonly PluginHost _pluginHost;
 
@@ -56,6 +58,7 @@ public partial class MainWindow : Window
         McpServerManager mcpServerManager,
         McpServerConfigStore mcpServerConfigStore,
         DeepSeekFimClient deepSeekFimClient,
+        AnthropicChatClient anthropicClient,
         ExternalToolchainStore externalToolchainStore,
         PluginHost pluginHost,
         PluginToolWindowRegistry pluginToolWindowRegistry,
@@ -66,6 +69,7 @@ public partial class MainWindow : Window
         _mcpServerManager = mcpServerManager;
         _mcpServerConfigStore = mcpServerConfigStore;
         _deepSeekFimClient = deepSeekFimClient;
+        _anthropicClient = anthropicClient;
         _externalToolchainStore = externalToolchainStore;
         _pluginHost = pluginHost;
 
@@ -527,7 +531,9 @@ public partial class MainWindow : Window
 
     private void SettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-        var settingsViewModel = new SettingsViewModel(_secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient, _externalToolchainStore);
+        var settingsViewModel = new SettingsViewModel(
+            _secureSettingsStore, _appSettingsStore, _mcpServerManager, _mcpServerConfigStore, _deepSeekFimClient, _externalToolchainStore,
+            _anthropicClient, ((MainWindowViewModel)DataContext).CopilotChat.FetchModelsAsync);
         var window = new SettingsWindow(settingsViewModel) { Owner = this };
         window.ShowDialog();
     }

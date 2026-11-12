@@ -28,6 +28,15 @@ public partial class SettingsWindow : Window
         DeepSeekApiKeyBox.Clear();
     }
 
+    private void SaveAnthropicApiKeyButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SaveAnthropicApiKey(AnthropicApiKeyBox.Password);
+        AnthropicApiKeyBox.Clear();
+    }
+
+    private async void TestAnthropicConnectionButton_OnClick(object sender, RoutedEventArgs e) =>
+        await _viewModel.TestAnthropicConnectionAsync(AnthropicApiKeyBox.Password);
+
     private void SaveLmStudioApiKeyButton_OnClick(object sender, RoutedEventArgs e)
     {
         _viewModel.SaveLmStudioApiKey(LmStudioApiKeyBox.Password);

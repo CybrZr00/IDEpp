@@ -37,6 +37,11 @@ public sealed partial class CopilotChatPaneViewModel
     /// workers. Blank means the same as the chat's own.</summary>
     public const string SubAgentModelSettingKey = "SubAgentModel";
     public const string SubAgentEffortSettingKey = "SubAgentEffort";
+
+    /// <summary>The provider for sub-agents and for the Ultra lead. Blank means the chat's own; set to
+    /// another, the role's model setting (or that provider's last-used or default model) is used.</summary>
+    public const string SubAgentProviderSettingKey = "SubAgentProvider";
+    public const string UltraOrchestratorProviderSettingKey = "UltraOrchestratorProvider";
     public const int DefaultUltraWorkerCount = 4;
     public const int MaxUltraWorkerCount = 64;
     public const int DefaultUltraConcurrentRequests = 16;
@@ -195,6 +200,33 @@ public sealed partial class CopilotChatPaneViewModel
 
     public static ChatEffort? ReadSubAgentEffort(AppSettingsStore settings) => ReadEffortSetting(settings, SubAgentEffortSettingKey);
 
+    /// <summary>A provider setting, or null when blank or not a known provider - which means "the chat's own".</summary>
+    private static string? ReadProviderSetting(AppSettingsStore settings, string key) =>
+        settings.Get(key)?.Trim() is { Length: > 0 } value
+            ? AllProviders.FirstOrDefault(p => string.Equals(p, value, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+    public static string? ReadSubAgentProvider(AppSettingsStore settings) => ReadProviderSetting(settings, SubAgentProviderSettingKey);
+
+    public static string? ReadUltraOrchestratorProvider(AppSettingsStore settings) =>
+        ReadProviderSetting(settings, UltraOrchestratorProviderSettingKey);
+
+    /// <summary>
+    /// The provider, client and model a role (sub-agents, the Ultra lead) runs on. With no provider of
+    /// its own, or the chat's, it is the chat's client and its own model or else the chat's. On another
+    /// provider the chat's model id would mean nothing, so it falls back to that provider's last-used
+    /// model, then its default.
+    /// </summary>
+    private (string Provider, IChatClient Client, string Model) ResolveRole(string? provider, string? model)
+    {
+        if (provider is null || provider == SelectedProvider)
+        {
+            return (SelectedProvider, CurrentChatClient, model ?? SelectedModel);
+        }
+
+        return (provider, ClientFor(provider), model ?? ModelSettingFor(provider) ?? DefaultModelFor(provider));
+    }
+
     public static string? ReadUltraOrchestratorModel(AppSettingsStore settings) =>
         ReadModelSetting(settings, UltraOrchestratorModelSettingKey);
 
@@ -306,6 +338,8 @@ public sealed partial class CopilotChatPaneViewModel
                 // Until done, the caps are the only limits: one round as long as the time cap, and
                 // nobody asked to continue - a stall or a spent budget ends the run instead.
                 var runUntilDone = IsUltraRunUntilDone;
+                var worker = ResolveRole(ReadSubAgentProvider(_appSettingsStore), ReadSubAgentModel(_appSettingsStore));
+                var lead = ResolveRole(ReadUltraOrchestratorProvider(_appSettingsStore), ReadUltraOrchestratorModel(_appSettingsStore));
                 var options = new UltraTeamOptions(
                     ReadUltraWorkerCount(_appSettingsStore),
                     TimeSpan.FromMinutes(runUntilDone ? ReadUltraMaxRunMinutes(_appSettingsStore) : ReadUltraTimeBudgetMinutes(_appSettingsStore)),
@@ -318,9 +352,11 @@ public sealed partial class CopilotChatPaneViewModel
                     AutoScale = ReadUltraAutoScale(_appSettingsStore),
                     InitialWorkerCount = ReadUltraStartWorkers(_appSettingsStore),
                     Orchestrated = ReadUltraOrchestrated(_appSettingsStore),
-                    WorkerModel = ReadSubAgentModel(_appSettingsStore),
+                    WorkerClient = worker.Client,
+                    WorkerModel = worker.Model,
                     WorkerEffort = ReadSubAgentEffort(_appSettingsStore),
-                    OrchestratorModel = ReadUltraOrchestratorModel(_appSettingsStore),
+                    OrchestratorClient = lead.Client,
+                    OrchestratorModel = lead.Model,
                     OrchestratorEffort = ReadUltraOrchestratorEffort(_appSettingsStore),
                 };
                 IChatClient client = CurrentChatClient;
@@ -344,7 +380,7 @@ public sealed partial class CopilotChatPaneViewModel
                     }).Task.Unwrap());
 
                 card = new TeamRunViewModel(
-                    run, SelectedProvider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom, runUntilDone);
+                    run, worker.Provider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom, runUntilDone);
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
