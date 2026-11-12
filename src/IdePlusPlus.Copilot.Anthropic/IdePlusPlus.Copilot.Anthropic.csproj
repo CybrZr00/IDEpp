@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+	<ProjectReference Include="..\IdePlusPlus.Copilot.Core\IdePlusPlus.Copilot.Core.csproj" />
+	<ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<InternalsVisibleTo Include="IdePlusPlus.Copilot.Anthropic.Tests" />
+  </ItemGroup>
+
+</Project>
