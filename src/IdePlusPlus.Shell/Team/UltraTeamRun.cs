@@ -120,11 +120,16 @@ public sealed record UltraTeamOptions(
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could
 /// have merged anything. Report is the build's own report.</summary>
-public sealed class UltraTeamPreflightException(string report)
+/// <param name="notMirrored">Projects outside the repository that the team's copy could not be given,
+/// so a failure may be down to them rather than to the solution - the user's own tree can build while
+/// the copy cannot.</param>
+public sealed class UltraTeamPreflightException(string report, IReadOnlyList<string>? notMirrored = null)
     : InvalidOperationException("The solution doesn't build as it stands, so the team could not merge anything. "
                                 + "Fix the build, then send again.")
 {
     public string Report { get; } = report;
+
+    public IReadOnlyList<string> NotMirrored { get; } = notMirrored ?? [];
 }
 
 /// <summary>The run did not start, or stopped before any worker did: the team's worktrees would not
@@ -229,6 +234,8 @@ public sealed class UltraTeamRun
     private string _solutionPath = "";
     private string _solutionRelativeDirectory = "";
     private IReadOnlyList<string> _testProjectPaths = [];
+    private TeamExternalFolders _externalFolders = TeamExternalFolders.None;
+    private IReadOnlyList<string> _notMirrored = [];
     private SemaphoreSlim? _buildSlots;
 
     /// <summary>What one worktree takes on disk: a checkout before anything is built in it, and a
@@ -442,6 +449,16 @@ public sealed class UltraTeamRun
         }
 
         SeedBacklog(backlog);
+
+        // Folders beside the repository that the solution builds from. Worktrees live in the run folder,
+        // where "..\RRS.FamRetail" points at nothing, so they are linked in below; the team is told they
+        // are there, and that they are not theirs to change.
+        _externalFolders = TeamExternalProjects.Find(solutionPath, repositoryRoot);
+        if (_externalFolders.Siblings.Count > 0)
+        {
+            goal = goal + "\n\n" + TeamPrompts.LinkedFolders(_externalFolders.Siblings.Select(f => f.Name).ToList());
+        }
+
         _goal = goal;
         _solutionPath = solutionPath;
         _solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
@@ -472,11 +489,27 @@ public sealed class UltraTeamRun
         EnsureSucceeded(await _teamGit.CreateBranchAsync(repositoryRoot, teamBranch, start, cancellationToken), "create the team branch");
 
         var keptWorkerBranches = new List<string>();
+        IReadOnlyList<string> externalLinks = [];
         UltraTeamEndReason endReason;
         try
         {
             try
             {
+                // Before the first worktree is built in. A link that cannot be made does not stop the
+                // run here: the preflight build then fails the way it would have, and says which folders
+                // the copy was missing.
+                var notMirrored = new List<string>(_externalFolders.Unreachable);
+                try
+                {
+                    externalLinks = TeamExternalProjects.Link(_runDirectory, _externalFolders.Siblings);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    notMirrored.AddRange(_externalFolders.Siblings.Select(f => $"{f.SourcePath} ({ex.Message})"));
+                }
+
+                _notMirrored = notMirrored;
+
                 using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
                 _buildSlots = buildSlots;
                 foreach (var state in Workers)
@@ -501,7 +534,7 @@ public sealed class UltraTeamRun
                     IsCheckingBuild = false;
                     if (!built)
                     {
-                        throw new UltraTeamPreflightException(report);
+                        throw new UltraTeamPreflightException(report, _notMirrored);
                     }
 
                     // A built worktree is the real size; every other one will grow to it as it builds.
@@ -539,6 +572,10 @@ public sealed class UltraTeamRun
                         await _teamGit.DeleteBranchAsync(repositoryRoot, branch, CancellationToken.None);
                     }
                 }
+
+                // After the worktrees: nothing builds against the links once those are gone. Only the
+                // links go - the folders they point at are the user's.
+                TeamExternalProjects.Unlink(externalLinks);
 
                 foreach (var worker in Workers.Where(w => w.Phase == TeamWorkerPhase.Working || w.Phase == TeamWorkerPhase.Waiting))
                 {

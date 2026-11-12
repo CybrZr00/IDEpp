@@ -175,6 +175,17 @@ public static class TeamPrompts
         + "your worktree. Build on it: read what is there, and any plan or progress notes it includes, before "
         + "you claim anything, and do not redo work that is already done.";
 
+    /// <summary>Added to the goal when the solution builds from folders beside the repository (a sibling
+    /// checkout such as RRS.FamRetail). They are linked in next to the worktrees so the build resolves,
+    /// but they are the user's own folders: no worktree holds them, so a worker's file tools cannot open
+    /// them, and nothing changed there would ever be merged.</summary>
+    public static string LinkedFolders(IReadOnlyList<string> names) =>
+        $"Outside the repository, the solution also builds from: {string.Join(", ", names.Select(n => $"`{n}`"))}. "
+        + "Treat those folders as a fixed dependency. Your file tools cannot open them, nothing changed there is "
+        + "part of the team's result, and the user's own builds use the very same folders, so do not modify or "
+        + "delete anything in them with run_command either. If the task needs a change there, post it as a FAIL "
+        + "or FACT for the user.";
+
     /// <summary>Sent to every worker when the run stalls: it is about to pause, or end.</summary>
     public const string StallNotice =
         "The run is stopping: nothing has reached the team branch for a while and merge builds keep failing. Finish "

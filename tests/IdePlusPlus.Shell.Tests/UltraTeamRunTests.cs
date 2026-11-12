@@ -522,6 +522,42 @@ public sealed class UltraTeamRunTests : IDisposable
         _client.Requests.ShouldNotBeEmpty();
     }
 
+    /// <summary>FamRestApi.sln lists "..\RRS.FamRetail\RRS.FamRetail.csproj", a checkout beside the repo.
+    /// In a worktree under the run folder that path pointed at nothing, so restore failed with MSB3202
+    /// and a run that had already spent a large plan's tokens never started.</summary>
+    [Fact]
+    public async Task ASolutionThatBuildsFromAFolderBesideTheRepository_StillBuildsInTheTeamsWorktree()
+    {
+        var dependency = Directory.CreateDirectory(Path.Combine(_repo.Root, "Dep")).FullName;
+        File.WriteAllText(Path.Combine(dependency, "Dep.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+        File.WriteAllText(Path.Combine(dependency, "Dep.cs"), "public static class Dep { public const int One = 1; }");
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Lib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="..\..\Dep\Dep.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "reference a sibling folder");
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), preflight: true);
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        var opening = _client.Requests.First().Messages[1].Content;
+        opening.ShouldContain("Outside the repository, the solution also builds from: `Dep`");
+
+        // The link is only for the run: gone afterwards, with the folder it pointed at untouched.
+        Directory.Exists(Path.Combine(UltraRoot, run.RunId, "Dep")).ShouldBeFalse();
+        File.Exists(Path.Combine(dependency, "Dep.cs")).ShouldBeTrue();
+    }
+
     [Fact]
     public async Task EachWorkerIsToldWhoItIs_AndSeesTheGoalAndTheBoard()
     {
