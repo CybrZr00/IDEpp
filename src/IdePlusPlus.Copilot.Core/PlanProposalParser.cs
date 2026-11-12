@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace IdePlusPlus.Copilot.Core;
 
@@ -9,7 +10,7 @@ namespace IdePlusPlus.Copilot.Core;
 /// accumulate-until-valid-JSON approach as EditProposalParser, simplified since a plan has no
 /// diff to preview mid-stream (just the summary).
 /// </summary>
-public sealed class PlanProposalParser
+public sealed partial class PlanProposalParser
 {
     private readonly Dictionary<int, StringBuilder> _argumentsByIndex = [];
     private readonly Dictionary<int, string> _toolCallIdByIndex = [];
@@ -112,9 +113,7 @@ public sealed class PlanProposalParser
         var steps = fields["steps"] switch
         {
             JsonArray items => items.Select(StepText).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).ToList(),
-            // The whole list as one string, a step per line.
-            JsonValue value when value.TryGetValue<string>(out var text) =>
-                text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToList(),
+            JsonValue value when value.TryGetValue<string>(out var text) => StepsFromString(text),
             _ => null,
         };
         if (steps is null)
@@ -126,6 +125,38 @@ public sealed class PlanProposalParser
         failureReason = null;
         return new PlanOperation(summary, steps);
     }
+
+    /// <summary>
+    /// The whole list as one string. Usually a step per line, but a model also sends its JSON list as the
+    /// string - sometimes wrapped in the markup of a tool call (<c>&lt;parameter name="steps"&gt;[...]</c>) -
+    /// and splitting that by line made every quoted, comma-ended line a step of its own, plus one for the
+    /// markup and one for each bracket. So a string that reads as a JSON list is read as one; anything else,
+    /// including a checklist whose lines start with "[x]", is split by line as before.
+    /// </summary>
+    private static List<string> StepsFromString(string text)
+    {
+        var trimmed = ParameterMarkup().Replace(text.Trim(), "").Trim();
+        if (trimmed.StartsWith('['))
+        {
+            try
+            {
+                if (JsonNode.Parse(trimmed) is JsonArray items)
+                {
+                    return items.Select(StepText).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).ToList();
+                }
+            }
+            catch (JsonException)
+            {
+                // Not a JSON list after all, such as "[x] Read" - fall through to the lines.
+            }
+        }
+
+        return text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToList();
+    }
+
+    // <parameter name="steps"> at the start and </parameter> at the end.
+    [GeneratedRegex(@"^<parameter\s[^>]*>|</parameter>$", RegexOptions.IgnoreCase)]
+    private static partial Regex ParameterMarkup();
 
     private static readonly string[] StepHeadingKeys = ["title", "name", "step", "action"];
     private static readonly string[] StepDetailKeys = ["description", "detail", "details", "text", "summary"];

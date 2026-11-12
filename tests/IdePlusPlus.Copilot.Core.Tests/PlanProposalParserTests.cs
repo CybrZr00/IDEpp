@@ -77,6 +77,35 @@ public class PlanProposalParserTests
         plan.Steps.ShouldBe(["1. Read", "2. Edit"]);
     }
 
+    /// <summary>What a failed Ultra run's board showed: the first TASK was literally
+    /// <c>&lt;parameter name="steps"&gt;[</c> and the rest were quoted, with a comma on the end, because
+    /// the model sent its JSON list wrapped in the markup of a tool call, inside a string.</summary>
+    [Fact]
+    public void StepsSentAsAJsonListInsideAString_WrappedInParameterMarkup_AreReadAsTheList()
+    {
+        var plan = Parse(
+            "{\"summary\": \"S\", \"steps\": \"<parameter name=\\\"steps\\\">[\\n\\\"CONTRACT: add the interface\\\",\\n"
+            + "\\\"HOST: \\\\\\\"quote\\\\\\\" it\\\",\\n\\\"TEST: cover it\\\"\\n]</parameter>\"}");
+
+        plan.Steps.ShouldBe(["CONTRACT: add the interface", "HOST: \"quote\" it", "TEST: cover it"]);
+    }
+
+    [Fact]
+    public void StepsSentAsABareJsonListInsideAString_AreReadAsTheList()
+    {
+        var plan = Parse("""{"summary": "S", "steps": "[\"Read\", \"Edit\"]"}""");
+
+        plan.Steps.ShouldBe(["Read", "Edit"]);
+    }
+
+    [Fact]
+    public void StepsSentAsALineListThatHappensToStartWithABracket_StaysALineList()
+    {
+        var plan = Parse("""{"summary": "S", "steps": "[x] Read\n[ ] Edit"}""");
+
+        plan.Steps.ShouldBe(["[x] Read", "[ ] Edit"]);
+    }
+
     [Fact]
     public void ArgumentsSentAsAJsonString_AreUnwrapped()
     {
