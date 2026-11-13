@@ -558,6 +558,78 @@ public sealed class UltraTeamRunTests : IDisposable
         File.Exists(Path.Combine(dependency, "Dep.cs")).ShouldBeTrue();
     }
 
+    /// <summary>The second FamRestApi failure: FamWholesale.csproj copies node_modules\bootstrap\scss\*.scss
+    /// to its output, node_modules is git-ignored, and a worktree has none - 52 MSB3030 errors on files
+    /// that were in the user's own tree.</summary>
+    [Fact]
+    public async Task ASolutionThatBuildsFromAGitIgnoredNodeModules_StillBuildsInTheTeamsWorktree_AndLeavesTheOriginalAlone()
+    {
+        File.AppendAllText(Path.Combine(_repo.RepositoryRoot, ".gitignore"), "node_modules/\n");
+        var modules = Path.Combine(_repo.RepositoryRoot, "Lib", "node_modules", "pkg");
+        Directory.CreateDirectory(modules);
+        File.WriteAllText(Path.Combine(modules, "data.txt"), "from npm");
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Lib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <None Include="node_modules\pkg\data.txt" CopyToOutputDirectory="PreserveNewest" />
+              </ItemGroup>
+            </Project>
+            """);
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "build from node_modules");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "status", "--porcelain", "--ignored").ShouldContain("!! Lib/node_modules/");
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), preflight: true);
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        var opening = _client.Requests.First().Messages[1].Content;
+        opening.ShouldContain("git-ignored dependency folders");
+        opening.ShouldContain("`Lib/node_modules`");
+
+        // Removing the worktree must not have followed the link into the user's own folder.
+        Directory.Exists(Worktree(run, "w1", UltraRoot)).ShouldBeFalse();
+        File.ReadAllText(Path.Combine(modules, "data.txt")).ShouldBe("from npm");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "status", "--porcelain").ShouldBeEmpty();
+    }
+
+    /// <summary>Anything else git ignores that a build needs cannot be guessed at, but it can be named:
+    /// the failure says which folder is in the user's tree and not in the copy.</summary>
+    [Fact]
+    public async Task ASolutionThatNeedsSomeOtherGitIgnoredFolder_FailsPreflight_AndNamesIt()
+    {
+        File.AppendAllText(Path.Combine(_repo.RepositoryRoot, ".gitignore"), "generated/\n");
+        var generated = Path.Combine(_repo.RepositoryRoot, "Lib", "generated");
+        Directory.CreateDirectory(generated);
+        File.WriteAllText(Path.Combine(generated, "data.txt"), "made by a tool");
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Lib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <None Include="generated\data.txt" CopyToOutputDirectory="PreserveNewest" />
+              </ItemGroup>
+            </Project>
+            """);
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "add", "-A");
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "commit", "-m", "build from a generated folder");
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), preflight: true);
+
+        var error = await Should.ThrowAsync<UltraTeamPreflightException>(() => RunAsync(run));
+
+        error.Report.ShouldContain("MSB3030");
+        error.NotMirrored.ShouldHaveSingleItem().ShouldStartWith(@"Lib\generated (in your tree, but not in the team's copy");
+        _client.Requests.ShouldBeEmpty();
+        File.Exists(Path.Combine(generated, "data.txt")).ShouldBeTrue();
+    }
+
     [Fact]
     public async Task EachWorkerIsToldWhoItIs_AndSeesTheGoalAndTheBoard()
     {

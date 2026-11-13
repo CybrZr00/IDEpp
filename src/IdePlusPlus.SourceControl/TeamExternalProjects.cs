@@ -100,7 +100,7 @@ public static partial class TeamExternalProjects
                     continue;
                 }
 
-                CreateJunction(link, folder.SourcePath);
+                CreateLink(link, folder.SourcePath);
                 created.Add(link);
             }
         }
@@ -245,7 +245,12 @@ public static partial class TeamExternalProjects
         }
     }
 
-    private static void CreateJunction(string link, string target)
+    /// <summary>
+    /// Makes <paramref name="link"/> a directory junction to the existing folder
+    /// <paramref name="target"/>. Throws InvalidOperationException when it cannot. Undo it with
+    /// <see cref="Unlink"/> and never with a recursive delete, which would follow the junction.
+    /// </summary>
+    public static void CreateLink(string link, string target)
     {
         // cmd expands %VAR% even inside quotes, and a quote ends the argument; neither belongs in a
         // folder name worth linking, so refuse rather than build a command line that means something else.

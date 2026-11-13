@@ -186,6 +186,15 @@ public static class TeamPrompts
         + "delete anything in them with run_command either. If the task needs a change there, post it as a FAIL "
         + "or FACT for the user.";
 
+    /// <summary>Added to the goal when git-ignored dependency folders (node_modules) are linked into the
+    /// worktrees from the user's own tree. They are not part of the checkout, so each worktree gets a
+    /// link to the one real folder - which the user's tree and every worker's now share.</summary>
+    public static string LinkedDependencyFolders(IReadOnlyList<string> paths) =>
+        $"These git-ignored dependency folders are not in your worktree's checkout but linked to the user's own: {string.Join(", ", paths.Select(p => $"`{p}`"))}. "
+        + "The build can read them, so it works. They are shared with the user's tree and every worker, so do not run "
+        + "npm install, npm ci or anything else that changes them, and do not delete or edit anything in them. Nothing "
+        + "there is part of the team's result. If the task needs a package added, say so in a FAIL or FACT for the user.";
+
     /// <summary>Sent to every worker when the run stalls: it is about to pause, or end.</summary>
     public const string StallNotice =
         "The run is stopping: nothing has reached the team branch for a while and merge builds keep failing. Finish "

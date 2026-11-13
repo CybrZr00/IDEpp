@@ -235,7 +235,14 @@ public sealed class UltraTeamRun
     private string _solutionRelativeDirectory = "";
     private IReadOnlyList<string> _testProjectPaths = [];
     private TeamExternalFolders _externalFolders = TeamExternalFolders.None;
-    private IReadOnlyList<string> _notMirrored = [];
+    private IReadOnlyList<string> _ignoredDependencyFolders = [];
+
+    /// <summary>What the team's copy lacks that it could not be given, for the failure message. Guarded
+    /// by <see cref="_teamLock"/>: a worker auto mode adds mid-run can add to it.</summary>
+    private readonly List<string> _notMirrored = [];
+
+    /// <summary>The dependency links made inside each worktree, to be removed before the worktree is.</summary>
+    private readonly Dictionary<string, IReadOnlyList<string>> _dependencyLinks = [];
     private SemaphoreSlim? _buildSlots;
 
     /// <summary>What one worktree takes on disk: a checkout before anything is built in it, and a
@@ -459,6 +466,14 @@ public sealed class UltraTeamRun
             goal = goal + "\n\n" + TeamPrompts.LinkedFolders(_externalFolders.Siblings.Select(f => f.Name).ToList());
         }
 
+        // Dependency folders git ignores (node_modules) are not in a checkout either, and a project can
+        // build from them: each worktree gets a link to the user's own.
+        _ignoredDependencyFolders = await _teamGit.FindIgnoredDependencyFoldersAsync(repositoryRoot, cancellationToken);
+        if (_ignoredDependencyFolders.Count > 0)
+        {
+            goal = goal + "\n\n" + TeamPrompts.LinkedDependencyFolders(_ignoredDependencyFolders);
+        }
+
         _goal = goal;
         _solutionPath = solutionPath;
         _solutionRelativeDirectory = Path.GetRelativePath(repositoryRoot, Path.GetDirectoryName(solutionPath)!);
@@ -498,17 +513,22 @@ public sealed class UltraTeamRun
                 // Before the first worktree is built in. A link that cannot be made does not stop the
                 // run here: the preflight build then fails the way it would have, and says which folders
                 // the copy was missing.
-                var notMirrored = new List<string>(_externalFolders.Unreachable);
+                lock (_teamLock)
+                {
+                    _notMirrored.AddRange(_externalFolders.Unreachable);
+                }
+
                 try
                 {
                     externalLinks = TeamExternalProjects.Link(_runDirectory, _externalFolders.Siblings);
                 }
                 catch (InvalidOperationException ex)
                 {
-                    notMirrored.AddRange(_externalFolders.Siblings.Select(f => $"{f.SourcePath} ({ex.Message})"));
+                    lock (_teamLock)
+                    {
+                        _notMirrored.AddRange(_externalFolders.Siblings.Select(f => $"{f.SourcePath} ({ex.Message})"));
+                    }
                 }
-
-                _notMirrored = notMirrored;
 
                 using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
                 _buildSlots = buildSlots;
@@ -534,7 +554,7 @@ public sealed class UltraTeamRun
                     IsCheckingBuild = false;
                     if (!built)
                     {
-                        throw new UltraTeamPreflightException(report, _notMirrored);
+                        throw new UltraTeamPreflightException(report, NotInTheCopy(report, repositoryRoot));
                     }
 
                     // A built worktree is the real size; every other one will grow to it as it builds.
@@ -561,6 +581,9 @@ public sealed class UltraTeamRun
 
                 foreach (var (worktree, branch, author) in created)
                 {
+                    // First of all: git removes a worktree by deleting what is in it, and a link to the
+                    // user's node_modules is something it could follow into the real folder.
+                    UnlinkDependencies(worktree);
                     var keep = await PreserveUnmergedWorkAsync(repositoryRoot, worktree, author, teamBranch);
                     await _teamGit.RemoveWorktreeAsync(repositoryRoot, worktree, CancellationToken.None);
                     if (keep)
@@ -619,6 +642,7 @@ public sealed class UltraTeamRun
         EnsureSucceeded(
             await _teamGit.AddWorktreeAsync(repositoryRoot, worktree, branch, startCommit, cancellationToken),
             $"create {state.Name}'s worktree");
+        await LinkDependenciesAsync(worktree, repositoryRoot, cancellationToken);
         var author = $"IDE++ Ultra {state.Name}";
 
         var solutionDirectory = Path.GetFullPath(Path.Combine(worktree, _solutionRelativeDirectory));
@@ -669,6 +693,88 @@ public sealed class UltraTeamRun
         }
 
         return dispatcher;
+    }
+
+    /// <summary>
+    /// Links the user's git-ignored dependency folders into <paramref name="worktree"/> at the same
+    /// relative paths. A link that cannot be made, or that git would not ignore in the worktree (so a
+    /// worker's `git add -A` would stage it), is removed again and reported in the failure message
+    /// instead; the worker is created either way, and the preflight build says whether it mattered.
+    /// </summary>
+    private async Task LinkDependenciesAsync(string worktree, string repositoryRoot, CancellationToken cancellationToken)
+    {
+        var links = new List<string>();
+        foreach (var folder in _ignoredDependencyFolders)
+        {
+            var relative = folder.Replace('/', Path.DirectorySeparatorChar);
+            var link = Path.Combine(worktree, relative);
+            if (Path.Exists(link))
+            {
+                continue;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+                TeamExternalProjects.CreateLink(link, Path.Combine(repositoryRoot, relative));
+                links.Add(link);
+                if (!await _teamGit.IsIgnoredAsync(worktree, folder, cancellationToken))
+                {
+                    TeamExternalProjects.Unlink([link]);
+                    links.Remove(link);
+                    lock (_teamLock)
+                    {
+                        _notMirrored.Add($"{relative} (git would not ignore a link to it in the team's copy)");
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                lock (_teamLock)
+                {
+                    _notMirrored.Add($"{relative} ({ex.Message})");
+                }
+            }
+        }
+
+        lock (_teamLock)
+        {
+            _dependencyLinks[worktree] = links;
+        }
+    }
+
+    private void UnlinkDependencies(string worktree)
+    {
+        IReadOnlyList<string>? links;
+        lock (_teamLock)
+        {
+            _dependencyLinks.Remove(worktree, out links);
+        }
+
+        if (links is not null)
+        {
+            TeamExternalProjects.Unlink(links);
+        }
+    }
+
+    /// <summary>What a failed preflight build says the team's copy lacks: what could not be linked in,
+    /// and whatever the report names that is in the user's tree but not the copy - the git-ignored
+    /// folders (generated sources, local config) a build needs and a checkout never has.</summary>
+    private IReadOnlyList<string> NotInTheCopy(string report, string repositoryRoot)
+    {
+        List<string> known;
+        lock (_teamLock)
+        {
+            known = [.. _notMirrored];
+        }
+
+        var firstWorktree = Path.Combine(_runDirectory, Workers[0].Name);
+        foreach (var missing in TeamBuildReport.FindMissingFromCopy(report, firstWorktree, repositoryRoot))
+        {
+            known.Add($"{missing} (in your tree, but not in the team's copy - git ignores it)");
+        }
+
+        return known;
     }
 
     /// <summary>
@@ -802,7 +908,9 @@ public sealed class UltraTeamRun
         try
         {
             return new DirectoryInfo(directory)
-                .EnumerateFiles("*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = 0 })
+                // Links are skipped, not followed: a linked node_modules is the user's, and shared, so it is
+                // none of this worktree's weight - and following it would count it once per worker.
+                .EnumerateFiles("*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint })
                 .Sum(file => file.Length);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

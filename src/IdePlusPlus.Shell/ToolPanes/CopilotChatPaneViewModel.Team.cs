@@ -498,10 +498,10 @@ public sealed partial class CopilotChatPaneViewModel
         var text = new StringBuilder(
             "\n\nIf it builds in your own tree, the failure is in the team's copy of it: the team builds your "
             + "working tree as git sees it, without git-ignored files (generated sources, local config), and "
-            + "with projects from outside the repository only where they could be linked in.");
+            + "with projects from outside the repository, and node_modules folders, only where they could be linked in.");
         if (failure.NotMirrored.Count > 0)
         {
-            text.Append("\nThese could not be linked in:\n");
+            text.Append("\nMissing from the team's copy:\n");
             text.Append(string.Join("\n", failure.NotMirrored.Select(path => $"- {path}")));
         }
 
