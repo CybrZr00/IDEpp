@@ -469,12 +469,53 @@ public sealed class CopilotChatUltraTests : IDisposable
         text.ShouldContain("If it builds in your own tree");
     });
 
-    private CopilotChatPaneViewModel CreateViewModel(int workers, string? solutionPath = null, string? solutionDirectory = null)
+    // --- Where the team keeps its worktrees ---
+
+    [Fact]
+    public void TheUltraWorkFolderSetting_MovesTheRunsFolderThere_AndTheDefaultIsNotTouched() => RunOnUiThread(async () =>
+    {
+        var custom = Path.Combine(_repo.Root, "elsewhere", "scratch");
+        _http.Script = _ => ToolCall(TeamTools.DoneToolName, new { summary = "nothing to do" });
+        var viewModel = CreateViewModel(workers: 1, configure: settings => settings.Set(CopilotChatPaneViewModel.UltraWorkFolderSettingKey, custom));
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem();
+        Directory.GetDirectories(custom).ShouldHaveSingleItem("the run's folder is made inside the chosen one");
+        Directory.Exists(Path.Combine(_repo.Root, "ultra")).ShouldBeFalse("nothing goes to the default folder");
+    });
+
+    [Theory]
+    [InlineData(@"relative\scratch", "needs to be a full path")]
+    [InlineData(@"REPO\scratch", "is inside the repository")]
+    public void AnUltraWorkFolderThatCannotBeUsed_StopsTheRunBeforeAnythingStarts_AndSaysWhy(string folder, string reason) => RunOnUiThread(async () =>
+    {
+        folder = folder.Replace("REPO", _repo.RepositoryRoot);
+        var viewModel = CreateViewModel(workers: 1, configure: settings => settings.Set(CopilotChatPaneViewModel.UltraWorkFolderSettingKey, folder));
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        var text = viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text;
+        text.ShouldContain("**Ultra team** - didn't start");
+        text.ShouldContain(reason);
+        text.ShouldContain("Settings");
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldBeEmpty();
+        _http.FirstRequestBody.ShouldBeEmpty("no model should have been called");
+        Directory.Exists(Path.Combine(_repo.Root, "ultra")).ShouldBeFalse();
+    });
+
+    private CopilotChatPaneViewModel CreateViewModel(
+        int workers, string? solutionPath = null, string? solutionDirectory = null, Action<AppSettingsStore>? configure = null)
     {
         SolutionLoader.EnsureMSBuildRegistered();
 
         var appSettings = new AppSettingsStore(Path.Combine(_repo.Root, "settings.json"));
         appSettings.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, workers.ToString());
+        configure?.Invoke(appSettings);
         var secrets = new SecureSettingsStore(Path.Combine(_repo.Root, "secrets.json"));
         secrets.SetSecret(OpenRouterChatClient.ApiKeySettingName, "test-key");
 

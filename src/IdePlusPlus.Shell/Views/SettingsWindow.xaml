@@ -130,6 +130,18 @@
                 <TextBox Text="{Binding UltraMaxTokensMillions, UpdateSourceTrigger=PropertyChanged}" Width="50"
                          ToolTip="The whole team's prompt plus completion tokens. At 90% the workers are told to finish and merge what they are on." />
             </StackPanel>
+            <StackPanel Margin="0,0,0,8">
+                <TextBlock Text="Work folder - where each worker's checkout and build output go:" Margin="0,0,0,2" />
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseUltraWorkFolder_OnClick" Padding="10,0" Margin="6,0,0,0" />
+                    <TextBox Text="{Binding UltraWorkFolder, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="A full path on a local drive, outside the repository, e.g. D:\IdePlusPlusUltra. Every worker has a full checkout plus its own build output, so point this at a drive with room. Blank uses the default. Takes effect from the next run." />
+                </DockPanel>
+                <TextBlock Text="{Binding UltraWorkFolderDefault, StringFormat=Blank uses {0}}"
+                           FontSize="11"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           TextWrapping="Wrap" />
+            </StackPanel>
             <CheckBox Content="Orchestrated - a lead plans the work, checks in on the team and reviews each merge"
                       IsChecked="{Binding UltraOrchestrated}"
                       Margin="0,0,0,4"

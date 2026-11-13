@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -69,6 +70,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
         ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
         ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
+        ultraWorkFolder = CopilotChatPaneViewModel.ReadUltraWorkFolder(_appSettingsStore) ?? "";
         ultraOrchestratorProvider = CopilotChatPaneViewModel.ReadUltraOrchestratorProvider(_appSettingsStore) ?? SameAsChatChoice;
         ultraOrchestratorModel = CopilotChatPaneViewModel.ReadUltraOrchestratorModel(_appSettingsStore) ?? "";
         ultraOrchestratorEffort = EffortChoiceFor(_appSettingsStore.Get(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey));
@@ -187,6 +189,14 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraStartWorkers;
+
+    /// <summary>Where Ultra runs keep their worktrees and build output; blank means
+    /// <see cref="UltraWorkFolderDefault"/>. Each worker has a full checkout plus its own build output,
+    /// so this is how to move that off a drive that is short of room.</summary>
+    [ObservableProperty]
+    private string ultraWorkFolder;
+
+    public string UltraWorkFolderDefault => CopilotChatPaneViewModel.DefaultUltraWorkFolder;
 
     /// <summary>Run Ultra with a lead that plans the work, checks in on the team and reviews each merge
     /// before it lands. Costs the lead's own model calls on top of the workers'.</summary>
@@ -400,6 +410,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void SaveUltraSettings()
     {
+        // Checked first, and nothing saved if it is wrong: a half-saved page is harder to read than one
+        // error that says what to fix. Whether the folder can really be created is only known at run
+        // time (the drive may be unplugged then), where it is checked again.
+        var workFolder = UltraWorkFolder.Trim();
+        if (workFolder.Length > 0 && !Path.IsPathFullyQualified(workFolder))
+        {
+            StatusMessage = $"The work folder needs to be a full path, such as D:\\IdePlusPlusUltra - \"{workFolder}\" is not. Nothing was saved.";
+            return;
+        }
+
         UltraWorkerCount = Math.Clamp(UltraWorkerCount, 1, CopilotChatPaneViewModel.MaxUltraWorkerCount);
         UltraTimeBudgetMinutes = Math.Clamp(
             UltraTimeBudgetMinutes,
@@ -418,6 +438,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxTokensMillionsSettingKey, UltraMaxTokensMillions.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkFolderSettingKey, workFolder);
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorProviderSettingKey, StoredProvider(UltraOrchestratorProvider));
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
@@ -427,7 +448,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                         + $", up to {UltraTimeBudgetMinutes} minutes, "
                         + $"{UltraConcurrentRequests} model requests at a time; run until done stops after "
                         + $"{UltraMaxRunMinutes} minutes"
-                        + (UltraMaxTokensMillions > 0 ? $" or {UltraMaxTokensMillions}M tokens." : ".");
+                        + (UltraMaxTokensMillions > 0 ? $" or {UltraMaxTokensMillions}M tokens." : ".")
+                        + (workFolder.Length > 0 ? $" Work folder: {workFolder}." : "");
     }
 
     [RelayCommand]

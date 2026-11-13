@@ -33,6 +33,11 @@ public sealed partial class CopilotChatPaneViewModel
     public const string UltraOrchestratorModelSettingKey = "UltraOrchestratorModel";
     public const string UltraOrchestratorEffortSettingKey = "UltraOrchestratorEffort";
 
+    /// <summary>Where a run's worktrees and build output go. Blank means <see cref="DefaultUltraWorkFolder"/>.
+    /// Every worker has a full checkout plus its own build output, so a big team on a big solution needs
+    /// room: this is how to put it on a drive that has some.</summary>
+    public const string UltraWorkFolderSettingKey = "UltraWorkFolder";
+
     /// <summary>The model and effort for sub-agents - investigate_parallel's investigators and Ultra's
     /// workers. Blank means the same as the chat's own.</summary>
     public const string SubAgentModelSettingKey = "SubAgentModel";
@@ -65,10 +70,59 @@ public sealed partial class CopilotChatPaneViewModel
     /// asking for the same command finds it already approved instead of opening a second dialog.</summary>
     private readonly SemaphoreSlim _teamShellApprovals = new(1, 1);
 
-    /// <summary>Where run folders (worktrees while running, board.jsonl after) go. Outside every
-    /// repository, so a worktree never shows up in the user's git status, file list or index.</summary>
-    internal string UltraRootDirectory { get; set; } = Path.Combine(
+    /// <summary>Where run folders go when Settings does not say otherwise.</summary>
+    public static string DefaultUltraWorkFolder { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IdePlusPlus", "ultra");
+
+    /// <summary>Where run folders (worktrees while running, board.jsonl after) go. Outside every
+    /// repository, so a worktree never shows up in the user's git status, file list or index. The
+    /// Ultra work folder setting, when there is one, takes precedence - see <see cref="ReadUltraWorkFolder"/>.</summary>
+    internal string UltraRootDirectory { get; set; } = DefaultUltraWorkFolder;
+
+    /// <summary>The work folder the user chose in Settings, or null for the default.</summary>
+    public static string? ReadUltraWorkFolder(AppSettingsStore settings) =>
+        settings.Get(UltraWorkFolderSettingKey)?.Trim() is { Length: > 0 } folder ? folder : null;
+
+    /// <summary>
+    /// Why <paramref name="folder"/> cannot be an Ultra work folder, or null when it can: it must be a
+    /// full path, on a drive that exists, outside the repository (a worktree inside it would show up in
+    /// the user's git status), and somewhere that can be created. Creates it, since the run needs it and
+    /// "it can be created" is only known by doing so.
+    /// </summary>
+    internal static string? ValidateUltraWorkFolder(string folder, string? repositoryRoot)
+    {
+        if (!Path.IsPathFullyQualified(folder))
+        {
+            return $"The Ultra work folder \"{folder}\" needs to be a full path, such as D:\\IdePlusPlusUltra.";
+        }
+
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        if (Path.GetPathRoot(full) is { } root && !Directory.Exists(root))
+        {
+            return $"The Ultra work folder \"{folder}\" is on a drive that is not available ({root}).";
+        }
+
+        if (repositoryRoot is not null)
+        {
+            var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+            if (full.Equals(repository, StringComparison.OrdinalIgnoreCase)
+                || full.StartsWith(repository + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"The Ultra work folder \"{folder}\" is inside the repository, where every worktree would show up "
+                       + "in git status. Choose a folder outside it.";
+            }
+        }
+
+        try
+        {
+            Directory.CreateDirectory(full);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return $"The Ultra work folder \"{folder}\" can't be created: {ex.Message}";
+        }
+    }
 
     /// <summary>
     /// Asked before an Ultra worker's run_command, with the exact command line and the worker's
@@ -313,6 +367,18 @@ public sealed partial class CopilotChatPaneViewModel
                 // saved first - the same as build_solution does, for the same reason.
                 _editApplicationService.SaveDirtyDocuments();
 
+                // Where the run's worktrees go. Refused here, before anything exists, rather than left to
+                // fail as an IO error halfway through setting up: this one is the user's to fix.
+                var chosenWorkFolder = ReadUltraWorkFolder(_appSettingsStore);
+                var workFolder = chosenWorkFolder ?? UltraRootDirectory;
+                if (chosenWorkFolder is not null
+                    && ValidateUltraWorkFolder(chosenWorkFolder, repositoryRoot) is { } workFolderProblem)
+                {
+                    assistantMessage.Text = $"**Ultra team** - didn't start. {workFolderProblem} Change it under Settings, "
+                                            + "Ultra team, or clear it to use the default. Nothing was started or spent.";
+                    return;
+                }
+
                 // Before the run exists, since creating one makes its folder. The picker lists every
                 // team branch newest first, but one run carrying on from another leaves both listed,
                 // and picking the older is easy - and silently drops everything the later run did.
@@ -364,7 +430,7 @@ public sealed partial class CopilotChatPaneViewModel
                 TeamRunViewModel? runCard = null;
                 var run = new UltraTeamRun(
                     client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit,
-                    TimeProvider.System, UltraRootDirectory,
+                    TimeProvider.System, workFolder,
                     (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct),
                     askToContinue: runUntilDone ? null : ct => _dispatcher.InvokeAsync(async () =>
                     {
@@ -384,8 +450,8 @@ public sealed partial class CopilotChatPaneViewModel
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
-                CurrentActivity = $"Ultra team working - {(options.AutoScale ? $"{run.Workers.Count} workers, growing to {run.MaxWorkers} if they ask" : $"{options.WorkerCount} workers")}, "
-                                  + $"up to {options.TimeBudget.TotalMinutes:0} min...";
+                CurrentActivity = $"Ultra team starting - creating its workspace first, then {(options.AutoScale ? $"{run.Workers.Count} workers, growing to {run.MaxWorkers} if they ask" : $"{options.WorkerCount} workers")} "
+                                  + $"for up to {options.TimeBudget.TotalMinutes:0} min (progress is on the team card)...";
 
                 var solutionPath = _solutionPath;
                 var testProjects = _testProjectPaths;

@@ -368,6 +368,18 @@ public sealed class UltraTeamRun
     /// <summary>True while the run's preflight build is going, before any worker starts.</summary>
     public bool IsCheckingBuild { get; private set; }
 
+    /// <summary>What the run is doing before its first worker starts - "Creating workspace - ..." through
+    /// the preflight build to the lead's plan - or null once the team is under way. Setting up takes a
+    /// while on a big repository (a checkout and a clean build per team), and a card that said nothing
+    /// for minutes would look like a hang.</summary>
+    public string? SetupStatus { get; private set; }
+
+    private void SetSetup(string? status)
+    {
+        SetupStatus = status;
+        OnChanged();
+    }
+
     /// <summary>True while the run waits for the user to say whether to continue.</summary>
     public bool IsAwaitingContinue { get; private set; }
 
@@ -432,10 +444,13 @@ public sealed class UltraTeamRun
         _repositoryRoot = repositoryRoot;
         _teamBranch = teamBranch;
 
+        SetSetup("Creating workspace - taking a snapshot of your working tree (a large repository can take a few minutes)");
+
         // The snapshot stays what the result is compared against - the user's tree as it was - so a
         // run started from an earlier branch offers that branch's work for review too, not only what
         // this run added on top of it.
         var snapshot = await _teamGit.CreateSnapshotCommitAsync(repositoryRoot, cancellationToken);
+        SetSetup("Creating workspace - preparing the team's branch and the folders its worktrees will share");
         var start = snapshot;
         if (!string.IsNullOrWhiteSpace(startFrom))
         {
@@ -532,9 +547,11 @@ public sealed class UltraTeamRun
 
                 using var buildSlots = new SemaphoreSlim(Math.Max(1, _options.MaxConcurrentBuilds));
                 _buildSlots = buildSlots;
-                foreach (var state in Workers)
+                var starting = Workers;
+                for (var i = 0; i < starting.Count; i++)
                 {
-                    await CreateWorkerAsync(state, start, cancellationToken);
+                    SetSetup($"Creating workspace - checking out a worktree for {starting[i].Name} ({i + 1} of {starting.Count})");
+                    await CreateWorkerAsync(starting[i], start, cancellationToken);
                 }
 
                 // The one check that would have saved three whole 16-worker runs whose every merge-gate
@@ -543,7 +560,7 @@ public sealed class UltraTeamRun
                 if (_options.PreflightBuild)
                 {
                     IsCheckingBuild = true;
-                    OnChanged();
+                    SetSetup("Checking that the solution builds in the new workspace, before the team starts");
                     TeamToolDispatcher first;
                     lock (_teamLock)
                     {
@@ -564,9 +581,11 @@ public sealed class UltraTeamRun
 
                 if (_orchestrator is { } planner)
                 {
+                    SetSetup("The lead is planning the work before the workers start");
                     await planner.PlanAsync(goal, cancellationToken);
                 }
 
+                SetSetup(null);
                 endReason = await RunWorkersAsync(goal, cancellationToken);
             }
             finally
@@ -606,6 +625,7 @@ public sealed class UltraTeamRun
                 }
 
                 IsCheckingBuild = false;
+                SetupStatus = null;
                 _buildSlots = null;
                 OnChanged();
             }

@@ -1,7 +1,9 @@
+using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Windows;
 using IdePlusPlus.Shell;
+using Microsoft.Win32;
 
 namespace IdePlusPlus.Shell.Views;
 
@@ -90,6 +92,20 @@ public partial class SettingsWindow : Window
         {
             row.IsBusy = false;
             _viewModel.RefreshToolchains();
+        }
+    }
+
+    private void BrowseUltraWorkFolder_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Folder for Ultra team worktrees and build output",
+            InitialDirectory = Directory.Exists(_viewModel.UltraWorkFolder) ? _viewModel.UltraWorkFolder : null,
+        };
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            _viewModel.UltraWorkFolder = dialog.FolderName;
         }
     }
 

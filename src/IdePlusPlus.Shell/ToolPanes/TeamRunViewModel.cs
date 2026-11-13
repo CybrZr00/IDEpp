@@ -193,7 +193,9 @@ public sealed partial class TeamRunViewModel : ObservableObject
     private void Refresh()
     {
         var merges = _run.Workers.Sum(w => w.Merges);
-        var time = _run.IsCheckingBuild
+        var time = _run.SetupStatus is { } setup
+            ? setup
+            : _run.IsCheckingBuild
             ? "checking the solution builds before starting the team"
             : _run.IsAwaitingContinue
             ? $"{Clock(_run.Elapsed)} elapsed, waiting for you"

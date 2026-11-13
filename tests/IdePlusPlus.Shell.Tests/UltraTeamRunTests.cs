@@ -630,6 +630,49 @@ public sealed class UltraTeamRunTests : IDisposable
         File.Exists(Path.Combine(generated, "data.txt")).ShouldBeTrue();
     }
 
+    /// <summary>Setting up (a snapshot, a checkout per worker, a clean build) takes minutes on a big
+    /// repository; a card that said nothing for that long reads as a hang to someone who has not seen it.</summary>
+    [Fact]
+    public async Task WhileSettingUp_TheRunSaysWhatItIsDoing_InOrder_ThenGoesQuiet()
+    {
+        _client.Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var run = CreateRun(workers: 1, budget: TimeSpan.FromMinutes(10), preflight: true);
+        run.SetupStatus.ShouldBeNull("nothing is set up before the run starts");
+        var seen = new List<string>();
+        var workerStartedWith = (string?)"unset";
+        run.Changed += () =>
+        {
+            lock (seen)
+            {
+                if (run.SetupStatus is { } status && (seen.Count == 0 || seen[^1] != status))
+                {
+                    seen.Add(status);
+                }
+            }
+
+            if (run.Workers[0].Phase == TeamWorkerPhase.Working)
+            {
+                workerStartedWith = run.SetupStatus;
+            }
+        };
+
+        await RunAsync(run);
+
+        string[] statuses;
+        lock (seen)
+        {
+            statuses = [.. seen];
+        }
+
+        statuses[0].ShouldStartWith("Creating workspace - taking a snapshot");
+        statuses.ShouldContain(s => s.StartsWith("Creating workspace - checking out a worktree for w1 (1 of 1)", StringComparison.Ordinal));
+        statuses.Last().ShouldStartWith("Checking that the solution builds");
+        statuses.ToList().FindIndex(s => s.Contains("checking out a worktree")).ShouldBeLessThan(
+            statuses.ToList().FindIndex(s => s.StartsWith("Checking that", StringComparison.Ordinal)));
+        run.SetupStatus.ShouldBeNull();
+        workerStartedWith.ShouldBeNull("by the time a worker is working, setting up is over");
+    }
+
     [Fact]
     public async Task EachWorkerIsToldWhoItIs_AndSeesTheGoalAndTheBoard()
     {
