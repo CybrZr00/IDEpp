@@ -22,5 +22,8 @@
     <SolidColorBrush x:Key="ReviewBackgroundBrush" Color="#362F3D" />
     <SolidColorBrush x:Key="ReviewBorderBrush" Color="#5B4E66" />
     <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#3A392F" />
+    <!-- The accent for primary buttons, the selected navigation item and focus rings: a muted teal, kept low-saturation like the rest of this warm palette. -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#397583" />
+    <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
 
 </ResourceDictionary>

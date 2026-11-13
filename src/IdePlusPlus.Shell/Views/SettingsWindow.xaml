@@ -2,315 +2,1076 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Settings"
-        Width="460"
-        Height="640"
-        MinWidth="420"
-        MinHeight="400"
+        Width="960"
+        Height="740"
+        MinWidth="780"
+        MinHeight="520"
         WindowStartupLocation="CenterOwner"
+        UseLayoutRounding="True"
         Background="{DynamicResource WindowBackgroundBrush}"
         TextElement.Foreground="{DynamicResource WindowForegroundBrush}">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="SettingsBoolToVisibility" />
+
+        <FontFamily x:Key="SettingsIconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+        <!-- A slim scrollbar in the theme's own muted colour: the system one is a bright grey strip down
+             the side of a dark page. Each orientation has its own template, picked by a trigger. -->
+        <Style x:Key="ScrollThumbStyle" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="Pill" Background="{DynamicResource MutedForegroundBrush}" Opacity="0.4" CornerRadius="4" Margin="2" />
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Pill" Property="Opacity" Value="0.7" />
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="Pill" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ScrollPageButtonStyle" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <ControlTemplate x:Key="VerticalScrollBarTemplate" TargetType="ScrollBar">
+            <Border Background="Transparent">
+                <Track x:Name="PART_Track" IsDirectionReversed="True">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollPageButtonStyle}" Command="ScrollBar.PageUpCommand" />
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource ScrollThumbStyle}" />
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollPageButtonStyle}" Command="ScrollBar.PageDownCommand" />
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Border>
+        </ControlTemplate>
+        <ControlTemplate x:Key="HorizontalScrollBarTemplate" TargetType="ScrollBar">
+            <Border Background="Transparent">
+                <Track x:Name="PART_Track" IsDirectionReversed="False">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollPageButtonStyle}" Command="ScrollBar.PageLeftCommand" />
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource ScrollThumbStyle}" />
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Style="{StaticResource ScrollPageButtonStyle}" Command="ScrollBar.PageRightCommand" />
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Border>
+        </ControlTemplate>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Width" Value="12" />
+            <Setter Property="MinWidth" Value="12" />
+            <Setter Property="Template" Value="{StaticResource VerticalScrollBarTemplate}" />
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto" />
+                    <Setter Property="MinWidth" Value="0" />
+                    <Setter Property="Height" Value="12" />
+                    <Setter Property="MinHeight" Value="12" />
+                    <Setter Property="Template" Value="{StaticResource HorizontalScrollBarTemplate}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- A check box in the theme's colours: the system one is a white square whatever the theme, and
+             its label takes the system text colour, which is black on a dark card. -->
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Background="Transparent" SnapsToDevicePixels="True">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="Box"
+                                    Width="18" Height="18"
+                                    Margin="0,1,0,0"
+                                    VerticalAlignment="Top"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    BorderBrush="{DynamicResource MutedForegroundBrush}"
+                                    Background="{DynamicResource PanelBackgroundBrush}">
+                                <Path x:Name="Tick"
+                                      Data="M4,9.5 L7.5,13 L14,5.5"
+                                      Stroke="{DynamicResource OnAccentBrush}"
+                                      StrokeThickness="2"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      Visibility="Collapsed" />
+                            </Border>
+                            <ContentPresenter Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Tick" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- A combo box in the theme's colours, closed and open. The system one is a white box with a
+             white drop-down on every theme. The editable kind (a model id you can type or pick) swaps the
+             read-only text for a text box that has no border of its own. -->
+        <ControlTemplate x:Key="ComboToggleTemplate" TargetType="ToggleButton">
+            <Border x:Name="Chrome"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <Path Data="M0,0 L4.5,5 L9,0"
+                      Stroke="{DynamicResource MutedForegroundBrush}"
+                      StrokeThickness="1.6"
+                      StrokeStartLineCap="Round"
+                      StrokeEndLineCap="Round"
+                      StrokeLineJoin="Round"
+                      HorizontalAlignment="Right"
+                      VerticalAlignment="Center"
+                      Margin="0,0,12,0" />
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+        <Style x:Key="ComboEditableTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <ScrollViewer x:Name="PART_ContentHost" Focusable="False" Padding="{TemplateBinding Padding}" Background="Transparent" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Row" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="Toggle"
+                                          Template="{StaticResource ComboToggleTemplate}"
+                                          BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                                          Focusable="False"
+                                          ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" />
+                            <ContentPresenter x:Name="ContentSite"
+                                              IsHitTestVisible="False"
+                                              Margin="10,0,32,0"
+                                              VerticalAlignment="Center"
+                                              HorizontalAlignment="Left"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" />
+                            <TextBox x:Name="PART_EditableTextBox"
+                                     Style="{StaticResource ComboEditableTextBoxStyle}"
+                                     Visibility="Collapsed"
+                                     Margin="6,1,30,1"
+                                     VerticalAlignment="Center"
+                                     Focusable="True"
+                                     IsReadOnly="{TemplateBinding IsReadOnly}" />
+                            <Popup x:Name="PART_Popup"
+                                   Placement="Bottom"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   PopupAnimation="Fade">
+                                <Grid MinWidth="{Binding ActualWidth, ElementName=Toggle}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <Border Margin="0,4,6,8"
+                                            Background="{DynamicResource PanelBackgroundBrush}"
+                                            BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="4">
+                                        <Border.Effect>
+                                            <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.35" />
+                                        </Border.Effect>
+                                        <ScrollViewer SnapsToDevicePixels="True">
+                                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="ContentSite" Property="Visibility" Value="Hidden" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Toggle" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Text -->
+        <Style x:Key="PageTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="24" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="PageSubtitleStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,2,0,20" />
+        </Style>
+        <Style x:Key="CardTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style x:Key="HintStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="RowLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="NavHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+            <Setter Property="Margin" Value="20,18,0,6" />
+        </Style>
+
+        <!-- Cards -->
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource EditProposalBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource EditProposalBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="20,16" />
+            <Setter Property="Margin" Value="0,0,0,16" />
+        </Style>
+        <Style x:Key="InnerCardStyle" TargetType="Border">
+            <Setter Property="BorderBrush" Value="{DynamicResource EditProposalBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+
+        <!-- Buttons: a quiet one by default, an accent one for the action a page is about. -->
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource EditProposalBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="16,6" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.85" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource WindowForegroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Text entry -->
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource EditProposalBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Padding="{TemplateBinding Padding}" Focusable="False" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="PasswordBox">
+            <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource EditProposalBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Padding="{TemplateBinding Padding}" Focusable="False" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- The left-hand navigation: one radio button per page, drawn as a row with an icon and an
+             accent bar on the page that is showing. -->
+        <Style x:Key="NavItemStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            <Setter Property="Margin" Value="10,1" />
+            <Setter Property="Padding" Value="12,9" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Border x:Name="Root"
+                                    Background="Transparent"
+                                    BorderBrush="Transparent"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="{TemplateBinding Padding}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="30" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="Glyph"
+                                               Text="{TemplateBinding Tag}"
+                                               FontFamily="{StaticResource SettingsIconFont}"
+                                               FontSize="16"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                                    <ContentPresenter Grid.Column="1" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                            <Border x:Name="Bar"
+                                    Width="3"
+                                    Margin="0,8"
+                                    CornerRadius="2"
+                                    HorizontalAlignment="Left"
+                                    Background="{DynamicResource AccentBrush}"
+                                    Visibility="Collapsed" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource MenuHighlightBackgroundBrush}" />
+                                <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Bar" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="16">
-            <TextBlock Text="Copilot" FontWeight="Bold" Margin="0,0,0,8" />
+    <Grid Background="{DynamicResource WindowBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
 
-            <TextBlock Text="OpenRouter API key (chat):" Margin="0,0,0,2" />
-            <DockPanel Margin="0,0,0, 4">
-                <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveApiKeyButton_OnClick" />
-                <PasswordBox x:Name="ApiKeyBox" />
-            </DockPanel>
-            <TextBlock Text="{Binding ApiKeyStatusText}"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       FontSize="11"
-                       Margin="0,0,0,12" />
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-            <TextBlock Text="DeepSeek API key (inline completion, and chat with the DeepSeek provider):" Margin="0,0,0,2" />
-            <DockPanel Margin="0,0,0,4">
-                <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveDeepSeekApiKeyButton_OnClick" />
-                <Button DockPanel.Dock="Right" Content="Test" Padding="10,2" Margin="6,0,0,0" Click="TestDeepSeekConnectionButton_OnClick" />
-                <PasswordBox x:Name="DeepSeekApiKeyBox" />
-            </DockPanel>
-            <TextBlock Text="{Binding DeepSeekApiKeyStatusText}"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       FontSize="11"
-                       Margin="0,0,0,12" />
+            <!-- Navigation -->
+            <Border Grid.Column="0"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                    BorderThickness="0,0,1,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,20,0,16">
+                        <TextBlock Text="Settings" FontSize="20" FontWeight="SemiBold" Margin="22,0,0,4" />
 
-            <TextBlock Text="Anthropic API key (chat, the Ultra lead or sub-agents with the Anthropic provider):" Margin="0,0,0,2" />
-            <DockPanel Margin="0,0,0,4">
-                <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveAnthropicApiKeyButton_OnClick" />
-                <Button DockPanel.Dock="Right" Content="Test" Padding="10,2" Margin="6,0,0,0" Click="TestAnthropicConnectionButton_OnClick"
-                        ToolTip="Lists your available models with the typed key, or the saved key if the box is empty. Costs nothing." />
-                <PasswordBox x:Name="AnthropicApiKeyBox" />
-            </DockPanel>
-            <TextBlock Text="{Binding AnthropicApiKeyStatusText}"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       FontSize="11"
-                       Margin="0,0,0,16" />
+                        <TextBlock Text="COPILOT" Style="{StaticResource NavHeaderStyle}" />
+                        <RadioButton x:Name="NavProviders" GroupName="SettingsPages" Content="AI providers" Tag="&#xE753;"
+                                     IsChecked="True" Style="{StaticResource NavItemStyle}" />
+                        <RadioButton x:Name="NavAssistant" GroupName="SettingsPages" Content="Assistant" Tag="&#xE8BD;"
+                                     Style="{StaticResource NavItemStyle}" />
+                        <RadioButton x:Name="NavUltra" GroupName="SettingsPages" Content="Ultra team" Tag="&#xE716;"
+                                     Style="{StaticResource NavItemStyle}" />
+                        <RadioButton x:Name="NavSubAgents" GroupName="SettingsPages" Content="Sub-agents" Tag="&#xE77B;"
+                                     Style="{StaticResource NavItemStyle}" />
 
-            <TextBlock Text="System Prompt" FontWeight="Bold" Margin="0,0,0,8" />
-            <TextBlock Text="Custom instructions prepended to every conversation (e.g. coding-style rules), replacing the built-in default that tells the assistant to act via tools rather than just describe a plan. Leave blank to keep that default."
-                       FontSize="11"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8" />
-            <TextBox Text="{Binding SystemPrompt, UpdateSourceTrigger=PropertyChanged}"
-                     AcceptsReturn="True"
-                     TextWrapping="Wrap"
-                     MinHeight="60"
-                     MaxHeight="140"
-                     VerticalScrollBarVisibility="Auto"
-                     Margin="0,0,0,8" />
-            <Button Content="Save System Prompt" Command="{Binding SaveSystemPromptCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
+                        <TextBlock Text="TOOLS" Style="{StaticResource NavHeaderStyle}" />
+                        <RadioButton x:Name="NavMcp" GroupName="SettingsPages" Content="MCP servers" Tag="&#xE839;"
+                                     Style="{StaticResource NavItemStyle}" />
+                        <RadioButton x:Name="NavReverseEngineering" GroupName="SettingsPages" Content="Reverse engineering" Tag="&#xE943;"
+                                     Style="{StaticResource NavItemStyle}" />
+                        <RadioButton x:Name="NavBuild" GroupName="SettingsPages" Content="Build &amp; packages" Tag="&#xE7B8;"
+                                     Style="{StaticResource NavItemStyle}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
 
-            <TextBlock Text="LM Studio" FontWeight="Bold" Margin="0,0,0,8" />
-            <TextBlock Text="A chat provider alternative to OpenRouter (pick it from the provider dropdown in Copilot Chat). Works with any OpenAI-compatible server, not just LM Studio. Codebase search embeds with a built-in model (bge-small, downloaded once on first index) unless you tick the box below."
-                       FontSize="11"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8" />
+            <!-- Pages: one shows at a time, chosen by the navigation. -->
+            <Grid Grid.Column="1" x:Name="PagesHost">
 
-            <CheckBox Content="Use LM Studio for codebase search embeddings instead of the built-in model"
-                      IsChecked="{Binding UseLmStudioEmbeddings}"
-                      Margin="0,0,0,8" />
+                <!-- AI providers -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavProviders, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="AI providers" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="The keys and servers the copilot talks to. Each has its own Save button." Style="{StaticResource PageSubtitleStyle}" />
 
-            <TextBlock Text="LM Studio base URL:" Margin="0,0,0,2" />
-            <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}"
-                     Margin="0,0,0,8"
-                     ToolTip="Any OpenAI-compatible server works, e.g. http://192.168.50.3:8080/v1" />
-
-            <TextBlock Text="API key (only if the server requires one):" Margin="0,0,0,2" />
-            <DockPanel Margin="0,0,0,4">
-                <Button DockPanel.Dock="Right" Content="Clear" Command="{Binding ClearLmStudioApiKeyCommand}" Padding="10,2" Margin="6,0,0,0" />
-                <Button DockPanel.Dock="Right" Content="Save" Padding="10,2" Margin="6,0,0,0" Click="SaveLmStudioApiKeyButton_OnClick" />
-                <PasswordBox x:Name="LmStudioApiKeyBox" />
-            </DockPanel>
-            <TextBlock Text="{Binding LmStudioApiKeyStatusText}"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       FontSize="11"
-                       Margin="0,0,0,8" />
-
-            <TextBlock Text="Embedding model name (as loaded in LM Studio):" Margin="0,0,0,2" />
-            <TextBox Text="{Binding LmStudioModel, UpdateSourceTrigger=PropertyChanged}"
-                     Margin="0,0,0,8"
-                     ToolTip="e.g. text-embedding-nomic-embed-text-v1.5" />
-
-            <Button Content="Save LM Studio Settings" Command="{Binding SaveLmStudioSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" />
-
-            <TextBlock Text="Ultra team" FontWeight="Bold" Margin="0,16,0,4" />
-            <TextBlock Text="Effort 'Ultra' sends a message to a team of copilot workers, each in its own git worktree, coordinating through a shared board. More workers and more time mean more tokens - roughly one conversation's worth per worker, for as long as the run lasts."
-                       FontSize="11"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8" />
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBlock Text="Workers (1-64):" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <TextBox Text="{Binding UltraWorkerCount, UpdateSourceTrigger=PropertyChanged}" Width="40" />
-                <TextBlock Text="Time budget (minutes, 5-240):" VerticalAlignment="Center" Margin="16,0,6,0" />
-                <TextBox Text="{Binding UltraTimeBudgetMinutes, UpdateSourceTrigger=PropertyChanged}" Width="50" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <CheckBox Content="Auto mode - start with" IsChecked="{Binding UltraAutoScale}" VerticalAlignment="Center" Margin="0,0,6,0"
-                          ToolTip="The team starts small and its workers ask for more when the work left won't fit the time left. The runner grants at most 2 at a time, spaced out, up to the worker count above - and not when too little time, token budget or disk space is left." />
-                <TextBox Text="{Binding UltraStartWorkers, UpdateSourceTrigger=PropertyChanged}" Width="40" IsEnabled="{Binding UltraAutoScale}" />
-                <TextBlock Text="workers; they can ask for more, up to the worker count" VerticalAlignment="Center" Margin="6,0,0,0" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBlock Text="Model requests at a time (1-64):" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <TextBox Text="{Binding UltraConcurrentRequests, UpdateSourceTrigger=PropertyChanged}" Width="40"
-                         ToolTip="The whole team's limit on simultaneous model requests - workers beyond it wait their turn. Rate-limited requests are retried with backoff. Raise it with the team size if your provider allows; a local model server usually wants 1-2." />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBlock Text="Run until done stops after (minutes, 5-2880):" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <TextBox Text="{Binding UltraMaxRunMinutes, UpdateSourceTrigger=PropertyChanged}" Width="50" />
-                <TextBlock Text="or (million tokens, 0 = no limit):" VerticalAlignment="Center" Margin="16,0,6,0" />
-                <TextBox Text="{Binding UltraMaxTokensMillions, UpdateSourceTrigger=PropertyChanged}" Width="50"
-                         ToolTip="The whole team's prompt plus completion tokens. At 90% the workers are told to finish and merge what they are on." />
-            </StackPanel>
-            <StackPanel Margin="0,0,0,8">
-                <TextBlock Text="Work folder - where each worker's checkout and build output go:" Margin="0,0,0,2" />
-                <DockPanel>
-                    <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseUltraWorkFolder_OnClick" Padding="10,0" Margin="6,0,0,0" />
-                    <TextBox Text="{Binding UltraWorkFolder, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="A full path on a local drive, outside the repository, e.g. D:\IdePlusPlusUltra. Every worker has a full checkout plus its own build output, so point this at a drive with room. Blank uses the default. Takes effect from the next run." />
-                </DockPanel>
-                <TextBlock Text="{Binding UltraWorkFolderDefault, StringFormat=Blank uses {0}}"
-                           FontSize="11"
-                           Foreground="{DynamicResource MutedForegroundBrush}"
-                           TextWrapping="Wrap" />
-            </StackPanel>
-            <CheckBox Content="Orchestrated - a lead plans the work, checks in on the team and reviews each merge"
-                      IsChecked="{Binding UltraOrchestrated}"
-                      Margin="0,0,0,4"
-                      ToolTip="A planner agent splits the goal into tasks before any worker starts, redirects workers that drift, and approves or sends back every merge. Better when the pieces need coordinating; costs the lead's calls on top of the workers', and merges wait for its review." />
-            <StackPanel Orientation="Horizontal" Margin="20,0,0,8">
-                <TextBlock Text="Lead provider:" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding UltraOrchestratorProvider}" Width="110"
-                          ToolTip="Which provider the lead runs on. 'Same as chat' follows the chat's provider dropdown." />
-                <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
-                <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraOrchestratorEffort}" Width="90"
-                          ToolTip="Default is High." />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="20,0,0,8">
-                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <ComboBox IsEditable="True" ItemsSource="{Binding UltraOrchestratorModelOptions}"
-                          Text="{Binding UltraOrchestratorModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
-                          ToolTip="A model id on the lead's provider - type one, or Fetch to pick from the provider's list. Blank uses the chat's model, or on another provider the model last used with it in the chat (else its default)." />
-                <Button Content="Fetch" Command="{Binding FetchLeadModelsCommand}" Padding="8,0" Margin="6,0,0,0"
-                        Visibility="{Binding CanFetchModels, Converter={StaticResource SettingsBoolToVisibility}}"
-                        ToolTip="Fetch the latest model list from the lead's provider." />
-            </StackPanel>
-            <Button Content="Save Ultra Settings" Command="{Binding SaveUltraSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
-
-            <TextBlock Text="Sub-agents" FontWeight="Bold" Margin="0,0,0,4" />
-            <TextBlock Text="The provider, model and effort for investigate_parallel's investigators and for Ultra's workers. Leave them as they are to use the chat's own - a cheaper, faster model is often enough for these."
-                       FontSize="11"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8" />
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBlock Text="Provider:" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding SubAgentProvider}" Width="110"
-                          ToolTip="Which provider sub-agents run on. 'Same as chat' follows the chat's provider dropdown." />
-                <TextBlock Text="Effort:" VerticalAlignment="Center" Margin="12,0,6,0" />
-                <ComboBox ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding SubAgentEffort}" Width="90"
-                          ToolTip="Default uses the chat's own effort." />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <ComboBox IsEditable="True" ItemsSource="{Binding SubAgentModelOptions}"
-                          Text="{Binding SubAgentModel, UpdateSourceTrigger=PropertyChanged}" Width="220"
-                          ToolTip="A model id on the sub-agents' provider - type one, or Fetch to pick from the provider's list. Blank uses the chat's model, or on another provider the model last used with it in the chat (else its default)." />
-                <Button Content="Fetch" Command="{Binding FetchSubAgentModelsCommand}" Padding="8,0" Margin="6,0,0,0"
-                        Visibility="{Binding CanFetchModels, Converter={StaticResource SettingsBoolToVisibility}}"
-                        ToolTip="Fetch the latest model list from the sub-agents' provider." />
-            </StackPanel>
-            <Button Content="Save Sub-agent Settings" Command="{Binding SaveSubAgentSettingsCommand}" HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,16" />
-
-            <TextBlock Text="Reverse engineering tools" FontWeight="Bold" Margin="0,0,0,4" />
-            <TextBlock Text="Ghidra and a JDK power the native decompiler. If they are already on this machine they are detected and nothing is downloaded; otherwise IDE++ can install a pinned, checksum-verified copy on demand."
-                       FontSize="11"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8" />
-            <ItemsControl ItemsSource="{Binding Toolchains}" Margin="0,0,0,16">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border BorderBrush="{DynamicResource EditProposalBorderBrush}"
-                                BorderThickness="1"
-                                CornerRadius="4"
-                                Padding="6"
-                                Margin="0,0,0,6">
+                        <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <Grid>
+                                <TextBlock Text="OpenRouter" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="API key for chat." Style="{StaticResource HintStyle}" />
+                                <Grid Margin="0,12,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="{Binding DisplayName}" FontWeight="Bold" />
-                                        <TextBlock Text="{Binding Description}"
-                                                   FontSize="11"
-                                                   Foreground="{DynamicResource MutedForegroundBrush}"
-                                                   TextWrapping="Wrap" />
+                                    <PasswordBox x:Name="ApiKeyBox" />
+                                    <Button Grid.Column="1" Content="Save" Margin="8,0,0,0" Style="{StaticResource PrimaryButtonStyle}"
+                                            Click="SaveApiKeyButton_OnClick" />
+                                </Grid>
+                                <TextBlock Text="{Binding ApiKeyStatusText}" Style="{StaticResource HintStyle}" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="DeepSeek" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="API key for inline completion, and for chat with the DeepSeek provider." Style="{StaticResource HintStyle}" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <PasswordBox x:Name="DeepSeekApiKeyBox" />
+                                    <Button Grid.Column="1" Content="Test" Margin="8,0,0,0" Click="TestDeepSeekConnectionButton_OnClick" />
+                                    <Button Grid.Column="2" Content="Save" Margin="8,0,0,0" Style="{StaticResource PrimaryButtonStyle}"
+                                            Click="SaveDeepSeekApiKeyButton_OnClick" />
+                                </Grid>
+                                <TextBlock Text="{Binding DeepSeekApiKeyStatusText}" Style="{StaticResource HintStyle}" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Anthropic" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="API key for chat, and for the Ultra lead or sub-agents when they use the Anthropic provider." Style="{StaticResource HintStyle}" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <PasswordBox x:Name="AnthropicApiKeyBox" />
+                                    <Button Grid.Column="1" Content="Test" Margin="8,0,0,0" Click="TestAnthropicConnectionButton_OnClick"
+                                            ToolTip="Lists your available models with the typed key, or the saved key if the box is empty. Costs nothing." />
+                                    <Button Grid.Column="2" Content="Save" Margin="8,0,0,0" Style="{StaticResource PrimaryButtonStyle}"
+                                            Click="SaveAnthropicApiKeyButton_OnClick" />
+                                </Grid>
+                                <TextBlock Text="{Binding AnthropicApiKeyStatusText}" Style="{StaticResource HintStyle}" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="LM Studio" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="A chat provider alternative to OpenRouter - pick it from the provider dropdown in Copilot Chat. Works with any OpenAI-compatible server, not just LM Studio. Codebase search embeds with a built-in model (bge-small, downloaded once on first index) unless you tick the box below."
+                                           Style="{StaticResource HintStyle}" />
+
+                                <CheckBox Content="Use LM Studio for codebase search embeddings instead of the built-in model"
+                                          IsChecked="{Binding UseLmStudioEmbeddings}"
+                                          Margin="0,14,0,0" />
+
+                                <TextBlock Text="Base URL" Style="{StaticResource RowLabelStyle}" Margin="0,16,0,4" />
+                                <TextBox Text="{Binding LmStudioBaseUrl, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="Any OpenAI-compatible server works, e.g. http://192.168.50.3:8080/v1" />
+
+                                <TextBlock Text="API key" Style="{StaticResource RowLabelStyle}" Margin="0,14,0,0" />
+                                <TextBlock Text="Only if the server requires one." Style="{StaticResource HintStyle}" Margin="0,0,0,4" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <PasswordBox x:Name="LmStudioApiKeyBox" />
+                                    <Button Grid.Column="1" Content="Clear" Command="{Binding ClearLmStudioApiKeyCommand}" Margin="8,0,0,0" />
+                                    <Button Grid.Column="2" Content="Save" Margin="8,0,0,0" Style="{StaticResource PrimaryButtonStyle}"
+                                            Click="SaveLmStudioApiKeyButton_OnClick" />
+                                </Grid>
+                                <TextBlock Text="{Binding LmStudioApiKeyStatusText}" Style="{StaticResource HintStyle}" Margin="0,8,0,0" />
+
+                                <TextBlock Text="Embedding model name" Style="{StaticResource RowLabelStyle}" Margin="0,14,0,0" />
+                                <TextBlock Text="As loaded in LM Studio." Style="{StaticResource HintStyle}" Margin="0,0,0,4" />
+                                <TextBox Text="{Binding LmStudioModel, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="e.g. text-embedding-nomic-embed-text-v1.5" />
+
+                                <Button Content="Save LM Studio settings" Command="{Binding SaveLmStudioSettingsCommand}"
+                                        Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,16,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Assistant -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavAssistant, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="Assistant" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="How the copilot is instructed." Style="{StaticResource PageSubtitleStyle}" />
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="System prompt" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="Custom instructions prepended to every conversation (e.g. coding-style rules), replacing the built-in default that tells the assistant to act via tools rather than just describe a plan. Leave blank to keep that default."
+                                           Style="{StaticResource HintStyle}" />
+                                <TextBox Text="{Binding SystemPrompt, UpdateSourceTrigger=PropertyChanged}"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         MinHeight="140"
+                                         MaxHeight="320"
+                                         VerticalContentAlignment="Top"
+                                         VerticalScrollBarVisibility="Auto"
+                                         Margin="0,12,0,0" />
+                                <Button Content="Save system prompt" Command="{Binding SaveSystemPromptCommand}"
+                                        Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,16,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Ultra team -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavUltra, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="Ultra team" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="Effort 'Ultra' sends a message to a team of copilot workers, each in its own git worktree, coordinating through a shared board. More workers and more time mean more tokens - roughly one conversation's worth per worker, for as long as the run lasts."
+                                   Style="{StaticResource PageSubtitleStyle}" />
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Team size and time" Style="{StaticResource CardTitleStyle}" Margin="0,0,0,12" />
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Workers" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="1 to 64." Style="{StaticResource HintStyle}" />
                                     </StackPanel>
-                                    <Button Grid.Column="1"
-                                            Content="{Binding InstallButtonText}"
-                                            Padding="8,2"
-                                            Margin="6,0,0,0"
-                                            VerticalAlignment="Top"
-                                            IsEnabled="{Binding CanInstall}"
-                                            Click="InstallTool_OnClick" />
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center"
+                                             Text="{Binding UltraWorkerCount, UpdateSourceTrigger=PropertyChanged}" />
                                 </Grid>
-                                <TextBlock Text="{Binding StateText}"
-                                           FontSize="10"
-                                           Margin="0,4,0,0"
-                                           Foreground="{DynamicResource MutedForegroundBrush}" />
-                                <TextBlock Text="{Binding Progress}"
-                                           FontSize="10"
-                                           Margin="0,2,0,0"
-                                           TextWrapping="Wrap"
-                                           Foreground="{DynamicResource MutedForegroundBrush}" />
-                            </StackPanel>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
 
-            <TextBlock Text="NuGet" FontWeight="Bold" Margin="0,0,0,8" />
-            <CheckBox Content="Restore NuGet packages on solution load"
-                      IsChecked="{Binding RestoreNuGetOnSolutionLoad}"
-                      Margin="0,0,0,16" />
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Time budget" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="Minutes, 5 to 240." Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center"
+                                             Text="{Binding UltraTimeBudgetMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
 
-            <TextBlock Text="MCP Servers" FontWeight="Bold" Margin="0,16,0,4" />
-            <TextBlock Text="Tools (Playwright, Context7, etc.) the assistant can call during chat. Launched locally as configured here - most need Node.js/npx installed."
-                       FontSize="11"
-                       Foreground="{DynamicResource MutedForegroundBrush}"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8" />
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Model requests at a time" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="1 to 64. The whole team's limit on simultaneous requests; workers beyond it wait their turn. A local model server usually wants 1-2."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraConcurrentRequests, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="Rate-limited requests are retried with backoff. Raise it with the team size if your provider allows." />
+                                </Grid>
 
-            <ItemsControl ItemsSource="{Binding McpServers}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border BorderBrush="{DynamicResource EditProposalBorderBrush}"
-                                BorderThickness="1"
-                                CornerRadius="4"
-                                Padding="6"
-                                Margin="0,0,0,6">
-                            <StackPanel>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox Grid.Column="0"
-                                             Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
-                                             ToolTip="Server name (used as the tool-name prefix)" />
-                                    <Button Grid.Column="1"
-                                            Content="Remove"
-                                            Padding="6,0"
-                                            Margin="4,0,0,0"
-                                            Command="{Binding DataContext.RemoveMcpServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="{Binding}" />
+                                    <StackPanel>
+                                        <CheckBox Content="Auto mode" IsChecked="{Binding UltraAutoScale}"
+                                                  FontWeight="SemiBold"
+                                                  ToolTip="The team starts small and its workers ask for more when the work left won't fit the time left. The runner grants at most 2 at a time, spaced out, up to the worker count above - and not when too little time, token budget or disk space is left." />
+                                        <TextBlock Text="Start with this many workers; they can ask for more, up to the worker count."
+                                                   Style="{StaticResource HintStyle}" Margin="22,2,0,0" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraStartWorkers, UpdateSourceTrigger=PropertyChanged}"
+                                             IsEnabled="{Binding UltraAutoScale}" />
                                 </Grid>
-                                <TextBox Text="{Binding Command, UpdateSourceTrigger=PropertyChanged}"
-                                         Margin="0,4,0,0"
-                                         ToolTip="Command, e.g. npx" />
-                                <TextBox Text="{Binding ArgsText, UpdateSourceTrigger=PropertyChanged}"
-                                         Margin="0,4,0,0"
-                                         ToolTip="Arguments, space-separated (wrap in double quotes if one contains spaces), e.g. -y @playwright/mcp@latest" />
-                                <TextBox Text="{Binding EnvText, UpdateSourceTrigger=PropertyChanged}"
-                                         Margin="0,4,0,0"
-                                         ToolTip="Optional environment variables, KEY=VALUE;KEY2=VALUE2" />
-                                <TextBlock Text="{Binding StatusText}"
-                                           FontSize="10"
-                                           Margin="0,4,0,0"
-                                           Foreground="{DynamicResource MutedForegroundBrush}"
-                                           TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
 
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <Button Content="Add Server" Command="{Binding AddMcpServerCommand}" Padding="8,2" />
-                <Button Content="+ Playwright" Command="{Binding AddPlaywrightMcpServerCommand}" Margin="4,0,0,0" Padding="8,2" />
-                <Button Content="+ Context7" Command="{Binding AddContext7McpServerCommand}" Margin="4,0,0,0" Padding="8,2" />
-                <Button Content="+ REA" Command="{Binding AddReaMcpServerCommand}" Margin="4,0,0,0" Padding="8,2" />
-            </StackPanel>
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Run until done" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="When a run is left to go until done, these are its only limits."
+                                           Style="{StaticResource HintStyle}" Margin="0,0,0,12" />
 
-            <Button Content="Save &amp; Reconnect MCP Servers"
-                    Command="{Binding SaveAndReconnectMcpServersCommand}"
-                    HorizontalAlignment="Left"
-                    Padding="10,4" />
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Stops after" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="Minutes, 5 to 2880." Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center"
+                                             Text="{Binding UltraMaxRunMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
 
-            <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource MutedForegroundBrush}" Margin="0,16,0,0" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Or after" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="Million tokens, 0 for no limit. The whole team's prompt plus completion tokens; at 90% the workers are told to finish and merge what they are on."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraMaxTokensMillions, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
 
-            <Button Content="Close" Padding="12,4" Margin="0,16,0,0" HorizontalAlignment="Right" Click="CloseButton_OnClick" />
-        </StackPanel>
-    </ScrollViewer>
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Work folder" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="Where each worker's checkout and build output go. Every worker has a full checkout plus its own build output, so point this at a drive with room. A full path on a local drive, outside the repository; blank uses the default. Takes effect from the next run."
+                                           Style="{StaticResource HintStyle}" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding UltraWorkFolder, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="e.g. D:\IdePlusPlusUltra" />
+                                    <Button Grid.Column="1" Content="Browse..." Margin="8,0,0,0" Click="BrowseUltraWorkFolder_OnClick" />
+                                </Grid>
+                                <TextBlock Text="{Binding UltraWorkFolderDefault, StringFormat=Blank uses {0}}"
+                                           Style="{StaticResource HintStyle}" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <CheckBox Content="Orchestrated - a lead plans the work, checks in on the team and reviews each merge"
+                                          IsChecked="{Binding UltraOrchestrated}"
+                                          FontWeight="SemiBold"
+                                          ToolTip="A planner agent splits the goal into tasks before any worker starts, redirects workers that drift, and approves or sends back every merge. Better when the pieces need coordinating; costs the lead's calls on top of the workers', and merges wait for its review." />
+                                <TextBlock Text="Better when the pieces need coordinating. It costs the lead's own calls on top of the workers', and merges wait for its review."
+                                           Style="{StaticResource HintStyle}" Margin="22,2,0,12" />
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Lead provider" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding UltraOrchestratorProvider}"
+                                              HorizontalAlignment="Left" MinWidth="160"
+                                              ToolTip="Which provider the lead runs on. 'Same as chat' follows the chat's provider dropdown." />
+                                </Grid>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Lead effort" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraOrchestratorEffort}"
+                                              HorizontalAlignment="Left" MinWidth="160" ToolTip="Default is High." />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Lead model" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" IsEditable="True" ItemsSource="{Binding UltraOrchestratorModelOptions}"
+                                              Text="{Binding UltraOrchestratorModel, UpdateSourceTrigger=PropertyChanged}"
+                                              ToolTip="A model id on the lead's provider - type one, or Fetch to pick from the provider's list. Blank uses the chat's model, or on another provider the model last used with it in the chat (else its default)." />
+                                    <Button Grid.Column="2" Content="Fetch" Command="{Binding FetchLeadModelsCommand}" Margin="8,0,0,0"
+                                            Visibility="{Binding CanFetchModels, Converter={StaticResource SettingsBoolToVisibility}}"
+                                            ToolTip="Fetch the latest model list from the lead's provider." />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Content="Save Ultra settings" Command="{Binding SaveUltraSettingsCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Sub-agents -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavSubAgents, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="Sub-agents" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="The provider, model and effort for investigate_parallel's investigators and for Ultra's workers. Leave them as they are to use the chat's own - a cheaper, faster model is often enough for these."
+                                   Style="{StaticResource PageSubtitleStyle}" />
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Sub-agent model" Style="{StaticResource CardTitleStyle}" Margin="0,0,0,12" />
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Provider" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding SubAgentProvider}"
+                                              HorizontalAlignment="Left" MinWidth="160"
+                                              ToolTip="Which provider sub-agents run on. 'Same as chat' follows the chat's provider dropdown." />
+                                </Grid>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Effort" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding SubAgentEffort}"
+                                              HorizontalAlignment="Left" MinWidth="160" ToolTip="Default uses the chat's own effort." />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Model" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" IsEditable="True" ItemsSource="{Binding SubAgentModelOptions}"
+                                              Text="{Binding SubAgentModel, UpdateSourceTrigger=PropertyChanged}"
+                                              ToolTip="A model id on the sub-agents' provider - type one, or Fetch to pick from the provider's list. Blank uses the chat's model, or on another provider the model last used with it in the chat (else its default)." />
+                                    <Button Grid.Column="2" Content="Fetch" Command="{Binding FetchSubAgentModelsCommand}" Margin="8,0,0,0"
+                                            Visibility="{Binding CanFetchModels, Converter={StaticResource SettingsBoolToVisibility}}"
+                                            ToolTip="Fetch the latest model list from the sub-agents' provider." />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Content="Save sub-agent settings" Command="{Binding SaveSubAgentSettingsCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- MCP servers -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavMcp, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="MCP servers" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="Tools (Playwright, Context7, etc.) the assistant can call during chat. Launched locally as configured here - most need Node.js/npx installed."
+                                   Style="{StaticResource PageSubtitleStyle}" />
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <ItemsControl ItemsSource="{Binding McpServers}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Style="{StaticResource InnerCardStyle}">
+                                                <StackPanel>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Grid.Column="0"
+                                                                 Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                                 ToolTip="Server name (used as the tool-name prefix)" />
+                                                        <Button Grid.Column="1"
+                                                                Content="Remove"
+                                                                Margin="8,0,0,0"
+                                                                Command="{Binding DataContext.RemoveMcpServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}" />
+                                                    </Grid>
+                                                    <TextBox Text="{Binding Command, UpdateSourceTrigger=PropertyChanged}"
+                                                             Margin="0,6,0,0"
+                                                             ToolTip="Command, e.g. npx" />
+                                                    <TextBox Text="{Binding ArgsText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Margin="0,6,0,0"
+                                                             ToolTip="Arguments, space-separated (wrap in double quotes if one contains spaces), e.g. -y @playwright/mcp@latest" />
+                                                    <TextBox Text="{Binding EnvText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Margin="0,6,0,0"
+                                                             ToolTip="Optional environment variables, KEY=VALUE;KEY2=VALUE2" />
+                                                    <TextBlock Text="{Binding StatusText}" Style="{StaticResource HintStyle}" Margin="0,6,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <WrapPanel Margin="0,4,0,0">
+                                    <Button Content="Add server" Command="{Binding AddMcpServerCommand}" Margin="0,0,8,8" />
+                                    <Button Content="+ Playwright" Command="{Binding AddPlaywrightMcpServerCommand}" Margin="0,0,8,8" />
+                                    <Button Content="+ Context7" Command="{Binding AddContext7McpServerCommand}" Margin="0,0,8,8" />
+                                    <Button Content="+ REA" Command="{Binding AddReaMcpServerCommand}" Margin="0,0,8,8" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Content="Save &amp; reconnect MCP servers" Command="{Binding SaveAndReconnectMcpServersCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Reverse engineering -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavReverseEngineering, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="Reverse engineering" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="Ghidra and a JDK power the native decompiler. If they are already on this machine they are detected and nothing is downloaded; otherwise IDE++ can install a pinned, checksum-verified copy on demand."
+                                   Style="{StaticResource PageSubtitleStyle}" />
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <ItemsControl ItemsSource="{Binding Toolchains}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource InnerCardStyle}">
+                                            <StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0">
+                                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding Description}" Style="{StaticResource HintStyle}" />
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1"
+                                                            Content="{Binding InstallButtonText}"
+                                                            Margin="12,0,0,0"
+                                                            VerticalAlignment="Top"
+                                                            IsEnabled="{Binding CanInstall}"
+                                                            Click="InstallTool_OnClick" />
+                                                </Grid>
+                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource HintStyle}" Margin="0,6,0,0" />
+                                                <!-- Install progress; takes no room until there is some. -->
+                                                <TextBlock Text="{Binding Progress}" Margin="0,2,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource HintStyle}">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Progress}" Value="{x:Null}">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Progress}" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Build & packages -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding IsChecked, ElementName=NavBuild, Converter={StaticResource SettingsBoolToVisibility}}">
+                    <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
+                        <TextBlock Text="Build &amp; packages" Style="{StaticResource PageTitleStyle}" />
+                        <TextBlock Text="How solutions are prepared when they open." Style="{StaticResource PageSubtitleStyle}" />
+
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="NuGet" Style="{StaticResource CardTitleStyle}" />
+                                <CheckBox Content="Restore NuGet packages on solution load"
+                                          IsChecked="{Binding RestoreNuGetOnSolutionLoad}"
+                                          Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+
+        <!-- Footer -->
+        <Border Grid.Row="1"
+                Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource EditProposalBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="24,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding StatusMessage, TargetNullValue='Each page has its own Save button where one is needed.', FallbackValue='Each page has its own Save button where one is needed.'}"
+                           Style="{StaticResource HintStyle}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,16,0" />
+                <Button Grid.Column="1" Content="Close" Padding="26,7" Style="{StaticResource PrimaryButtonStyle}" Click="CloseButton_OnClick" />
+            </Grid>
+        </Border>
+    </Grid>
 </Window>

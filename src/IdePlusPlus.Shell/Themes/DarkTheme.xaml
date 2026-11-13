@@ -21,5 +21,8 @@
     <SolidColorBrush x:Key="ReviewBackgroundBrush" Color="#332D42" />
     <SolidColorBrush x:Key="ReviewBorderBrush" Color="#5A4A78" />
     <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#3C3C3C" />
+    <!-- The accent for primary buttons, the selected navigation item and focus rings: VS Code blue, readable against the near-black chrome with white text on it. -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#0E639C" />
+    <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
 
 </ResourceDictionary>

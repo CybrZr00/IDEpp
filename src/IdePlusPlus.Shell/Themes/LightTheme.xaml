@@ -21,5 +21,8 @@
     <SolidColorBrush x:Key="ReviewBackgroundBrush" Color="#F1EAFB" />
     <SolidColorBrush x:Key="ReviewBorderBrush" Color="#C9B8E8" />
     <SolidColorBrush x:Key="MenuHighlightBackgroundBrush" Color="#E5E5E5" />
+    <!-- The accent for primary buttons, the selected navigation item and focus rings: a standard Windows-style blue, readable with white text on it. -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#0067C0" />
+    <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
 
 </ResourceDictionary>
