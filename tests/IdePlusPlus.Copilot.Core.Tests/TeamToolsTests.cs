@@ -20,6 +20,41 @@ public class TeamToolsTests
     }
 
     [Fact]
+    public void ForWorker_OffersWaitOnlyWhenTheRunCanAnswerIt()
+    {
+        TeamTools.ForWorker(EditFile, shellCommandsEnabled: false)
+            .ShouldNotContain(t => t.Name == TeamTools.WaitToolName);
+        TeamTools.ForWorker(EditFile, shellCommandsEnabled: false, canWait: true)
+            .ShouldContain(t => t.Name == TeamTools.WaitToolName);
+        TeamTools.IsCoordinationTool(TeamTools.WaitToolName).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void WorkerSystemPrompt_ExplainsWaiting_OnlyWhereTheToolIsOffered_AndAlwaysTheWrapUp()
+    {
+        var withWait = TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false, canWait: true);
+        var without = TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false);
+
+        withWait.ShouldContain("Call team_wait");
+        withWait.ShouldContain($"at most {TeamTools.MaxWaitMinutes}");
+        without.ShouldNotContain("team_wait");
+        foreach (var prompt in new[] { withWait, without })
+        {
+            prompt.ShouldContain("every planned TASK is merged");
+            prompt.ShouldContain("[blocked]");
+        }
+    }
+
+    [Fact]
+    public void ThePlanAndTaskTools_OfferAfter_AndTheLeadIsToldToUseItSparingly()
+    {
+        LeadTools.SubmitPlan.ParametersSchema["properties"]!["after"].ShouldNotBeNull();
+        LeadTools.AddTask.ParametersSchema["properties"]!["after"].ShouldNotBeNull();
+        TeamTools.BoardWrite.ParametersSchema["properties"]!["after"].ShouldNotBeNull();
+        TeamPrompts.LeadPlanningPrompt(["w1"]).ShouldContain("'after'");
+    }
+
+    [Fact]
     public void WorkerSystemPrompt_ExplainsAskingForHelp_OnlyWhileTheTeamCanStillGrow()
     {
         TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false, maxTeamSize: 8)

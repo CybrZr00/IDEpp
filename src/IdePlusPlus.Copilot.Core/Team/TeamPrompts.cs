@@ -26,9 +26,10 @@ public static class TeamPrompts
 
     /// <param name="maxTeamSize">In auto mode, how big the team may grow - and so whether the prompt
     /// explains team_request_help at all; 0 when the team is fixed.</param>
+    /// <param name="canWait">Whether the worker is offered team_wait, which the prompt then explains.</param>
     public static string WorkerSystemPrompt(
         string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled,
-        int maxTeamSize = 0, bool orchestrated = false)
+        int maxTeamSize = 0, bool orchestrated = false, bool canWait = false)
     {
         var peers = string.Join(", ", team.Where(n => n != workerName));
         var leadership = orchestrated
@@ -58,7 +59,9 @@ public static class TeamPrompts
 
             Work cycle - repeat until the goal is met
             1. Gather: read the board in your cycle's opening (board_read for more). Don't re-derive a peer's
-               FACT, never retry a FAIL, and don't take an area someone has CLAIMed.
+               FACT, never retry a FAIL, and don't take an area someone has CLAIMed. A TASK marked [blocked]
+               waits for another to be merged and cannot be claimed yet, and one a peer is still working on
+               cannot be taken over from them.
             2. Claim: board_write a CLAIM naming the files or area and the outcome, before you edit anything.
             3. Act: make the change in your worktree with edit_file.
             4. Verify: build_solution, and run_tests where tests cover it. Revise until it builds and does what
@@ -96,6 +99,25 @@ public static class TeamPrompts
               run ends is lost.
             - Stay within the goal.
             """);
+
+        prompt.Append("""
+
+
+            When the board says every planned TASK is merged, the work is done: make one last check of the area you
+            worked on, merge anything that is still yours, and call team_done. Do not start new audits or polish.
+            """);
+
+        if (canWait)
+        {
+            prompt.Append($$"""
+
+
+                When your own work is merged and every TASK left is blocked or held by a peer, there is nothing for
+                you to do yet. Call team_wait - it returns when a peer merges, posts a FAIL or a TASK, or messages
+                you (or after the minutes you give, at most {{TeamTools.MaxWaitMinutes}}), and spends nothing while it waits - rather
+                than reading the board again or inventing work.
+                """);
+        }
 
         if (shellCommandsEnabled)
         {
@@ -195,6 +217,16 @@ public static class TeamPrompts
         + "npm install, npm ci or anything else that changes them, and do not delete or edit anything in them. Nothing "
         + "there is part of the team's result. If the task needs a package added, say so in a FAIL or FACT for the user.";
 
+    /// <summary>Said once to the whole team when the last planned TASK is merged, and again in every
+    /// cycle's board digest from then on. Without it each worker decides alone that "the goal is fully
+    /// met", and a team whose planned work finished in 70 minutes went on auditing for another 30,
+    /// each worker rebuilding and re-running the suite on its own.</summary>
+    public const string WrapUpNotice =
+        "Every planned TASK is merged, so the planned work is done. Wrap up: merge anything of yours that is not "
+        + "merged yet, make one last check of what you worked on (build, and the tests that cover it), post anything "
+        + "it turns up, and call team_done. Do not start new audits, polish or follow-ups - add a TASK only for "
+        + "something that last check shows is broken.";
+
     /// <summary>Sent to every worker when the run stalls: it is about to pause, or end.</summary>
     public const string StallNotice =
         "The run is stopping: nothing has reached the team branch for a while and merge builds keep failing. Finish "
@@ -240,7 +272,10 @@ public static class TeamPrompts
         + "search_codebase, find_symbol) - enough to split the goal sensibly, not to solve it - then call "
         + "lead_submit_plan once. Good tasks are independent: each names the files or area it owns, so two workers "
         + "rarely edit the same thing, and each is small enough to finish and merge in one sitting. Put anything "
-        + "that must happen first (a shared interface, a rename) in an early task and say that others depend on it. "
+        + "that must happen first (a shared interface, a rename) in an early task, and give the tasks that need it "
+        + "an 'after' list: a task with 'after' is held back from the workers until those tasks are merged, so "
+        + "nobody claims it early and sits waiting. Write 'after' only where a task truly cannot start without the "
+        + "other's merged code, and leave documentation that describes the finished work until last. "
         + "Do not plan more tasks than the work needs, and do not plan polish the goal did not ask for.";
 
     public static string LeadPlanningOpening(string goal, int workerCount) =>

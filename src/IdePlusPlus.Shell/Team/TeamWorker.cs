@@ -27,8 +27,12 @@ public enum TeamWorkerPhase
 /// volatile reads are enough for the UI to show something recent; nothing decides anything on a
 /// torn read of two of them together.
 /// </summary>
-public sealed class TeamWorkerState(string name)
+/// <param name="time">The clock a step is stamped with. The run's own, so a test that drives time sees
+/// workers go quiet.</param>
+public sealed class TeamWorkerState(string name, TimeProvider? time = null)
 {
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private long _lastStepTicks;
     private volatile string? _currentClaim;
     private volatile string? _lastTool;
     private volatile string? _doneSummary;
@@ -72,10 +76,26 @@ public sealed class TeamWorkerState(string name)
 
     public bool IsDone => Phase == TeamWorkerPhase.Done;
 
+    /// <summary>When the worker last called a tool, or null before its first step.</summary>
+    public DateTimeOffset? LastStepAt =>
+        Volatile.Read(ref _lastStepTicks) is var ticks and > 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+
+    /// <summary>
+    /// Still working on something: in the run, and not quiet for longer than <paramref name="within"/>.
+    /// A worker waiting for a peer's merge (team_wait) or reading the board counts - it is taking steps. What
+    /// does not count is one that finished, stopped, or has not been heard from for that long. This, not the
+    /// age of its claim, is what says whether it can be taken over from: a claim lapses on a timer
+    /// whether or not its worker is still at it, and a worker waiting on a prerequisite let its claim lapse
+    /// while a peer, reading that as "stalled", redid its work.
+    /// </summary>
+    public bool IsActive(TimeSpan within) =>
+        Phase == TeamWorkerPhase.Working && (LastStepAt is not { } last || _time.GetUtcNow() - last < within);
+
     internal void RecordStep(string tool)
     {
         Interlocked.Increment(ref _steps);
         LastTool = tool;
+        Volatile.Write(ref _lastStepTicks, _time.GetUtcNow().UtcTicks);
     }
 
     internal void RecordMerge() => Interlocked.Increment(ref _merges);

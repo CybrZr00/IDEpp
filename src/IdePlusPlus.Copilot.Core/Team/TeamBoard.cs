@@ -23,10 +23,17 @@ public enum TeamTaskStatus
     Open,
     Claimed,
     Done,
+
+    /// <summary>Not claimed, and waiting for another TASK to be merged first (its
+    /// <see cref="TeamBoardEntry.After"/>). Offered to nobody until then.</summary>
+    Blocked,
 }
 
+/// <param name="After">For a TASK: the numbers of the TASK entries that must be merged before it can be
+/// started. Null or empty when it can start at once.</param>
 public sealed record TeamBoardEntry(
-    int Number, TeamBoardEntryType Type, string Author, string Text, string? Detail, DateTimeOffset Time)
+    int Number, TeamBoardEntryType Type, string Author, string Text, string? Detail, DateTimeOffset Time,
+    IReadOnlyList<int>? After = null)
 {
     /// <summary>The handle peers pass to board_unfold. "G" for the Agensh paper's gist labels,
     /// which this board is modelled on.</summary>
@@ -113,7 +120,10 @@ public sealed partial class TeamBoard
 
     /// <summary>Adds an entry, or returns why not. Refusals say how to fix the entry rather than
     /// just that it is wrong - the caller is a model that will try again with whatever it is told.</summary>
-    public (TeamBoardEntry? Entry, string? Error) Write(string author, string? typeName, string? text, string? detail)
+    /// <param name="after">For a TASK: the numbers of earlier TASKs on the board that must be merged
+    /// before this one can be started.</param>
+    public (TeamBoardEntry? Entry, string? Error) Write(
+        string author, string? typeName, string? text, string? detail, IReadOnlyList<int>? after = null)
     {
         if (!TryParseType(typeName, out var type))
         {
@@ -151,17 +161,66 @@ public sealed partial class TeamBoard
             detail = detail[..MaxDetailLength] + " [truncated]";
         }
 
-        TeamBoardEntry entry;
+        TeamBoardEntry? entry = null;
+        string? afterError = null;
         lock (_lock)
         {
-            entry = new TeamBoardEntry(_entries.Count + 1, type, author, text, detail, _time.GetUtcNow());
-            _entries.Add(entry);
+            IReadOnlyList<int>? prerequisites = null;
+            if (after is { Count: > 0 })
+            {
+                var distinct = after.Distinct().Order().ToList();
+                var notTasks = distinct.Where(n => n < 1 || n > _entries.Count || _entries[n - 1].Type != TeamBoardEntryType.Task).ToList();
+                if (type != TeamBoardEntryType.Task)
+                {
+                    afterError = "Only a TASK can wait on other tasks. Leave 'after' out of any other entry.";
+                }
+                else if (notTasks.Count > 0)
+                {
+                    afterError = $"{string.Join(", ", notTasks.Select(n => $"G{n}"))} {(notTasks.Count == 1 ? "is" : "are")} not a TASK on the board. "
+                                 + "'after' names TASKs already on the board by id (e.g. \"G4\").";
+                }
+                else
+                {
+                    prerequisites = distinct;
+                }
+            }
+
+            if (afterError is null)
+            {
+                entry = new TeamBoardEntry(_entries.Count + 1, type, author, text, detail, _time.GetUtcNow(), prerequisites);
+                _entries.Add(entry);
+            }
+        }
+
+        if (entry is null)
+        {
+            return (null, afterError);
         }
 
         AppendToJournal(entry);
         EntryAdded?.Invoke(entry);
         return (entry, null);
     }
+
+    /// <summary>The TASK ids in a tool's 'after' argument - strings such as "G4" or "4", or plain numbers -
+    /// as entry numbers. Anything that is not an id is left out.</summary>
+    public static IReadOnlyList<int> ParseTaskIds(System.Text.Json.Nodes.JsonNode? node) =>
+        node is System.Text.Json.Nodes.JsonArray items
+            ? items
+                .Select(item => item?.ToString().Trim().TrimStart('G', 'g'))
+                .Select(text => int.TryParse(text, out var number) ? number : 0)
+                .Where(number => number > 0)
+                .Distinct()
+                .ToList()
+            : [];
+
+    /// <summary>The TASK id a CLAIM starts with ("G4: login window" is 4), or null. A claim names the
+    /// task it takes first; an id further along is only mentioned.</summary>
+    public static int? LeadingTaskNumber(string? claimText) =>
+        claimText is not null && LeadingId().Match(claimText) is { Success: true } match ? int.Parse(match.Groups[1].Value) : null;
+
+    [GeneratedRegex(@"^\s*G(\d+)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadingId();
 
     /// <summary>
     /// Adds entries from another run's board - its journal, read with <see cref="ReadJournal"/> -
@@ -186,10 +245,14 @@ public sealed partial class TeamBoard
             string Renumber(string text) => IdMention().Replace(
                 text, m => renumbered.TryGetValue(int.Parse(m.Groups[1].Value), out var n) ? $"G{n}" : $"earlier-{m.Groups[1].Value}");
 
+            // A task that waited on one that was not carried (it was finished) waits on nothing now.
+            IReadOnlyList<int>? RenumberAfter(IReadOnlyList<int>? after) =>
+                after?.Where(renumbered.ContainsKey).Select(n => renumbered[n]).ToList() is { Count: > 0 } kept ? kept : null;
+
             added = incoming
                 .Select(e => new TeamBoardEntry(
                     renumbered[e.Number], e.Type, $"{e.Author} ({origin})", Renumber(e.Text),
-                    e.Detail is null ? null : Renumber(e.Detail), _time.GetUtcNow()))
+                    e.Detail is null ? null : Renumber(e.Detail), _time.GetUtcNow(), RenumberAfter(e.After)))
                 .ToList();
             _entries.AddRange(added);
         }
@@ -232,7 +295,10 @@ public sealed partial class TeamBoard
                     root.GetProperty("author").GetString() ?? "?",
                     root.GetProperty("text").GetString() ?? "",
                     root.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String ? detail.GetString() : null,
-                    root.TryGetProperty("time", out var time) && time.TryGetDateTimeOffset(out var at) ? at : DateTimeOffset.MinValue));
+                    root.TryGetProperty("time", out var time) && time.TryGetDateTimeOffset(out var at) ? at : DateTimeOffset.MinValue,
+                    root.TryGetProperty("after", out var after) && after.ValueKind == JsonValueKind.Array
+                        ? after.EnumerateArray().Where(n => n.ValueKind == JsonValueKind.Number).Select(n => n.GetInt32()).ToList()
+                        : null));
             }
             catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
             {
@@ -249,16 +315,36 @@ public sealed partial class TeamBoard
     /// </summary>
     public static TeamTaskStatus StatusOf(TeamBoardEntry task, IReadOnlyList<TeamBoardEntry> entries, IReadOnlyCollection<TeamBoardEntry> activeClaims)
     {
-        var mention = new Regex($@"\b{Regex.Escape(task.Id)}\b", RegexOptions.IgnoreCase);
-        if (entries.Any(e => e.Number > task.Number && e.Type == TeamBoardEntryType.PatchSummary && mention.IsMatch(e.Text)))
+        if (IsDone(task, entries))
         {
             return TeamTaskStatus.Done;
         }
 
-        return activeClaims.Any(c => c.Number > task.Number && mention.IsMatch(c.Text))
-            ? TeamTaskStatus.Claimed
-            : TeamTaskStatus.Open;
+        var mention = new Regex($@"\b{Regex.Escape(task.Id)}\b", RegexOptions.IgnoreCase);
+        if (activeClaims.Any(c => c.Number > task.Number && mention.IsMatch(c.Text)))
+        {
+            return TeamTaskStatus.Claimed;
+        }
+
+        return UnmetPrerequisites(task, entries).Count > 0 ? TeamTaskStatus.Blocked : TeamTaskStatus.Open;
     }
+
+    private static bool IsDone(TeamBoardEntry task, IReadOnlyList<TeamBoardEntry> entries)
+    {
+        var mention = new Regex($@"\b{Regex.Escape(task.Id)}\b", RegexOptions.IgnoreCase);
+        return entries.Any(e => e.Number > task.Number && e.Type == TeamBoardEntryType.PatchSummary && mention.IsMatch(e.Text));
+    }
+
+    /// <summary>The TASKs <paramref name="task"/> waits for that are not merged yet - empty when it can be
+    /// started. A prerequisite counts as met the way any task is done: a PATCH_SUMMARY names it.</summary>
+    public static IReadOnlyList<TeamBoardEntry> UnmetPrerequisites(TeamBoardEntry task, IReadOnlyList<TeamBoardEntry> entries) =>
+        task.After is not { Count: > 0 }
+            ? []
+            : task.After
+                .Select(number => entries.FirstOrDefault(e => e.Number == number && e.Type == TeamBoardEntryType.Task))
+                .OfType<TeamBoardEntry>()
+                .Where(prerequisite => !IsDone(prerequisite, entries))
+                .ToList();
 
     /// <summary>The open (and claimed) TASKs, for carrying a backlog into a later run.</summary>
     public static IReadOnlyList<TeamBoardEntry> UnfinishedTasks(IReadOnlyList<TeamBoardEntry> entries) =>
@@ -299,11 +385,35 @@ public sealed partial class TeamBoard
             {
                 var statuses = tasks.Select(t => (Task: t, Status: StatusOf(t, _entries, claims))).ToList();
                 var done = statuses.Count(s => s.Status == TeamTaskStatus.Done);
-                report.Append($"\nBacklog: {statuses.Count - done} open or claimed, {done} done. Claim one by naming its id "
-                              + "in a CLAIM; name it in your PATCH_SUMMARY when merged.\n");
-                foreach (var (task, status) in statuses.Where(s => s.Status != TeamTaskStatus.Done).Take(DigestTasks))
+                var waiting = statuses.Count(s => s.Status == TeamTaskStatus.Blocked);
+                if (statuses.Count == done)
                 {
-                    report.Append("  ").Append(Format(task)).Append(status == TeamTaskStatus.Claimed ? "  [claimed]" : "").Append('\n');
+                    // Said in every cycle's opening, not only broadcast once: a worker whose cycle began after
+                    // the runner's notice never saw it.
+                    report.Append($"\nBacklog: 0 open or claimed, {done} done. {TeamPrompts.WrapUpNotice}\n");
+                }
+                else
+                {
+                    report.Append($"\nBacklog: {statuses.Count - done} open or claimed, {done} done"
+                                  + (waiting > 0 ? $" ({waiting} waiting for others)" : "")
+                                  + ". Claim one by naming its id in a CLAIM; name it in your PATCH_SUMMARY when merged."
+                                  + (waiting > 0 ? " A [blocked] task cannot be claimed until what it waits for is merged." : "")
+                                  + '\n');
+                }
+
+                // Open first, so the first line is something a worker can take; blocked last.
+                foreach (var (task, status) in statuses
+                             .Where(s => s.Status != TeamTaskStatus.Done)
+                             .OrderBy(s => s.Status switch { TeamTaskStatus.Open => 0, TeamTaskStatus.Claimed => 1, _ => 2 })
+                             .Take(DigestTasks))
+                {
+                    report.Append("  ").Append(Format(task)).Append(status switch
+                    {
+                        TeamTaskStatus.Claimed => "  [claimed]",
+                        TeamTaskStatus.Blocked =>
+                            $"  [blocked: waits for {string.Join(", ", UnmetPrerequisites(task, _entries).Select(p => p.Id))}]",
+                        _ => "",
+                    }).Append('\n');
                 }
             }
 
@@ -537,6 +647,7 @@ public sealed partial class TeamBoard
             text = entry.Text,
             detail = entry.Detail,
             time = entry.Time,
+            after = entry.After,
         });
 
         try

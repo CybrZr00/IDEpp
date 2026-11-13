@@ -25,10 +25,17 @@ public static class TeamTools
     public const string MergeToolName = "team_merge";
     public const string DoneToolName = "team_done";
     public const string RequestHelpToolName = "team_request_help";
+    public const string WaitToolName = "team_wait";
     public const string EditFileToolName = "edit_file";
 
     /// <summary>Most workers one help request can bring in - the team grows a little at a time.</summary>
     public const int MaxWorkersPerHelpRequest = 2;
+
+    /// <summary>How long one team_wait may last by default, and at most. A long wait is not a long
+    /// sleep: it ends the moment a peer merges, posts a FAIL or a TASK, or messages the worker.</summary>
+    public const int DefaultWaitMinutes = 5;
+
+    public const int MaxWaitMinutes = 15;
 
     public static readonly ToolDefinition BoardRead = new(
         Name: BoardReadToolName,
@@ -43,14 +50,16 @@ public static class TeamTools
                      "(what you are working on now; post it before editing, naming the TASK id if it is one), " +
                      "PATCH_SUMMARY (what you merged, as \"files=... | idea=... | evidence=...\", naming the TASK id " +
                      "it completes), TASK (a backlog item - add these to split a big piece for peers). Text is at " +
-                     "most 100 characters (300 for PATCH_SUMMARY and TASK); put anything longer in detail.",
+                     "most 100 characters (300 for PATCH_SUMMARY and TASK); put anything longer in detail. A CLAIM on " +
+                     "a TASK that is [blocked], or that a peer who is still working holds, is refused.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
               "properties": {
                 "type": { "type": "string", "enum": ["OBSERVED", "FACT", "FAIL", "CLAIM", "PATCH_SUMMARY", "TASK"] },
                 "text": { "type": "string", "description": "The gist - what a peer needs to decide whether this matters to them. At most 100 characters, or 300 for PATCH_SUMMARY." },
-                "detail": { "type": "string", "description": "Optional longer explanation, shown only when a peer calls board_unfold on this entry." }
+                "detail": { "type": "string", "description": "Optional longer explanation, shown only when a peer calls board_unfold on this entry." },
+                "after": { "type": "array", "items": { "type": "string" }, "description": "TASK only, optional: ids of TASKs already on the board (e.g. \"G4\") that must be merged before this one can be started. It is shown as [blocked] until then." }
               },
               "required": ["type", "text"]
             }
@@ -169,6 +178,25 @@ public static class TeamTools
             }
             """)!);
 
+    /// <summary>Waiting without spending: a worker whose own work is merged and who has nothing it can take
+    /// (every TASK left is blocked or held by a peer) would otherwise start cycle after cycle just to read
+    /// the board again, each one paid for in tokens. The handler is the run's, which knows when the team
+    /// changes; this only asks.</summary>
+    public static readonly ToolDefinition Wait = new(
+        Name: WaitToolName,
+        Description: "Wait for the team to change, spending nothing while you do. Returns when a peer merges, posts a FAIL or " +
+                     "a TASK, or messages you, or after the minutes you give. Use it when your own work is merged and every " +
+                     "TASK left is [blocked] or held by a peer who is working on it - instead of reading the board again or " +
+                     "inventing work. Don't use it while there is something you can do.",
+        ParametersSchema: JsonNode.Parse($$"""
+            {
+              "type": "object",
+              "properties": {
+                "minutes": { "type": "integer", "minimum": 1, "maximum": {{MaxWaitMinutes}}, "description": "The longest to wait, in minutes (default {{DefaultWaitMinutes}})." }
+              }
+            }
+            """)!);
+
     public static IReadOnlyList<ToolDefinition> Coordination { get; } =
         [BoardRead, BoardWrite, BoardGrep, BoardUnfold, Post, DirectMessage, Commit, Sync, Merge, Done];
 
@@ -190,15 +218,17 @@ public static class TeamTools
 
     /// <summary>Everything a worker is offered. edit_file's definition comes from the caller because
     /// it shares propose_edit's schema, which lives in IdePlusPlus.Copilot.Diff.</summary>
-    public static IReadOnlyList<ToolDefinition> ForWorker(ToolDefinition editFile, bool shellCommandsEnabled, bool canRequestHelp = false) =>
+    public static IReadOnlyList<ToolDefinition> ForWorker(
+        ToolDefinition editFile, bool shellCommandsEnabled, bool canRequestHelp = false, bool canWait = false) =>
     [
         .. AllowedExistingTools,
         editFile,
         .. shellCommandsEnabled ? ShellTools.All : [],
         .. Coordination,
         .. canRequestHelp ? [RequestHelp] : Array.Empty<ToolDefinition>(),
+        .. canWait ? [Wait] : Array.Empty<ToolDefinition>(),
     ];
 
     public static bool IsCoordinationTool(string toolName) =>
-        toolName == RequestHelpToolName || Coordination.Any(t => t.Name == toolName);
+        toolName is RequestHelpToolName or WaitToolName || Coordination.Any(t => t.Name == toolName);
 }

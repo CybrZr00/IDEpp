@@ -49,6 +49,8 @@ public sealed class TeamToolDispatcher
     private readonly string _configuration;
     private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
     private readonly Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? _requestHelp;
+    private readonly Func<int, CancellationToken, Task<(bool IsError, string Text)>>? _waitForChange;
+    private readonly Func<string, string?>? _claimGuard;
     private readonly BuildService _buildService = new();
     private readonly TestRunService _testRunService = new();
 
@@ -72,6 +74,11 @@ public sealed class TeamToolDispatcher
     /// <param name="requestHelp">team_request_help's implementation - (worker, count, reason,
     /// token), answered by the run - or null when the team cannot grow, which also leaves the tool
     /// out of what the worker is offered.</param>
+    /// <param name="waitForChange">team_wait's implementation - (minutes, token), answered by the run,
+    /// which knows when the team changes - or null, which leaves the tool out of what the worker is offered.</param>
+    /// <param name="claimGuard">Asked before a CLAIM is written, with its text: a reason to refuse it (the task
+    /// is blocked, or a peer who is still working holds it) or null. Null leaves claims unchecked, as they
+    /// always were.</param>
     public TeamToolDispatcher(
         TeamWorkerContext context,
         TeamWorkerState state,
@@ -84,9 +91,13 @@ public sealed class TeamToolDispatcher
         string configuration,
         Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand,
         TimeSpan? buildTimeout = null,
-        Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? requestHelp = null)
+        Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? requestHelp = null,
+        Func<int, CancellationToken, Task<(bool IsError, string Text)>>? waitForChange = null,
+        Func<string, string?>? claimGuard = null)
     {
         _requestHelp = requestHelp;
+        _waitForChange = waitForChange;
+        _claimGuard = claimGuard;
         _buildTimeout = buildTimeout ?? DefaultBuildTimeout;
         _context = context;
         _state = state;
@@ -102,7 +113,11 @@ public sealed class TeamToolDispatcher
 
     /// <summary>The tools this worker is offered - the same list ExecuteAsync routes.</summary>
     public IReadOnlyList<ToolDefinition> Tools =>
-        TeamTools.ForWorker(TeamEditTool.Definition, shellCommandsEnabled: _runCommand is not null, canRequestHelp: _requestHelp is not null);
+        TeamTools.ForWorker(
+            TeamEditTool.Definition,
+            shellCommandsEnabled: _runCommand is not null,
+            canRequestHelp: _requestHelp is not null,
+            canWait: _waitForChange is not null);
 
     public string? DrainNotices() => TeamNotices.Compose(_context.Name, _board, _bus);
 
@@ -190,8 +205,19 @@ public sealed class TeamToolDispatcher
             case TeamTools.BoardReadToolName:
                 return (false, _board.Read());
 
+            case TeamTools.WaitToolName when _waitForChange is not null:
+                var minutes = arguments?["minutes"] is { } minutesNode && int.TryParse(minutesNode.ToString(), out var parsedMinutes)
+                    ? parsedMinutes
+                    : TeamTools.DefaultWaitMinutes;
+
+                // Waiting is what the worker is meant to be doing, so it neither earns the idle nudge nor needs
+                // something published when it ends.
+                _state.HadVisibleActivityThisCycle = true;
+                _state.WroteToBoardThisCycle = true;
+                return await _waitForChange(minutes, cancellationToken);
+
             case TeamTools.BoardWriteToolName:
-                return BoardWrite(Arg("type"), Arg("text"), Arg("detail"));
+                return BoardWrite(Arg("type"), Arg("text"), Arg("detail"), arguments?["after"]);
 
             case TeamTools.BoardGrepToolName:
                 return (false, _board.Grep(Arg("query")));
@@ -475,9 +501,17 @@ public sealed class TeamToolDispatcher
         }
     }
 
-    private (bool IsError, string Text) BoardWrite(string? type, string? text, string? detail)
+    private (bool IsError, string Text) BoardWrite(string? type, string? text, string? detail, JsonNode? after)
     {
-        var (entry, error) = _board.Write(_context.Name, type, text, detail);
+        // A claim is the one entry that is a decision about who does what, so it is the one that can be
+        // refused for that: a task that cannot start yet, or that a peer who is still at it holds.
+        if (_claimGuard is not null && TeamBoard.TryParseType(type, out var parsedType)
+            && parsedType == TeamBoardEntryType.Claim && _claimGuard(text ?? "") is { } refusal)
+        {
+            return (true, refusal);
+        }
+
+        var (entry, error) = _board.Write(_context.Name, type, text, detail, TeamBoard.ParseTaskIds(after));
         if (entry is null)
         {
             return (true, error!);

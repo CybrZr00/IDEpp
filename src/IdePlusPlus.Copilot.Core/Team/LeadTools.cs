@@ -33,6 +33,11 @@ public static class LeadTools
                   "type": "array",
                   "items": { "type": "string", "description": "One piece of work, at most about 280 characters: the outcome, and the files or area it touches." }
                 },
+                "after": {
+                  "type": "array",
+                  "items": { "type": "array", "items": { "type": "integer" } },
+                  "description": "Optional, one list per task in the same order: the numbers (1 = the first task above) of the earlier tasks that must be merged before this one can be started, or an empty list. A task with 'after' is held back from the workers until those are merged, so nobody claims it early and sits waiting. Use it only where a task truly cannot start without the other's merged code; otherwise leave it out and let them run in parallel."
+                },
                 "notes": { "type": "string", "description": "Optional: conventions or interfaces every worker should follow. Posted to the team." }
               },
               "required": ["tasks"]
@@ -76,7 +81,10 @@ public static class LeadTools
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
-              "properties": { "text": { "type": "string", "description": "At most about 280 characters." } },
+              "properties": {
+                "text": { "type": "string", "description": "At most about 280 characters." },
+                "after": { "type": "array", "items": { "type": "string" }, "description": "Optional: ids of TASKs on the board (e.g. \"G3\") that must be merged before this one can be started." }
+              },
               "required": ["text"]
             }
             """)!);

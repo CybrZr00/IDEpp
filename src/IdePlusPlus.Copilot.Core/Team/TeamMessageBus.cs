@@ -119,6 +119,16 @@ public sealed class TeamMessageBus
         }
     }
 
+    /// <summary>Whether a direct message is waiting for this worker, without taking it - for a wait that
+    /// should end at once rather than sleep on something that has already arrived.</summary>
+    public bool HasDirect(string worker)
+    {
+        lock (_lock)
+        {
+            return _direct.TryGetValue(worker, out var queue) && queue.Count > 0;
+        }
+    }
+
     public IReadOnlyList<TeamMessage> TakeDirect(string worker)
     {
         lock (_lock)

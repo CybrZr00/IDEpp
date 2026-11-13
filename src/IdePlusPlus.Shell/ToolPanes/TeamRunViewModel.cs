@@ -201,7 +201,9 @@ public sealed partial class TeamRunViewModel : ObservableObject
             ? $"{Clock(_run.Elapsed)} elapsed, waiting for you"
             : $"{Clock(_run.Elapsed)} elapsed, {Clock(_run.TimeLeft < TimeSpan.Zero ? TimeSpan.Zero : _run.TimeLeft)} left";
         ProgressText = (_run.Round > 1 ? $"Round {_run.Round}  ·  " : "")
-                       + $"{time}  ·  {merges} merge{(merges == 1 ? "" : "s")}  ·  "
+                       + $"{time}  ·  "
+                       + (_run.IsWrappingUp ? "every planned task merged, wrapping up  ·  " : "")
+                       + $"{merges} merge{(merges == 1 ? "" : "s")}  ·  "
                        + $"{_run.PromptTokens + _run.CompletionTokens:N0}"
                        + (_run.MaxTokens > 0 ? $" of {_run.MaxTokens:N0}" : "") + " tokens"
                        + (_run.CachedPromptTokens > 0 && _run.PromptTokens > 0

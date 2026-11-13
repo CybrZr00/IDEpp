@@ -73,6 +73,11 @@ public sealed record UltraTeamOptions(
 
     public int MaxConcurrentBuilds { get; init; } = 2;
 
+    /// <summary>A peer that has taken a step within this long is still at its task: its claim cannot be
+    /// taken over, even after the claim itself has lapsed. Longer than a build and a test run, so a worker
+    /// waiting on one is not taken for gone.</summary>
+    public TimeSpan PeerActiveWindow { get; init; } = TimeSpan.FromMinutes(10);
+
     /// <summary>Build the solution once before any worker starts, and refuse to run if it fails -
     /// every merge needs a passing build, so a solution that cannot build cannot take any of the
     /// team's work. On by default; tests that never merge turn it off.</summary>
@@ -302,10 +307,10 @@ public sealed class UltraTeamRun
             ? Math.Clamp(options.InitialWorkerCount, 1, Math.Max(1, options.WorkerCount))
             : Math.Max(1, options.WorkerCount);
         var names = Enumerable.Range(1, startingWorkers).Select(n => $"w{n}").ToList();
-        _workers.AddRange(names.Select(n => new TeamWorkerState(n)));
+        _workers.AddRange(names.Select(n => new TeamWorkerState(n, time)));
         Board = new TeamBoard(time, options.ClaimLifetime, Path.Combine(_runDirectory, "board.jsonl"));
         Bus = new TeamMessageBus(time, options.Orchestrated ? [.. names, LeadTools.LeadName] : names);
-        Board.EntryAdded += _ => OnChanged();
+        Board.EntryAdded += OnBoardEntry;
         Bus.MessageSent += _ => OnChanged();
     }
 
@@ -386,6 +391,12 @@ public sealed class UltraTeamRun
     /// <summary>Why the run is waiting to be told whether to continue - time ran out, or it stalled
     /// - in a sentence or two for the user. Set before the question is asked.</summary>
     public string? PauseExplanation { get; private set; }
+
+    /// <summary>True from the moment the last planned TASK is merged until a new one is added: the team has
+    /// been told to wrap up. Shown on the card.</summary>
+    public bool IsWrappingUp => Volatile.Read(ref _wrapUpSent) == 1;
+
+    private int _wrapUpSent;
 
     /// <summary>Set by the stall check to end the round between steps, the way running out of time does.</summary>
     private volatile string? _stalledBecause;
@@ -678,7 +689,9 @@ public sealed class UltraTeamRun
         var dispatcher = new TeamToolDispatcher(
             context, state, Board, Bus, _readOnlyTools, _gitService, _teamGit, _buildSlots!,
             _options.Configuration, _runCommand,
-            requestHelp: _options.AutoScale ? RequestHelpAsync : null);
+            requestHelp: _options.AutoScale ? RequestHelpAsync : null,
+            waitForChange: (minutes, ct) => WaitForChangeAsync(state.Name, TimeSpan.FromMinutes(Math.Clamp(minutes, 1, TeamTools.MaxWaitMinutes)), ct),
+            claimGuard: claim => ClaimRefusal(state.Name, claim));
 
         // Here rather than once the team is created, so the lead also reviews the merges of
         // workers auto mode adds later.
@@ -797,6 +810,183 @@ public sealed class UltraTeamRun
         return known;
     }
 
+    /// <summary>What wakes a worker in team_wait, and what they are told about when the board is checked first.</summary>
+    private static readonly IReadOnlySet<TeamBoardEntryType> WakingEntries =
+        new HashSet<TeamBoardEntryType> { TeamBoardEntryType.PatchSummary, TeamBoardEntryType.Fail, TeamBoardEntryType.Task };
+
+    /// <summary>
+    /// Every board entry: refreshes the card, and watches for the team finishing its plan. When a PATCH_SUMMARY
+    /// leaves every TASK merged, the team is told once to wrap up; a TASK added after that - a follow-up
+    /// somebody found - starts the count again, and finishing it says so once more.
+    /// </summary>
+    private void OnBoardEntry(TeamBoardEntry entry)
+    {
+        OnChanged();
+        if (entry.Type == TeamBoardEntryType.Task)
+        {
+            Interlocked.Exchange(ref _wrapUpSent, 0);
+        }
+        else if (entry.Type == TeamBoardEntryType.PatchSummary)
+        {
+            AnnounceWrapUpWhenDone();
+        }
+    }
+
+    private void AnnounceWrapUpWhenDone()
+    {
+        var entries = Board.Snapshot();
+        var tasks = entries.Where(e => e.Type == TeamBoardEntryType.Task).ToList();
+        if (tasks.Count == 0 || tasks.Any(t => TeamBoard.StatusOf(t, entries, []) != TeamTaskStatus.Done))
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _wrapUpSent, 1) == 1)
+        {
+            return;
+        }
+
+        Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.WrapUpNotice);
+        OnChanged();
+    }
+
+    /// <summary>
+    /// Why <paramref name="worker"/> may not CLAIM what it is trying to - or null. A claim names the task it
+    /// takes first ("G4: ..."), and two things make that a mistake: the task is blocked behind another that is
+    /// not merged yet (taking it means waiting, and while the worker waits its claim lapses and a peer redoes
+    /// the work), or a peer holds it and is still working.
+    ///
+    /// The second is judged by whether the peer is still stepping, not by whether its claim is current: a
+    /// claim lapses after ten minutes whatever its worker is doing, and a worker that was merely waiting for
+    /// its prerequisite was taken for stalled and had its task redone by a peer, who then threw the work away.
+    /// </summary>
+    internal string? ClaimRefusal(string worker, string claimText)
+    {
+        if (TeamBoard.LeadingTaskNumber(claimText) is not { } number)
+        {
+            return null;
+        }
+
+        var entries = Board.Snapshot();
+        if (entries.FirstOrDefault(e => e.Number == number && e.Type == TeamBoardEntryType.Task) is not { } task)
+        {
+            return null;
+        }
+
+        var claims = Board.ActiveClaims();
+        if (TeamBoard.UnmetPrerequisites(task, entries) is { Count: > 0 } unmet)
+        {
+            var waitingFor = string.Join(", ", unmet.Select(p =>
+                $"{p.Id} ({(TeamBoard.StatusOf(p, entries, claims) == TeamTaskStatus.Claimed ? "being worked on" : "not started")})"));
+            return $"{task.Id} is blocked: it waits for {waitingFor} to be merged first, so claiming it now would only mean waiting. "
+                   + "Claim a task that is open, or call team_wait until it frees up.";
+        }
+
+        foreach (var peer in Workers.Where(w => w.Name != worker))
+        {
+            var latest = entries.LastOrDefault(e => e.Type == TeamBoardEntryType.Claim && e.Author == peer.Name);
+            if (latest is null
+                || TeamBoard.LeadingTaskNumber(latest.Text) != number
+                || entries.Any(e => e.Type == TeamBoardEntryType.PatchSummary && e.Author == peer.Name && e.Number > latest.Number)
+                || !peer.IsActive(_options.PeerActiveWindow))
+            {
+                continue;
+            }
+
+            var quiet = peer.LastStepAt is { } at ? _time.GetUtcNow() - at : TimeSpan.Zero;
+            return $"{task.Id} is held by {peer.Name}, who is still working (last step {FormatQuiet(quiet)} ago). Take another task. "
+                   + $"If you think {peer.Name} is stuck, ask them with team_dm instead of redoing their work.";
+        }
+
+        return null;
+    }
+
+    private static string FormatQuiet(TimeSpan span) =>
+        span.TotalMinutes >= 1 ? $"{(int)span.TotalMinutes} min" : $"{Math.Max(0, (int)span.TotalSeconds)} s";
+
+    /// <summary>
+    /// team_wait: holds the worker, without a model call, until the team changes - a peer merges, or posts a
+    /// FAIL or a TASK, or writes to the channel or to this worker - or <paramref name="wait"/> passes (less,
+    /// when the round has less time left). A worker with nothing it can take would otherwise begin cycle
+    /// after cycle just to read the same board, each paid for in tokens.
+    /// </summary>
+    internal async Task<(bool IsError, string Text)> WaitForChangeAsync(
+        string worker, TimeSpan wait, CancellationToken cancellationToken)
+    {
+        if (RoundOver)
+        {
+            return (false, "The round is over - nothing more will change. Finish what you are on and call team_done.");
+        }
+
+        var left = TimeLeft;
+        if (left > TimeSpan.Zero && left < wait)
+        {
+            wait = left;
+        }
+
+        // What happened since the worker last looked: its previous step's result already carried what it
+        // had seen, so this is only the gap between that and now, and waiting through it would be waiting
+        // for something that has already happened.
+        var missed = Board.TakeUnseen(worker, WakingEntries);
+        if (missed.Count > 0 || Bus.HasDirect(worker))
+        {
+            return (false, missed.Count > 0
+                ? "Already changed: " + string.Join("; ", missed.TakeLast(3).Select(TeamBoard.Format)) + ". board_read for the rest."
+                : "You have a message waiting - it comes with this result.");
+        }
+
+        var woke = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnEntry(TeamBoardEntry entry)
+        {
+            if (entry.Author != worker && WakingEntries.Contains(entry.Type))
+            {
+                woke.TrySetResult("");
+            }
+        }
+
+        void OnMessage(TeamMessage message)
+        {
+            if (message.To == worker)
+            {
+                // Delivered with this result by the worker's notices, so only said to be there.
+                woke.TrySetResult($"{message.From} sent you a message, which comes with this result");
+            }
+            else if (message.To is null && message.From != worker)
+            {
+                woke.TrySetResult($"{message.From} posted to the channel: {Cap(message.Text, 300)}");
+            }
+        }
+
+        Board.EntryAdded += OnEntry;
+        Bus.MessageSent += OnMessage;
+        try
+        {
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var started = _time.GetTimestamp();
+            var first = await Task.WhenAny(woke.Task, Task.Delay(wait, _time, stop.Token));
+            await stop.CancelAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (first != woke.Task)
+            {
+                return (false, $"Nothing changed in {FormatQuiet(wait)}. If your own work is merged and the TASKs left are still blocked or held, "
+                               + "team_wait again; if everything is merged, call team_done.");
+            }
+
+            // Taken now, so the same entries are not "already changed" the next time this worker waits.
+            var arrived = Board.TakeUnseen(worker, WakingEntries);
+            var what = arrived.Count > 0
+                ? string.Join("; ", arrived.TakeLast(3).Select(TeamBoard.Format))
+                : woke.Task.Result;
+            return (false, $"Woke after {FormatQuiet(_time.GetElapsedTime(started))}: {what}. board_read for what changed.");
+        }
+        finally
+        {
+            Board.EntryAdded -= OnEntry;
+            Bus.MessageSent -= OnMessage;
+        }
+    }
+
     /// <summary>
     /// team_request_help: auto mode's answer to a worker who judges the work left will not fit the
     /// time left. The worker decides it needs help; the runner decides whether it gets it, and refuses
@@ -858,7 +1048,7 @@ public sealed class UltraTeamRun
             var joined = new List<string>();
             for (var i = 0; i < grant; i++)
             {
-                var state = new TeamWorkerState($"w{size + i + 1}");
+                var state = new TeamWorkerState($"w{size + i + 1}", _time);
                 var dispatcher = await CreateWorkerAsync(state, teamHead, cancellationToken);
                 Bus.AddMember(state.Name);
                 joined.Add(state.Name);
@@ -1217,7 +1407,8 @@ public sealed class UltraTeamRun
             _options.ClaimLifetime,
             dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName),
             maxTeamSize: _options.AutoScale ? MaxWorkers : 0,
-            orchestrated: _options.Orchestrated);
+            orchestrated: _options.Orchestrated,
+            canWait: dispatcher.Tools.Any(t => t.Name == TeamTools.WaitToolName));
         var loop = new HeadlessAgentLoop(
             _workerClient,
             _options.WorkerModel ?? _model,

@@ -86,7 +86,9 @@ public sealed class TeamRepositoryFixture : IDisposable
         int number,
         Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand = null,
         TimeSpan? buildTimeout = null,
-        SemaphoreSlim? buildSlots = null)
+        SemaphoreSlim? buildSlots = null,
+        Func<int, CancellationToken, Task<(bool IsError, string Text)>>? waitForChange = null,
+        Func<string, string?>? claimGuard = null)
     {
         if (!_teamBranchCreated)
         {
@@ -114,7 +116,7 @@ public sealed class TeamRepositoryFixture : IDisposable
         var state = new TeamWorkerState(name);
         var dispatcher = new TeamToolDispatcher(
             context, state, Board, Bus, ReadOnlyTools, new GitService(), TeamGit, buildSlots ?? BuildSlots, "Debug", runCommand,
-            buildTimeout);
+            buildTimeout, waitForChange: waitForChange, claimGuard: claimGuard);
         return (dispatcher, context, state);
     }
 

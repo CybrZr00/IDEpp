@@ -153,9 +153,20 @@ public sealed class UltraOrchestrator
             .Select(t => t!)
             .ToList() ?? [];
 
-        foreach (var task in tasks)
+        // 'after' is one list per task, by the 1-based position of the tasks it waits for. A task can wait only
+        // on those written before it, so a plan can never wait on itself in a circle; anything else the lead
+        // wrote is left out rather than refusing the plan it spent its tokens on.
+        var afterLists = arguments?["after"] as JsonArray;
+        var boardNumbers = new List<int>();
+        for (var i = 0; i < tasks.Count; i++)
         {
-            WriteTask(task);
+            var waitsFor = (afterLists is not null && i < afterLists.Count ? afterLists[i] as JsonArray : null)?
+                .Select(n => int.TryParse(n?.ToString(), out var position) ? position : 0)
+                .Where(position => position >= 1 && position <= i && boardNumbers[position - 1] > 0)
+                .Select(position => boardNumbers[position - 1])
+                .Distinct()
+                .ToList();
+            boardNumbers.Add(WriteTask(tasks[i], waitsFor)?.Number ?? 0);
         }
 
         if (tasks.Count > 0 && arguments?["notes"]?.GetValue<string>() is { Length: > 0 } notes)
@@ -166,11 +177,12 @@ public sealed class UltraOrchestrator
         return tasks.Count;
     }
 
-    private void WriteTask(string text) => _board.Write(
+    private TeamBoardEntry? WriteTask(string text, IReadOnlyList<int>? after = null) => _board.Write(
         LeadTools.LeadName,
         "TASK",
         text.Length <= TeamBoard.MaxPatchSummaryLength ? text : text[..(TeamBoard.MaxPatchSummaryLength - 3)] + "...",
-        text.Length <= TeamBoard.MaxPatchSummaryLength ? null : text);
+        text.Length <= TeamBoard.MaxPatchSummaryLength ? null : text,
+        after).Entry;
 
     // ---- Supervision ----
 
@@ -257,9 +269,15 @@ public sealed class UltraOrchestrator
             return (true, "lead_add_task needs 'text'.");
         }
 
-        WriteTask(text);
+        var task = WriteTask(text, TeamBoard.ParseTaskIds(arguments?["after"]));
+        if (task is null)
+        {
+            // Only 'after' can make a board write fail here: a task id that is not on the board.
+            return (true, "Not added: 'after' names a task that is not on the board. Use ids such as \"G3\", or leave 'after' out.");
+        }
+
         TasksPlanned++;
-        return (false, "Added to the board.");
+        return (false, $"Added to the board as {task.Id}.");
     }
 
     private string DescribeWorkers()

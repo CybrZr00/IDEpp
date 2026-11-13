@@ -268,6 +268,129 @@ public class TeamBoardTests
         TeamBoard.StatusOf(task!, board.Snapshot(), []).ShouldBe(TeamTaskStatus.Open);
     }
 
+    // --- Tasks that wait for other tasks ---
+
+    private static string Merged(string taskId) => $"files=x | idea={taskId} done | evidence=build ok";
+
+    [Fact]
+    public void ATaskThatWaits_IsBlocked_UntilEveryTaskItWaitsForIsMerged()
+    {
+        var board = CreateBoard();
+        var (foundation, _) = board.Write("lead", "TASK", "Add the shared helper", null);
+        var (other, _) = board.Write("lead", "TASK", "Add the other helper", null);
+        var (docs, error) = board.Write("lead", "TASK", "Document both", null, [foundation!.Number, other!.Number]);
+        error.ShouldBeNull();
+        docs!.After.ShouldBe([1, 2]);
+
+        TeamBoard.StatusOf(docs, board.Snapshot(), board.ActiveClaims()).ShouldBe(TeamTaskStatus.Blocked);
+        TeamBoard.UnmetPrerequisites(docs, board.Snapshot()).Select(p => p.Id).ShouldBe(["G1", "G2"]);
+
+        board.Write("w1", "PATCH_SUMMARY", Merged("G1"), null);
+        TeamBoard.StatusOf(docs, board.Snapshot(), board.ActiveClaims()).ShouldBe(TeamTaskStatus.Blocked);
+        TeamBoard.UnmetPrerequisites(docs, board.Snapshot()).Select(p => p.Id).ShouldBe(["G2"]);
+
+        board.Write("w2", "PATCH_SUMMARY", Merged("G2"), null);
+        TeamBoard.StatusOf(docs, board.Snapshot(), board.ActiveClaims()).ShouldBe(TeamTaskStatus.Open);
+    }
+
+    [Fact]
+    public void TheDigest_MarksABlockedTask_ListsTakeableOnesFirst_AndCountsWhatIsWaiting()
+    {
+        var board = CreateBoard();
+        board.Write("lead", "TASK", "Docs for everything", null, null);
+        var (foundation, _) = board.Write("lead", "TASK", "Foundation", null);
+        board.Write("lead", "TASK", "Feature", null);
+        // Written first on the board but waiting on a later one: it must still come after the takeable ones.
+        board.Write("lead", "TASK", "Describe it", null, [foundation!.Number]);
+
+        var digest = board.CycleDigest("w1");
+
+        digest.ShouldContain("4 open or claimed, 0 done (1 waiting for others)");
+        digest.ShouldContain("A [blocked] task cannot be claimed until what it waits for is merged");
+        digest.ShouldContain("G4 [TASK] lead: Describe it  [blocked: waits for G2]");
+        digest.IndexOf("G2 [TASK]", StringComparison.Ordinal).ShouldBeLessThan(digest.IndexOf("G4 [TASK]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WaitingOnSomethingThatIsNotATask_IsRefused_AndSoIsWaitingOnANonTask()
+    {
+        var board = CreateBoard();
+        var (fact, _) = board.Write("w1", "FACT", "Parser lives in Core", null);
+
+        var (entry, error) = board.Write("lead", "TASK", "Follow-up", null, [fact!.Number, 99]);
+        entry.ShouldBeNull();
+        error!.ShouldContain("G1, G99 are not a TASK");
+
+        var (claim, claimError) = board.Write("w1", "CLAIM", "G1: something", null, [1]);
+        claim.ShouldBeNull();
+        claimError!.ShouldContain("Only a TASK can wait");
+    }
+
+    [Fact]
+    public void TheDigest_SaysTheWorkIsDone_WhenEveryTaskIsMerged_AndNotBefore()
+    {
+        var board = CreateBoard();
+        board.Write("lead", "TASK", "First", null);
+        board.Write("lead", "TASK", "Second", null);
+        board.Write("w1", "PATCH_SUMMARY", Merged("G1"), null);
+
+        board.CycleDigest("w2").ShouldNotContain("Wrap up");
+
+        board.Write("w2", "PATCH_SUMMARY", Merged("G2"), null);
+
+        board.CycleDigest("w3").ShouldContain($"0 open or claimed, 2 done. {TeamPrompts.WrapUpNotice}");
+    }
+
+    [Theory]
+    [InlineData("G4: login window", 4)]
+    [InlineData("g12/w3: docs", 12)]
+    [InlineData("  G7 - the helper", 7)]
+    [InlineData("G4/w3: docs", 4)]
+    [InlineData("w1 verify the build after G4", null)]
+    [InlineData("w5 after G2: Review page", null)]
+    [InlineData("G: nothing", null)]
+    public void AClaimNamesItsTaskFirst_AnIdFurtherAlongIsOnlyMentioned(string claim, int? expected) =>
+        TeamBoard.LeadingTaskNumber(claim).ShouldBe(expected);
+
+    [Fact]
+    public void TaskIdsInATool_AreReadAsStringsOrNumbers_AndJunkIsLeftOut()
+    {
+        var ids = System.Text.Json.Nodes.JsonNode.Parse("""["G4", "g5", 6, "x", "", "G4"]""");
+
+        TeamBoard.ParseTaskIds(ids).ShouldBe([4, 5, 6]);
+        TeamBoard.ParseTaskIds(null).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void WhatATaskWaitsFor_SurvivesTheJournal_AndIsRenumberedOnImport_DroppingWhatWasNotCarried()
+    {
+        var journal = Path.Combine(Path.GetTempPath(), $"board-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var earlier = CreateBoard(journal);
+            earlier.Write("lead", "TASK", "Done already", null);                   // G1, finished below
+            earlier.Write("lead", "TASK", "Foundation", null);                      // G2
+            earlier.Write("lead", "TASK", "Docs", null, [1, 2]);                    // G3 waits for both
+            earlier.Write("w1", "PATCH_SUMMARY", Merged("G1"), null);
+
+            var read = TeamBoard.ReadJournal(journal);
+            read.Single(e => e.Number == 3).After.ShouldBe([1, 2]);
+
+            // A later run carries only the unfinished tasks, so G1 is gone and G2/G3 are renumbered.
+            var later = CreateBoard();
+            later.Import(TeamBoard.UnfinishedTasks(read), "run x");
+            var carried = later.Snapshot();
+
+            carried.Select(e => e.Id).ShouldBe(["G1", "G2"]);
+            carried[1].After.ShouldBe([1]);
+            TeamBoard.StatusOf(carried[1], carried, []).ShouldBe(TeamTaskStatus.Blocked);
+        }
+        finally
+        {
+            File.Delete(journal);
+        }
+    }
+
     [Fact]
     public void AJournal_ReadsBack_AndImportsUnderTheEarlierRunsName()
     {
