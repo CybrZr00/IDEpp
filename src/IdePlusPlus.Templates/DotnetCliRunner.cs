@@ -38,6 +38,7 @@ internal static class DotnetCliRunner
             CreateNoWindow = true,
             WorkingDirectory = Directory.Exists(workingDirectory) ? workingDirectory : Environment.CurrentDirectory,
         };
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
 
         foreach (var argument in arguments)
         {

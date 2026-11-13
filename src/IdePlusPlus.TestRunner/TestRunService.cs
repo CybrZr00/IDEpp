@@ -68,6 +68,7 @@ public sealed class TestRunService
                 CreateNoWindow = true,
                 WorkingDirectory = Path.GetDirectoryName(testProjectPath),
             };
+            MSBuildLocatorEnvironment.RemoveFrom(startInfo);
             startInfo.ArgumentList.Add("test");
             startInfo.ArgumentList.Add(testProjectPath);
             startInfo.ArgumentList.Add("--logger");

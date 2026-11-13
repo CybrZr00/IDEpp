@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.TestRunner;
 
@@ -20,6 +21,7 @@ public sealed class TestDiscoveryService
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(testProjectPath),
         };
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
         startInfo.ArgumentList.Add("test");
         startInfo.ArgumentList.Add(testProjectPath);
         startInfo.ArgumentList.Add("--list-tests");

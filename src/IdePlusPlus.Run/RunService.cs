@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.Run;
 
@@ -40,6 +41,7 @@ public sealed class RunService
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(projectPath),
         };
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
         foreach (var arg in BuildArguments(projectPath, targetFramework, configuration, launchProfile))
         {
             startInfo.ArgumentList.Add(arg);

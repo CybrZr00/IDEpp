@@ -208,6 +208,7 @@ public sealed class BuildService
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory,
         };
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);

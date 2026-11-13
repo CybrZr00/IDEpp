@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using IdePlusPlus.Infrastructure;
 
 namespace IdePlusPlus.NuGet;
 
@@ -105,6 +106,7 @@ public sealed class NuGetService
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory,
         };
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
         foreach (var argument in arguments) { startInfo.ArgumentList.Add(argument); }
 
         using var process = new Process { StartInfo = startInfo };
@@ -128,6 +130,7 @@ public sealed class NuGetService
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory,
         };
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
         foreach (var argument in arguments) { startInfo.ArgumentList.Add(argument); }
 
         var outputLines = new List<string>();

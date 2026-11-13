@@ -59,6 +59,10 @@ public sealed class ShellCommandRunner
             WorkingDirectory = workingDirectory,
         };
 
+        // What the app was started with, not what its in-process MSBuild loader set up for itself: a
+        // `dotnet build` typed into a command must resolve its SDK like one typed into a terminal.
+        MSBuildLocatorEnvironment.RemoveFrom(startInfo);
+
         if (toolchain is not null)
         {
             foreach (var (name, value) in toolchain)
