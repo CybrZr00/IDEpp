@@ -510,6 +510,7 @@ public sealed partial class CopilotChatPaneViewModel
                     OrchestratorClient = lead.Client,
                     OrchestratorModel = lead.Model,
                     OrchestratorEffort = ReadUltraOrchestratorEffort(_appSettingsStore),
+                    Transcript = RecorderFor("ultra team"),
                 };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();

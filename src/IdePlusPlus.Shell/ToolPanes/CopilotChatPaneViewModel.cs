@@ -2497,14 +2497,20 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var subAgentEffort = ReadSubAgentEffort(_appSettingsStore) ?? SelectedEffort;
         using var concurrencyLimit = new SemaphoreSlim(SubAgentTools.MaxConcurrency);
 
-        var runs = tasks.Select(async task =>
+        // Made here, on the calling thread, since the sub-agents themselves run on the thread pool.
+        var recorders = tasks.Select((_, index) => RecorderFor($"sub-agent {index + 1}")).ToList();
+
+        var runs = tasks.Select(async (task, index) =>
         {
             await concurrencyLimit.WaitAsync(cancellationToken);
             try
             {
+                var recorder = recorders[index];
+                recorder?.RecordTask(task);
                 var loop = new HeadlessAgentLoop(
                     client, subAgentModel, subAgentEffort, SubAgentTools.AllowedTools,
-                    (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, solutionDirectory, ct));
+                    (toolName, toolArguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, toolArguments, solutionDirectory, ct),
+                    onModelTurn: recorder is null ? null : recorder.RecordModelTurn);
                 var result = await loop.RunAsync(
                     SubAgentSystemPrompt, task, SubAgentTools.MaxIterationsPerTask, cancellationToken);
                 return (Description: task, Result: result);

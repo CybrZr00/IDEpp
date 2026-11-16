@@ -1,6 +1,7 @@
 using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.DeepSeek;
+using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
 using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Copilot.OpenRouter;
@@ -47,6 +48,7 @@ public sealed class ScheduledAutomationService : IDisposable
     private readonly DeepSeekChatClient _deepSeekClient;
     private readonly AnthropicChatClient _anthropicClient;
     private readonly ReadOnlyToolDispatcher _readOnlyToolDispatcher;
+    private readonly TranscriptMemoryService? _transcripts;
     private readonly Timer _timer;
 
     /// <summary>The open solution's directory and the cancellation for runs made in it, replaced
@@ -72,8 +74,10 @@ public sealed class ScheduledAutomationService : IDisposable
         LmStudioChatClient lmStudioClient,
         DeepSeekChatClient deepSeekClient,
         AnthropicChatClient anthropicClient,
-        ReadOnlyToolDispatcher readOnlyToolDispatcher)
+        ReadOnlyToolDispatcher readOnlyToolDispatcher,
+        TranscriptMemoryService? transcripts = null)
     {
+        _transcripts = transcripts;
         _appSettingsStore = appSettingsStore;
         _scheduleStore = scheduleStore;
         _openRouterClient = openRouterClient;
@@ -209,12 +213,17 @@ public sealed class ScheduledAutomationService : IDisposable
             CopilotChatPaneViewModel.ProviderAnthropic => _anthropicClient,
             _ => _openRouterClient,
         };
+        // Its own conversation: a scheduled run answers to the timer, not to anything the user typed.
+        var recorder = _transcripts?.StartRecorder(solutionDirectory, $"scheduled: {schedule.Name}");
+        recorder?.RecordTask(schedule.Prompt);
+
         var loop = new HeadlessAgentLoop(
             client,
             schedule.Model,
             ChatEffort.None,
             SubAgentTools.AllowedTools,
-            (toolName, arguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, arguments, solutionDirectory, ct));
+            (toolName, arguments, ct) => _readOnlyToolDispatcher.ExecuteAsync(toolName, arguments, solutionDirectory, ct),
+            onModelTurn: recorder is null ? null : recorder.RecordModelTurn);
 
         string resultText;
         try

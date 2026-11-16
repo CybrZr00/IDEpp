@@ -43,10 +43,12 @@ public sealed class CopilotChatTranscriptTests : IDisposable
     private static string Text(string text) =>
         $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"{text}\"}}}}]}}\n\n";
 
-    private static string SearchCall(string argumentsJson) =>
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_search\",\"type\":\"function\","
-        + "\"function\":{\"name\":\"search_transcripts\",\"arguments\":" + JsonSerializer.Serialize(argumentsJson) + "}}]}}]}\n\n"
+    private static string ToolCall(string name, string argumentsJson) =>
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\","
+        + "\"function\":{\"name\":\"" + name + "\",\"arguments\":" + JsonSerializer.Serialize(argumentsJson) + "}}]}}]}\n\n"
         + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" + Done;
+
+    private static string SearchCall(string argumentsJson) => ToolCall("search_transcripts", argumentsJson);
 
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "IdePlusPlusTranscriptTests", Guid.NewGuid().ToString("N"));
@@ -249,6 +251,31 @@ public sealed class CopilotChatTranscriptTests : IDisposable
     });
 
     [Fact]
+    public void ASubAgentsTaskThoughtsAndReply_AreKeptInTheConversationThatStartedIt() => RunOnUiThread(async () =>
+    {
+        _http.Respond = n => n switch
+        {
+            1 => Body(ToolCall("investigate_parallel", "{\"tasks\":[\"Look at the widget\"]}")),
+            2 => Body(Reasoning("The widget lives in Widget.cs") + Text("It is a widget.") + Stop),
+            _ => Body(Text("Summarised") + Stop),
+        };
+        var viewModel = CreateViewModel();
+
+        await Ask(viewModel, "Investigate the widget");
+
+        var entries = Entries();
+        var subAgent = entries.Where(e => e.Source == "sub-agent 1").ToList();
+        subAgent.Select(e => (e.Kind, e.Text)).ShouldBe(
+        [
+            (TranscriptKinds.User, "Look at the widget"),
+            (TranscriptKinds.Thought, "The widget lives in Widget.cs"),
+            (TranscriptKinds.Assistant, "It is a widget."),
+        ]);
+        ConversationIds().ShouldHaveSingleItem("the sub-agent belongs to the conversation that started it");
+        entries.Where(e => e.Source is null).Select(e => e.Text).ShouldContain("Investigate the widget");
+    });
+
+    [Fact]
     public void WithoutATranscriptService_TheConversationWorksAsBefore_AndNothingIsWritten() => RunOnUiThread(async () =>
     {
         _http.Respond = _ => Body(Reasoning("t") + Text("Answer") + Stop);
@@ -323,7 +350,7 @@ public sealed class CopilotChatTranscriptTests : IDisposable
             new TemplateCatalog(),
             new TemplateInstantiationService(buildService),
             withTranscripts
-                ? new TranscriptMemoryService(new NoEmbeddings(), new TranscriptStore(), TimeSpan.FromHours(1))
+                ? new TranscriptMemoryService(new UnavailableEmbeddingClient(), new TranscriptStore(), TimeSpan.FromHours(1))
                 : null);
     }
 
@@ -362,23 +389,6 @@ public sealed class CopilotChatTranscriptTests : IDisposable
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
-    }
-
-    /// <summary>An embedding client with no model, as on a machine where the codebase was never indexed.</summary>
-    private sealed class NoEmbeddings : IEmbeddingClient
-    {
-        public string ModelId => "none:test";
-
-        public int MaxChunkLines => 40;
-
-        public string UnavailableHint => "no model";
-
-        public Task<string?> PrepareAsync(Action<string> onProgress, CancellationToken cancellationToken) =>
-            Task.FromResult<string?>("no model");
-
-        public Task<float[]?> GetEmbeddingAsync(
-            string text, CancellationToken cancellationToken, TimeSpan? timeout = null, bool isQuery = false) =>
-            Task.FromResult<float[]?>(null);
     }
 
     /// <summary>Stands in for OpenRouter: the Nth chat request is answered with whatever

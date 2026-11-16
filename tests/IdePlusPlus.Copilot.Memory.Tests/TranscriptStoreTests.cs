@@ -91,6 +91,28 @@ public sealed class TranscriptStoreTests : IDisposable
     }
 
     [Fact]
+    public void AScheduledRunsConversation_IsNeverOfferedForAPaneToResume()
+    {
+        var chat = _store.StartConversation(_solutionDirectory, new DateTimeOffset(2026, 11, 1, 10, 0, 0, TimeSpan.Zero));
+        // Started later than the chat, as a 2am run would be.
+        var scheduled = _store.StartConversation(_solutionDirectory, new DateTimeOffset(2026, 11, 2, 2, 0, 0, TimeSpan.Zero), scheduled: true);
+        _store.Append(_solutionDirectory, chat, TranscriptKinds.User, "from the chat");
+        _store.Append(_solutionDirectory, scheduled, TranscriptKinds.Assistant, "from the schedule");
+
+        scheduled.ShouldContain(TranscriptStore.ScheduledMarker);
+        _store.LatestConversationId(_solutionDirectory).ShouldBe(chat);
+        _store.LoadAll(_solutionDirectory).Count.ShouldBe(2, "it is still stored and searchable");
+    }
+
+    [Fact]
+    public void WithOnlyScheduledConversations_ThereIsNothingToResume()
+    {
+        _store.StartConversation(_solutionDirectory, scheduled: true);
+
+        _store.LatestConversationId(_solutionDirectory).ShouldBeNull();
+    }
+
+    [Fact]
     public void Sequence_ContinuesWhereTheFileLeftOff_AfterARestart()
     {
         var id = _store.StartConversation(_solutionDirectory);

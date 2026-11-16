@@ -36,6 +36,9 @@ public sealed class TranscriptStore
     /// Read from disk once, the first time a file is appended to by this process.</summary>
     private readonly Dictionary<string, FileTail> _tails = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Part of the id of a scheduled run's conversation.</summary>
+    public const string ScheduledMarker = "_scheduled";
+
     public static string TranscriptsDirectory(string solutionDirectory) =>
         Path.Combine(ProjectMemoryStore.MemoryDirectory(solutionDirectory), "transcripts");
 
@@ -56,14 +59,17 @@ public sealed class TranscriptStore
     /// conversations began. The file is created here, empty, which is what makes the id unique: two
     /// conversations started within the same second get "..._2" rather than the same file.
     /// </summary>
-    public string StartConversation(string solutionDirectory, DateTimeOffset? now = null)
+    /// <param name="scheduled">For a conversation no chat pane owns (a scheduled run). Marked in its id,
+    /// so <see cref="LatestConversationId"/> never offers it to a pane resuming after a restart.</param>
+    public string StartConversation(string solutionDirectory, DateTimeOffset? now = null, bool scheduled = false)
     {
         lock (_gate)
         {
             var directory = TranscriptsDirectory(solutionDirectory);
             Directory.CreateDirectory(directory);
 
-            var stem = (now ?? DateTimeOffset.Now).ToString("yyyy-MM-dd_HHmmss", CultureInfo.InvariantCulture);
+            var stem = (now ?? DateTimeOffset.Now).ToString("yyyy-MM-dd_HHmmss", CultureInfo.InvariantCulture)
+                       + (scheduled ? ScheduledMarker : "");
             for (var suffix = 1; ; suffix++)
             {
                 var id = suffix == 1 ? stem : $"{stem}_{suffix}";
@@ -85,7 +91,8 @@ public sealed class TranscriptStore
         }
     }
 
-    /// <summary>The most recently started conversation, or null when there are none.</summary>
+    /// <summary>The most recently started conversation a chat pane could carry on with, or null when
+    /// there are none. Scheduled runs' conversations are not counted: they belong to no pane.</summary>
     public string? LatestConversationId(string solutionDirectory)
     {
         lock (_gate)
@@ -94,7 +101,9 @@ public sealed class TranscriptStore
             return Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.jsonl")
                     .Select(Path.GetFileNameWithoutExtension)
-                    .Where(id => id is not null && !id.StartsWith("vectors", StringComparison.Ordinal))
+                    .Where(id => id is not null
+                                 && !id.StartsWith("vectors", StringComparison.Ordinal)
+                                 && !id.Contains(ScheduledMarker, StringComparison.Ordinal))
                     .OrderBy(id => id, StringComparer.Ordinal)
                     .LastOrDefault()
                 : null;

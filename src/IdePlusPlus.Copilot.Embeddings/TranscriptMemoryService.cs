@@ -91,7 +91,9 @@ public sealed partial class TranscriptMemoryService
 
     /// <summary>Starts a new conversation's transcript and returns its id. Null when there is no
     /// solution open or the folder cannot be written.</summary>
-    public string? StartConversation()
+    public string? StartConversation() => StartConversation(scheduled: false);
+
+    private string? StartConversation(bool scheduled)
     {
         if (_state.Directory is not { } directory)
         {
@@ -100,12 +102,29 @@ public sealed partial class TranscriptMemoryService
 
         try
         {
-            return _store.StartConversation(directory);
+            return _store.StartConversation(directory, scheduled: scheduled);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Starts a conversation of its own for a run that is not part of any chat (a scheduled
+    /// automation) and returns a recorder for it. Null when that solution is no longer the open one,
+    /// or nothing can be written.
+    /// </summary>
+    public TranscriptRecorder? StartRecorder(string solutionDirectory, string source)
+    {
+        if (_state.Directory is not { } directory || !SameDirectory(directory, solutionDirectory))
+        {
+            return null;
+        }
+
+        return StartConversation(scheduled: true) is { } conversationId
+            ? new TranscriptRecorder(this, solutionDirectory, conversationId, source)
+            : null;
     }
 
     /// <summary>The newest conversation on disk, for carrying on with the one that was open when the

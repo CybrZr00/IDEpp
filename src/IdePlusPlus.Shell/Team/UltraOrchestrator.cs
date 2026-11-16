@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.Copilot.Embeddings;
 
 namespace IdePlusPlus.Shell.Team;
 
@@ -45,6 +46,10 @@ public sealed class UltraOrchestrator
     private readonly int _maxConsecutiveRejections;
     private readonly LeadReviewMode _reviewMode;
 
+    /// <summary>Where the lead's thoughts and replies go, for every conversation it has (planning,
+    /// checking in, reviewing a merge). Null: not recorded.</summary>
+    private readonly TranscriptRecorder? _transcript;
+
     /// <summary>One review at a time: the lead is one reader, and two workers merging together would
     /// otherwise have it judge each against a team branch the other is about to move. Advisory mode
     /// skips this - the review no longer holds up the merge, so it has nothing to serialise.</summary>
@@ -68,8 +73,10 @@ public sealed class UltraOrchestrator
         IReadOnlyList<TeamWorkerState> workers,
         TimeProvider time,
         int maxConsecutiveRejections = 2,
-        LeadReviewMode reviewMode = LeadReviewMode.Blocking)
+        LeadReviewMode reviewMode = LeadReviewMode.Blocking,
+        TranscriptRecorder? transcript = null)
     {
+        _transcript = transcript;
         _client = client;
         _model = model;
         _effort = effort;
@@ -82,6 +89,11 @@ public sealed class UltraOrchestrator
         _maxConsecutiveRejections = maxConsecutiveRejections;
         _reviewMode = reviewMode;
     }
+
+    /// <summary>The callback that keeps one of the lead's conversations in the transcript, labelled
+    /// with what the lead was doing; null when nothing is being recorded.</summary>
+    private Action<string?, string>? Recording(string source) =>
+        _transcript?.WithSource(source) is { } recorder ? recorder.RecordModelTurn : null;
 
     /// <summary>What the lead is doing now - "planning", "reviewing w2's merge" - or null when idle.</summary>
     public string? Activity { get; private set; }
@@ -135,7 +147,8 @@ public sealed class UltraOrchestrator
                         : written == 0
                             ? (true, "The plan had no usable tasks. Call lead_submit_plan again with at least one.")
                             : (false, $"Plan recorded: {written} task(s) are on the board. Reply with one line and stop.");
-                });
+                },
+                onModelTurn: Recording("ultra lead: planning"));
 
             await loop.RunAsync(
                 TeamPrompts.LeadPlanningPrompt(WorkerNames()),
@@ -317,7 +330,8 @@ public sealed class UltraOrchestrator
                     LeadTools.AddTaskToolName => AddTask(arguments),
                     LeadTools.TriageToolName => Triage(arguments),
                     _ => await _readOnlyTools.ExecuteAsync(tool, arguments, _solutionDirectory, ct),
-                });
+                },
+                onModelTurn: Recording("ultra lead: check-in"));
 
             await loop.RunAsync(
                 TeamPrompts.LeadSupervisionPrompt(WorkerNames()),
@@ -576,7 +590,8 @@ public sealed class UltraOrchestrator
                     approved = arguments?["approve"]?.GetValue<bool>() ?? true;
                     feedback = arguments?["feedback"]?.GetValue<string>()?.Trim() ?? "";
                     return (false, "Recorded. Reply with one line and stop.");
-                });
+                },
+                onModelTurn: Recording($"ultra lead: reviewing {worker}'s merge"));
 
             await loop.RunAsync(
                 TeamPrompts.LeadReviewPrompt(),

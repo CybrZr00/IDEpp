@@ -86,6 +86,40 @@ public sealed class TranscriptRecorderTests : IDisposable
     }
 
     [Fact]
+    public void StartRecorder_GivesAScheduledRunAConversationOfItsOwn_ThatAPaneNeverResumes()
+    {
+        var chat = _service.StartConversation()!;
+        _service.Record(chat, TranscriptKinds.User, "A chat message.");
+
+        var recorder = _service.StartRecorder(_solution, "scheduled: nightly review").ShouldNotBeNull();
+        recorder.RecordTask("Review yesterday's commits.");
+        recorder.RecordModelTurn(null, "Nothing alarming.");
+
+        var scheduled = _store.LoadAll(_solution).Where(e => e.Source == "scheduled: nightly review").ToList();
+        scheduled.Count.ShouldBe(2);
+        scheduled.Select(e => e.ConversationId).Distinct().ShouldHaveSingleItem().ShouldNotBe(chat);
+        _service.LatestConversationId().ShouldBe(chat);
+    }
+
+    [Fact]
+    public void StartRecorder_ForASolutionThatIsNoLongerOpen_IsNullAndCreatesNothing()
+    {
+        var other = Path.Combine(Path.GetTempPath(), $"ideplusplus-recorder-other-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(other);
+        try
+        {
+            _service.StartRecorder(other, "scheduled: stale").ShouldBeNull();
+
+            Directory.Exists(TranscriptStore.TranscriptsDirectory(other)).ShouldBeFalse();
+            Directory.Exists(TranscriptStore.TranscriptsDirectory(_solution)).ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ARecorderForAnotherConversation_StillWritesToItsOwn_AfterTheCurrentOneMovedOn()
     {
         var recorder = Recorder();

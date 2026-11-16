@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.SourceControl;
 
 namespace IdePlusPlus.Shell.Team;
@@ -129,6 +130,10 @@ public sealed record UltraTeamOptions(
 
     /// <summary>How many times in a row the lead may turn down one worker's merge before it lands anyway.</summary>
     public int MaxConsecutiveRejections { get; init; } = 2;
+
+    /// <summary>Where the lead's and every worker's thoughts and replies are kept, each under its own
+    /// label. Null: not recorded.</summary>
+    public TranscriptRecorder? Transcript { get; init; }
 }
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could
@@ -532,7 +537,8 @@ public sealed class UltraTeamRun
                 new LiveTeam(this),
                 _time,
                 _options.MaxConsecutiveRejections,
-                _options.LeadReviewMode);
+                _options.LeadReviewMode,
+                transcript: _options.Transcript?.WithSource("ultra lead"));
             _orchestrator.Changed += OnChanged;
         }
 
@@ -1429,7 +1435,10 @@ public sealed class UltraTeamRun
                 OnChanged();
                 return result;
             },
-            dispatcher.DrainNotices);
+            dispatcher.DrainNotices,
+            onModelTurn: _options.Transcript?.WithSource($"ultra worker {state.Name}") is { } workerTranscript
+                ? workerTranscript.RecordModelTurn
+                : null);
 
         string? previousEnding = null;
         var nudge = (string?)null;

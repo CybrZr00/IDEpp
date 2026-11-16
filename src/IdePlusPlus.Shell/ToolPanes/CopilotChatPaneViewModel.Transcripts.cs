@@ -52,6 +52,24 @@ public sealed partial class CopilotChatPaneViewModel
         }
     }
 
+    /// <summary>
+    /// A recorder for an agent started on behalf of the current conversation (a sub-agent, the Ultra
+    /// team), or null when nothing is being recorded. Bound to the conversation and solution as they
+    /// are now, so an agent still running after New Chat or a solution switch writes to the one it
+    /// belongs to. Call it on the UI thread, before the agent starts.</summary>
+    private TranscriptRecorder? RecorderFor(string source)
+    {
+        if (_transcripts is null || _solutionDirectory is null)
+        {
+            return null;
+        }
+
+        _transcriptConversationId ??= _transcripts.StartConversation();
+        return _transcriptConversationId is null
+            ? null
+            : new TranscriptRecorder(_transcripts, _solutionDirectory, _transcriptConversationId, source);
+    }
+
     /// <summary>Points the transcript at the solution that was just opened, and carries on with the
     /// conversation that was open when it was last closed, if one came back from chat-history.json.
     /// Called once that history has been loaded.</summary>
