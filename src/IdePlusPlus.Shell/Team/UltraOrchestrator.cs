@@ -626,7 +626,7 @@ public sealed class UltraOrchestrator
                 LeadTools.LeadName, "FINDING",
                 text.Length <= TeamBoard.MaxPatchSummaryLength ? text : text[..(TeamBoard.MaxPatchSummaryLength - 3)] + "...",
                 string.IsNullOrEmpty(feedback) ? null : feedback,
-                after: null, lane: TeamRoles.ForWorkerName(worker)?.NamePrefix);
+                after: null, lane: (TeamRoles.ForWorkerName(worker) ?? TeamRoles.Builder).NamePrefix);
         }
         catch (OperationCanceledException)
         {

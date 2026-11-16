@@ -319,7 +319,6 @@ public sealed class UltraOrchestratorTests : IDisposable
                     tasks = new[] { "First (Lib/Class1.cs)", "Second, after the first", "Third, after the second" },
                     after = new[] { Array.Empty<int>(), new[] { 1 }, new[] { 2 } },
                 }),
-                Text("Refused - I will split it."),
                 _client.Call(LeadTools.SubmitPlanToolName, new
                 {
                     tasks = new[] { "Make Class1.Value return 2 (Lib/Class1.cs)", "Cover it with a test (Lib/Class1Tests.cs)" },
