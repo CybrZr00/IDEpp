@@ -59,17 +59,20 @@ public static class TeamTools
                      "confirmed), FAIL (an approach that did not work, and why - the most valuable entry), CLAIM " +
                      "(what you are working on now; post it before editing, naming the TASK id if it is one), " +
                      "PATCH_SUMMARY (what you merged, as \"files=... | idea=... | evidence=...\", naming the TASK id " +
-                     "it completes), TASK (a backlog item - add these to split a big piece for peers). Text is at " +
-                     "most 100 characters (300 for PATCH_SUMMARY and TASK); put anything longer in detail. A CLAIM on " +
-                     "a TASK that is [blocked], or that a peer who is still working holds, is refused.",
+                     "it completes), FINDING (a problem a specialist found in merged work, as \"severity=high|medium|" +
+                     "low kind=... evidence=... | what is wrong\" - severity and evidence are required), TASK (a " +
+                     "backlog item - add these to split a big piece for peers). Text is at most 100 characters (300 " +
+                     "for PATCH_SUMMARY, FINDING and TASK); put anything longer in detail. A CLAIM on a TASK that is " +
+                     "[blocked], or that a peer who is still working holds, is refused.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",
               "properties": {
-                "type": { "type": "string", "enum": ["OBSERVED", "FACT", "FAIL", "CLAIM", "PATCH_SUMMARY", "TASK"] },
-                "text": { "type": "string", "description": "The gist - what a peer needs to decide whether this matters to them. At most 100 characters, or 300 for PATCH_SUMMARY." },
+                "type": { "type": "string", "enum": ["OBSERVED", "FACT", "FAIL", "CLAIM", "PATCH_SUMMARY", "FINDING", "TASK"] },
+                "text": { "type": "string", "description": "The gist - what a peer needs to decide whether this matters to them. At most 100 characters, or 300 for PATCH_SUMMARY, FINDING and TASK." },
                 "detail": { "type": "string", "description": "Optional longer explanation, shown only when a peer calls board_unfold on this entry." },
-                "after": { "type": "array", "items": { "type": "string" }, "description": "TASK only, optional: ids of TASKs already on the board (e.g. \"G4\") that must be merged before this one can be started. It is shown as [blocked] until then." }
+                "after": { "type": "array", "items": { "type": "string" }, "description": "TASK only, optional: ids of TASKs already on the board (e.g. \"G4\") that must be merged before this one can be started. It is shown as [blocked] until then." },
+                "lane": { "type": "string", "description": "Optional: your role's lane (b, mut, adv, lint, gap, next) when the entry is only for that lane. Leave it out for something the whole team should read." }
               },
               "required": ["type", "text"]
             }
