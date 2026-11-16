@@ -322,7 +322,7 @@ public sealed class TeamReviewQueue
     /// </summary>
     public ReviewItem? TakeNext(TeamRoleKind lane)
     {
-        ReviewItem? taken = null;
+        ReviewItem? taken;
         lock (_lock)
         {
             taken = _items.FirstOrDefault(item => item.TryTake(lane));
@@ -354,12 +354,19 @@ public sealed class TeamReviewQueue
     /// team_next_review with an empty lane: holds the specialist, without a model call, until an item
     /// is queued for its lane, the queue closes, or the wait runs out - the same bargain as
     /// team_wait. Returns null when it timed out or the queue is closed and drained.
+    ///
+    /// The wake-up is not allowed to be missed: the signal is taken before the look, so an item queued
+    /// from another thread while the wait is deciding to sleep still ends the wait.
     /// </summary>
     public async Task<ReviewItem?> WaitForItemAsync(TeamRoleKind lane, TimeSpan wait, CancellationToken cancellationToken)
     {
         var deadline = _time.GetUtcNow() + wait;
         while (true)
         {
+            // The signal is captured before the look, not after: an item queued from another thread
+            // between TakeNext and the wait would otherwise signal a task this pass never saw, and the
+            // specialist would sleep through the merge it was waiting for.
+            var changed = CurrentSignal();
             var item = TakeNext(lane);
             if (item is not null)
             {
@@ -377,15 +384,12 @@ public sealed class TeamReviewQueue
                 return null;
             }
 
-            var changed = CurrentSignal();
-            if (changed.IsCompleted)
-            {
-                // Something happened between taking the signal and asking for it; look again.
-                continue;
-            }
-
-            var delay = Task.Delay(remaining, _time, cancellationToken);
+            // The timer is cancelled once the merge signal wins, so it does not outlive the wait. Only
+            // the caller's own token may throw: cancelling our delay is how the pass ends, not a fault.
+            using var wake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var delay = Task.Delay(remaining, _time, wake.Token);
             var winner = await Task.WhenAny(changed, delay).ConfigureAwait(false);
+            wake.Cancel();
             cancellationToken.ThrowIfCancellationRequested();
             if (winner == delay)
             {

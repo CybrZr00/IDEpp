@@ -176,6 +176,31 @@ public class TeamReviewQueueTests
         item.StatusFor(TeamRoleKind.MutationTester).ShouldBe(ReviewItemStatus.Taken);
     }
 
+    /// <summary>A merge that lands while the wait is starting - on another thread, in the gap between
+    /// the wait's first look and its decision to sleep - must still end the wait. Capturing the signal
+    /// after the look missed it and left the specialist idle for the whole wait.</summary>
+    [Fact]
+    public async Task WaitForItemAsync_DoesNotSleepThroughAMergeThatLandsWhileTheWaitStarts()
+    {
+        var longest = TimeSpan.Zero;
+        for (var attempt = 0; attempt < 25; attempt++)
+        {
+            var queue = new TeamReviewQueue([TeamRoleKind.Adversary]);
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            var waiting = queue.WaitForItemAsync(
+                TeamRoleKind.Adversary, TimeSpan.FromSeconds(10), CancellationToken.None);
+
+            var queued = await Task.Run(() => queue.Enqueue(Landing()));
+
+            var first = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromSeconds(5)));
+            first.ShouldBeSameAs((Task)waiting, $"attempt {attempt} slept through the merge it was waiting for");
+            (await waiting).ShouldBeSameAs(queued);
+            longest = started.Elapsed > longest ? started.Elapsed : longest;
+        }
+
+        longest.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+    }
+
     [Fact]
     public void Describe_SaysWhatEachLaneHasLeft()
     {
