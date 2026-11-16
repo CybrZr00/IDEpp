@@ -306,6 +306,160 @@ public sealed class UltraOrchestratorTests : IDisposable
         // Either way the run goes on - whether the failure surfaced as an exception or a plain reply.
         lead.Activity.ShouldBeNull();
     }
+
+    // ---- the plan's shape, and triage ----
+
+    [Fact]
+    public async Task APlanThatIsOneChain_IsSentBackOnce_AndTheFirstWaveIsPlannedInstead()
+    {
+        _client
+            .Script("lead",
+                _client.Call(LeadTools.SubmitPlanToolName, new
+                {
+                    tasks = new[] { "First (Lib/Class1.cs)", "Second, after the first", "Third, after the second" },
+                    after = new[] { Array.Empty<int>(), new[] { 1 }, new[] { 2 } },
+                }),
+                Text("Refused - I will split it."),
+                _client.Call(LeadTools.SubmitPlanToolName, new
+                {
+                    tasks = new[] { "Make Class1.Value return 2 (Lib/Class1.cs)", "Cover it with a test (Lib/Class1Tests.cs)" },
+                }),
+                Text("Planned."))
+            .Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing" }))
+            .Script("w2", _client.Call(TeamTools.DoneToolName, new { summary = "nothing" }));
+        var run = CreateRun(workers: 2);
+
+        await RunAsync(run);
+
+        // The chain was not written: only the split plan reached the board.
+        run.Board.Snapshot().Where(e => e.Type == TeamBoardEntryType.Task).Select(e => e.Text).ShouldBe(
+            ["Make Class1.Value return 2 (Lib/Class1.cs)", "Cover it with a test (Lib/Class1Tests.cs)"]);
+        run.Orchestrator!.TasksPlanned.ShouldBe(2);
+
+        // The lead was told what was wrong with it, in words it can act on.
+        _client.Requests.Where(r => r.Worker == "lead").SelectMany(r => r.Messages)
+            .ShouldContain(m => m.Role == ChatRole.Tool
+                                && m.Content.Contains("Split the work by file or area")
+                                && m.Content.Contains("2 builders"));
+    }
+
+    [Fact]
+    public async Task APlanWhoseFirstWaveUsesEveryBuilder_IsTakenOnTheFirstCall()
+    {
+        _client
+            .Script("lead",
+                _client.Call(LeadTools.SubmitPlanToolName, new
+                {
+                    tasks = new[] { "Make Class1.Value return 2 (Lib/Class1.cs)", "Cover it with a test (Lib/Class1Tests.cs)" },
+                }),
+                Text("Planned."))
+            .Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing" }))
+            .Script("w2", _client.Call(TeamTools.DoneToolName, new { summary = "nothing" }));
+        var run = CreateRun(workers: 2);
+
+        await RunAsync(run);
+
+        run.Orchestrator!.TasksPlanned.ShouldBe(2);
+        run.Board.Snapshot().Count(e => e.Type == TeamBoardEntryType.Task).ShouldBe(2);
+        _client.Requests.Where(r => r.Worker == "lead").SelectMany(r => r.Messages)
+            .ShouldNotContain(m => m.Role == ChatRole.Tool && m.Content.Contains("Not written yet"));
+    }
+
+    [Fact]
+    public async Task TheLeadCanPromoteAFinding_IntoABuilderTask()
+    {
+        var (lead, board, _) = CreateLead();
+        var finding = board.Write(
+            "adv1", "FINDING",
+            "severity=high kind=security fix_by=builders evidence=branch:abc1234 | the parser follows a path from the request",
+            detail: null, lane: TeamRoles.Adversary.NamePrefix).Entry!;
+        _client.Script("lead",
+            _client.Call(LeadTools.TriageToolName, new
+            {
+                finding = finding.Id, decision = "promote", reason = "The goal needs it.",
+            }),
+            Text("Promoted."));
+
+        await lead.CheckInAsync("goal", TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        var task = board.Snapshot().Single(e => e.Type == TeamBoardEntryType.Task);
+        task.Author.ShouldBe(LeadTools.LeadName);
+        task.Text.ShouldStartWith(finding.Id + ":");
+        task.Lane.ShouldBe(TeamRoles.Builder.NamePrefix);
+        lead.TasksPlanned.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task TheLeadCanDismissAFinding_AndItStopsHoldingUpWrapUp()
+    {
+        var (lead, board, _) = CreateLead();
+        var finding = board.Write(
+            "adv1", "FINDING", "severity=high kind=what-if evidence=manual | a null input is not handled",
+            detail: null, lane: TeamRoles.Adversary.NamePrefix).Entry!;
+        _client.Script("lead",
+            _client.Call(LeadTools.TriageToolName, new
+            {
+                finding = finding.Id, decision = "dismiss", reason = "Out of the goal.",
+            }),
+            Text("Dismissed."));
+
+        await lead.CheckInAsync("goal", TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        TeamBoard.OpenFindings(board.Snapshot()).ShouldBeEmpty();
+        TeamBoard.OpenHighFindings(board.Snapshot()).ShouldBeEmpty();
+        board.Snapshot().ShouldContain(e => e.Type == TeamBoardEntryType.Observed
+                                            && e.Text.Contains("dismissed " + finding.Id)
+                                            && e.Text.Contains("Out of the goal."));
+        board.Snapshot().ShouldNotContain(e => e.Type == TeamBoardEntryType.Task);
+        lead.TasksPlanned.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task TriageOfSomethingThatIsNotAFinding_IsRefused()
+    {
+        var (lead, board, _) = CreateLead();
+        board.Write("w1", "OBSERVED", "the parser lives in Lib/Parser.cs", null);
+        _client.Script("lead",
+            _client.Call(LeadTools.TriageToolName, new { finding = "G1", decision = "promote", reason = "seems important" }),
+            Text("Never mind."));
+
+        await lead.CheckInAsync("goal", TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        board.Snapshot().ShouldNotContain(e => e.Type == TeamBoardEntryType.Task);
+        _client.Requests.Where(r => r.Worker == "lead").SelectMany(r => r.Messages)
+            .ShouldContain(m => m.Role == ChatRole.Tool && m.Content.Contains("is not a FINDING on the board"));
+    }
+
+    [Fact]
+    public async Task InAdvisoryMode_TheMergeLandsAtOnce_AndAConcernBecomesAFindingOnTheBoard()
+    {
+        string[] names = ["w1", "w2"];
+        var workers = names.Select(n => new TeamWorkerState(n)).ToList();
+        var board = new TeamBoard(TimeProvider.System, TimeSpan.FromMinutes(10));
+        var bus = new TeamMessageBus(TimeProvider.System, [.. names, LeadTools.LeadName]);
+        var lead = new UltraOrchestrator(
+            _client, "lead-model", ChatEffort.High, _repo.ReadOnlyTools, _repo.RepositoryRoot,
+            board, bus, workers, TimeProvider.System, 2, LeadReviewMode.Advisory);
+        _client.Script("lead",
+            _client.Call(LeadTools.VerdictToolName, new { approve = false, feedback = "this reads the whole file" }),
+            Text("Ok."));
+
+        var (approved, feedback) = await lead.ReviewMergeAsync(
+            "goal", "w1", "diff", CancellationToken.None, evidence: "branch:abc1234");
+
+        // The merge was not held up: advisory mode approves at once and the review runs on.
+        approved.ShouldBeTrue();
+        feedback.ShouldBeEmpty();
+        await lead.LastAdvisoryReview!;
+
+        lead.ReviewsRejected.ShouldBe(1);
+        var finding = board.Snapshot().ShouldHaveSingleItem();
+        finding.Type.ShouldBe(TeamBoardEntryType.Finding);
+        finding.Text.ShouldContain("severity=medium");
+        finding.Text.ShouldContain("evidence=branch:abc1234");
+        finding.Text.ShouldContain("this reads the whole file");
+        finding.Lane.ShouldBe(TeamRoles.Builder.NamePrefix);
+    }
 }
 
 /// <summary>The model and effort settings the Settings window writes and the chat pane reads.</summary>

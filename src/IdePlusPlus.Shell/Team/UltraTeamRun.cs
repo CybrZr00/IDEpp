@@ -99,6 +99,14 @@ public sealed record UltraTeamOptions(
     /// the workers', and serialises merges behind its review.</summary>
     public bool Orchestrated { get; init; }
 
+    /// <summary>
+    /// Whether the lead's review holds a merge up. Blocking is the lead-run behaviour Ultra shipped
+    /// with: the worker waits for the verdict. Advisory lets the merge land and the verdict follows as
+    /// a FINDING - the one lead no longer serialises every merge, and the specialist lanes are reading
+    /// the merged code anyway.
+    /// </summary>
+    public LeadReviewMode LeadReviewMode { get; init; }
+
     /// <summary>The client (provider) workers use, when it should differ from the run's own. Null: the same.</summary>
     public IChatClient? WorkerClient { get; init; }
 
@@ -523,7 +531,8 @@ public sealed class UltraTeamRun
                 Bus,
                 new LiveTeam(this),
                 _time,
-                _options.MaxConsecutiveRejections);
+                _options.MaxConsecutiveRejections,
+                _options.LeadReviewMode);
             _orchestrator.Changed += OnChanged;
         }
 
