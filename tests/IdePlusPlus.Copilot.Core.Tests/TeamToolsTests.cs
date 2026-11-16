@@ -106,4 +106,68 @@ public class TeamToolsTests
         prompt.ShouldContain("your peers: w1, w3");
         prompt.ShouldNotContain("run_command");
     }
+
+    /// <summary>Speed is the default preset, and a roster with no specialist lanes has nobody to do
+    /// the review work the lane text promises - so that team gets the prompt Ultra shipped with.</summary>
+    [Fact]
+    public void WorkerSystemPrompt_LeavesOutTheLanes_WhenTheTeamHasNoSpecialists()
+    {
+        var legacy = TeamPrompts.WorkerSystemPrompt("w1", ["w1", "w2"], TimeSpan.FromMinutes(10), false);
+        var speed = TeamPrompts.WorkerSystemPrompt(
+            "b1", ["b1", "b2"], TimeSpan.FromMinutes(10), false, role: TeamRoles.Builder);
+
+        foreach (var prompt in new[] { legacy, speed })
+        {
+            prompt.ShouldNotContain("specialist");
+            prompt.ShouldNotContain("Your lane");
+            prompt.ShouldNotContain("FINDING");
+            prompt.ShouldNotContain("team_next_review");
+            prompt.ShouldContain("every planned TASK is merged");
+        }
+
+        legacy.ShouldStartWith("You are w1, one of 2 equal workers");
+        speed.ShouldStartWith("You are b1, one of 2 equal workers");
+    }
+
+    [Fact]
+    public void WorkerSystemPrompt_TellsABuilderThatSpecialistsReviewItsMerges()
+    {
+        var prompt = TeamPrompts.WorkerSystemPrompt(
+            "b1", ["b1", "mut1", "adv1"], TimeSpan.FromMinutes(10), false, role: TeamRoles.Builder);
+
+        prompt.ShouldStartWith("You are b1, a builder");
+        prompt.ShouldContain("specialist lanes");
+        prompt.ShouldContain("specialist lanes are waiting on it");
+        prompt.ShouldContain("Do not do the specialists' jobs yourself");
+        prompt.ShouldNotContain("team_next_review");
+    }
+
+    [Fact]
+    public void WorkerSystemPrompt_GivesEachSpecialistItsOwnLane()
+    {
+        var adversary = TeamPrompts.WorkerSystemPrompt(
+            "adv1", ["b1", "adv1"], TimeSpan.FromMinutes(10), false, role: TeamRoles.Adversary);
+        var conformity = TeamPrompts.WorkerSystemPrompt(
+            "lint1", ["b1", "lint1"], TimeSpan.FromMinutes(10), false, role: TeamRoles.Conformity);
+
+        adversary.ShouldStartWith("You are adv1, the adversary");
+        adversary.ShouldContain("team_next_review");
+        adversary.ShouldContain("tests only");
+        adversary.ShouldContain("evidence=branch:<sha>");
+        adversary.ShouldNotContain("[blocked]");
+
+        conformity.ShouldStartWith("You are lint1, the conformity");
+        conformity.ShouldContain("check_conformity");
+        conformity.ShouldContain("files the review item you are on changed");
+    }
+
+    [Fact]
+    public void SplitNudge_AsksTheOldestClaimToBeSplitIntoTask()
+    {
+        var nudge = TeamPrompts.SplitNudge("parser rewrite", 2);
+
+        nudge.ShouldContain("parser rewrite");
+        nudge.ShouldContain("2 builders are idle");
+        nudge.ShouldContain("TASKs");
+    }
 }
