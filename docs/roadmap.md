@@ -46,6 +46,18 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       Anthropic models, seeds an approved plan's steps as board TASKs, sends each cycle only the board
       entries that worker has not seen, and takes over an earlier run's FACTs, FAILs, PATCH_SUMMARYs
       and unfinished TASKs when it carries on from that run's team branch.
+- [x] Ultra roles — Ultra's N identical workers replaced by a fixed roster: builders (`b1..bN`) take the
+      goal's TASKs, and specialist lanes — mutation tester (`mut`), adversary (`adv`), conformity
+      (`lint`), gap finder (`gap`) and follow-up scout (`next`) — run beside them, each woken by a
+      review queue the runner fills every time a merge lands, so mutation coverage, adversarial and
+      lint review happen continuously on merged code rather than after the building. Edit scopes
+      (tests-only for the adversary and mutation tester, changed-files-style-only for conformity,
+      none for the scouts) are enforced by the dispatcher, not just hidden from the prompt; findings
+      are board entries that become builder TASKs by severity, with a generation cap so findings →
+      fixes → findings cannot spiral. Builder parallelism is forced from three sides: the plan's
+      first-wave width is checked against the builder count, idle builders are nudged to split the
+      oldest claim, and TASKs carry a lane tag. Presets Speed (builders only, the default and today's
+      behaviour), Balanced and Hardening. See [ultra-roles-design.md](ultra-roles-design.md).
 - [x] Plan Mode (Part 1.2) — `propose_plan` tool gates `propose_edit` behind an approved checklist.
 - [x] Git integration MVP (Part 1.1) — new `IdePlusPlus.SourceControl` project (shells to `git.exe`),
       status/stage/commit/push/pull/fetch/branch-switch, a Git tool pane reusing the existing
