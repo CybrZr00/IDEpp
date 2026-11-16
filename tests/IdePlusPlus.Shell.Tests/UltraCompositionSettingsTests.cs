@@ -194,8 +194,8 @@ public sealed class UltraCompositionSettingsTests : IDisposable
 
         viewModel.SaveUltraSettingsCommand.Execute(null);
 
-        viewModel.StatusMessage.ShouldContain("at most 64");
-        viewModel.StatusMessage.ShouldContain("Nothing was saved");
+        viewModel.StatusMessage.ShouldNotBeNull().ShouldContain("at most 64");
+        viewModel.StatusMessage.ShouldNotBeNull().ShouldContain("Nothing was saved");
         CopilotChatPaneViewModel.ReadUltraComposition(settings).CountOf(TeamRoleKind.Adversary)
             .ShouldBe(0, "a composition that cannot start is not written");
     }
