@@ -301,4 +301,156 @@ public sealed class TeamToolDispatcherTests : IDisposable
         await withShell.ExecuteAsync("run_command", Args(new { command = "dir", reason = "look" }), CancellationToken.None);
         workingDirectory.ShouldBe(context.SolutionDirectory);
     }
+
+    // ---- Role-scoped tools and edit scopes ----
+
+    [Fact]
+    public async Task AnAdversary_WritesTestsOnly_NeverMerges_AndCanReportFindings()
+    {
+        var (adversary, _, _) = await _repo.CreateWorkerAsync(1, role: TeamRoles.Adversary);
+        // team_next_review is only offered when the run has a queue to answer it; give it one.
+        adversary.NextReview = _ => Task.FromResult((false, "nothing queued for the adv lane"));
+
+        // Its edit scope is TestsOnly: the failing test it commits as evidence has to be written
+        // somewhere, but production code is out of reach - and nothing of its own is ever merged.
+        adversary.Tools.ShouldContain(t => t.Name == TeamTools.EditFileToolName);
+        adversary.Tools.ShouldNotContain(t => t.Name == TeamTools.MergeToolName);
+        adversary.Tools.ShouldContain(t => t.Name == TeamTools.ReportFindingToolName);
+        adversary.Tools.ShouldContain(t => t.Name == TeamTools.NextReviewToolName);
+
+        var (editError, editRefusal) = await EditValueAsync(adversary, 2);
+        editError.ShouldBeTrue();
+        editRefusal.ShouldContain("writes tests only");
+        editRefusal.ShouldContain("no test project");
+
+        var (mergeError, mergeRefusal) = await adversary.ExecuteAsync(TeamTools.MergeToolName, null, CancellationToken.None);
+        mergeError.ShouldBeTrue();
+        mergeRefusal.ShouldContain("branch:<sha>");
+
+        File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
+    }
+
+    [Fact]
+    public async Task ABuilder_IsNotOfferedTheSpecialistTools_AndCallingOneIsRefused()
+    {
+        var (builder, _, _) = await _repo.CreateWorkerAsync(1);
+
+        builder.Tools.ShouldNotContain(t => t.Name == TeamTools.NextReviewToolName);
+        builder.Tools.ShouldNotContain(t => t.Name == TeamTools.ReportFindingToolName);
+        builder.Tools.ShouldNotContain(t => t.Name == TeamTools.RunMutationTestsToolName);
+
+        var (isError, text) = await builder.ExecuteAsync(
+            TeamTools.ReportFindingToolName, Args(new { severity = "low", kind = "mutation", text = "x" }), CancellationToken.None);
+
+        isError.ShouldBeTrue();
+        text.ShouldContain("not one of the tools");
+    }
+
+    [Fact]
+    public async Task TheMutationTester_GetsRunMutationTests_AndTheConformityLaneDoesNot()
+    {
+        var (mutation, _, _) = await _repo.CreateWorkerAsync(1, role: TeamRoles.MutationTester);
+        var (lint, _, _) = await _repo.CreateWorkerAsync(2, role: TeamRoles.Conformity);
+
+        mutation.Tools.ShouldContain(t => t.Name == TeamTools.RunMutationTestsToolName);
+        mutation.Tools.ShouldContain(t => t.Name == TeamTools.EditFileToolName);
+        lint.Tools.ShouldNotContain(t => t.Name == TeamTools.RunMutationTestsToolName);
+        lint.Tools.ShouldContain(t => t.Name == TeamTools.CheckConformityToolName);
+        lint.Tools.ShouldContain(t => t.Name == TeamTools.MergeToolName);
+
+        // The scratch repository has no test project, so the run refuses before touching the file -
+        // which is the tool being routed, not a refusal by the role.
+        var (isError, text) = await mutation.ExecuteAsync(
+            TeamTools.RunMutationTestsToolName, Args(new { file = "Lib/Class1.cs" }), CancellationToken.None);
+        isError.ShouldBeTrue();
+        text.ShouldContain("No test projects");
+        File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
+    }
+
+    [Fact]
+    public async Task TestsOnly_RefusesAnEditOutsideTheTestProjects()
+    {
+        var (mutation, context, _) = await _repo.CreateWorkerAsync(1, role: TeamRoles.MutationTester);
+
+        var (isError, text) = await EditValueAsync(mutation, 2);
+
+        isError.ShouldBeTrue();
+        text.ShouldContain("writes tests only");
+        File.ReadAllText(Path.Combine(context.WorktreeRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
+    }
+
+    [Fact]
+    public async Task ChangedFilesStyleOnly_AllowsTheReviewedFile_AndRefusesAnother()
+    {
+        var (lint, context, _) = await _repo.CreateWorkerAsync(1, role: TeamRoles.Conformity);
+
+        // Before an item is taken the set of files is unknown, so every edit is refused.
+        var (beforeError, before) = await EditValueAsync(lint, 2);
+        beforeError.ShouldBeTrue();
+        before.ShouldContain("team_next_review first");
+
+        lint.CurrentReviewFiles = [Path.Combine(context.WorktreeRoot, "Lib", "Class1.cs")];
+        File.WriteAllText(Path.Combine(context.WorktreeRoot, "Lib", "Class2.cs"), "public class Class2 { }\r\n");
+
+        var (otherError, other) = await lint.ExecuteAsync(TeamTools.EditFileToolName, Args(new
+        {
+            file = "Lib/Class2.cs",
+            mode = "replace_text",
+            old_text = "public class Class2 { }",
+            new_text = "public class Class2 { public int Other => 2; }",
+        }), CancellationToken.None);
+        otherError.ShouldBeTrue();
+        other.ShouldContain("only the files its review item changed");
+
+        var (allowedError, allowed) = await EditValueAsync(lint, 2);
+        allowedError.ShouldBeFalse(allowed);
+        File.ReadAllText(Path.Combine(context.WorktreeRoot, "Lib", "Class1.cs")).ShouldContain("Value => 2;");
+    }
+
+    [Fact]
+    public async Task ReportFinding_PostsALaneTaggedFinding_AndAHighOneNeedsEvidence()
+    {
+        var (adversary, _, _) = await _repo.CreateWorkerAsync(1, role: TeamRoles.Adversary);
+        _repo.Board.Write("w1", "PATCH_SUMMARY", "files=Lib/Class1.cs | idea=value | evidence=build", null);
+
+        var (highError, highText) = await adversary.ExecuteAsync(TeamTools.ReportFindingToolName, Args(new
+        {
+            severity = "high",
+            kind = "security",
+            text = "path traversal in the reader",
+        }), CancellationToken.None);
+        highError.ShouldBeTrue();
+        highText.ShouldContain("needs evidence");
+
+        var (isError, text) = await adversary.ExecuteAsync(TeamTools.ReportFindingToolName, Args(new
+        {
+            severity = "medium",
+            kind = "robustness",
+            text = "empty input throws",
+            files = new[] { "Lib/Class1.cs" },
+        }), CancellationToken.None);
+
+        isError.ShouldBeFalse(text);
+        var finding = _repo.Board.Snapshot().Where(e => e.Type == TeamBoardEntryType.Finding).ShouldHaveSingleItem();
+        finding.Lane.ShouldBe("adv");
+        finding.Text.ShouldContain("severity=medium");
+        finding.Text.ShouldContain("evidence=");
+    }
+
+    [Fact]
+    public async Task MergeLanded_IsCalledWithTheRangeThatLanded()
+    {
+        var (dispatcher, context, _) = await _repo.CreateWorkerAsync(1);
+        var landed = new List<MergeLandedEvent>();
+        dispatcher.MergeLanded = (e, _) => { landed.Add(e); return Task.CompletedTask; };
+
+        await EditValueAsync(dispatcher, 2);
+        await dispatcher.ExecuteAsync(TeamTools.CommitToolName, Args(new { message = "Value is 2" }), CancellationToken.None);
+        (await dispatcher.ExecuteAsync(TeamTools.MergeToolName, null, CancellationToken.None)).IsError.ShouldBeFalse();
+
+        var single = landed.ShouldHaveSingleItem();
+        single.Author.ShouldBe("w1");
+        single.To.ShouldBe(TeamRepositoryFixture.Git(context.WorktreeRoot, "rev-parse", "HEAD"));
+        single.From.ShouldNotBe(single.To);
+    }
 }

@@ -88,7 +88,9 @@ public sealed class TeamRepositoryFixture : IDisposable
         TimeSpan? buildTimeout = null,
         SemaphoreSlim? buildSlots = null,
         Func<int, CancellationToken, Task<(bool IsError, string Text)>>? waitForChange = null,
-        Func<string, string?>? claimGuard = null)
+        Func<string, string?>? claimGuard = null,
+        TeamRole? role = null,
+        Func<CancellationToken, Task<(bool IsError, string Text)>>? nextReview = null)
     {
         if (!_teamBranchCreated)
         {
@@ -97,7 +99,9 @@ public sealed class TeamRepositoryFixture : IDisposable
             _teamBranchCreated = true;
         }
 
-        var name = $"w{number}";
+        // A role names its worker the way the run does - b1, mut1, adv1 - while the branch keeps the
+        // number, so one fixture can stand up a builder and a specialist without a branch collision.
+        var name = role?.NameFor(number) ?? $"w{number}";
         var worktree = Path.Combine(Root, name);
         var teamHead = (await TeamGit.ResolveRefAsync(RepositoryRoot, TeamBranch))!;
         (await TeamGit.AddWorktreeAsync(
@@ -116,7 +120,10 @@ public sealed class TeamRepositoryFixture : IDisposable
         var state = new TeamWorkerState(name);
         var dispatcher = new TeamToolDispatcher(
             context, state, Board, Bus, ReadOnlyTools, new GitService(), TeamGit, buildSlots ?? BuildSlots, "Debug", runCommand,
-            buildTimeout, waitForChange: waitForChange, claimGuard: claimGuard);
+            buildTimeout, waitForChange: waitForChange, claimGuard: claimGuard, role: role)
+        {
+            NextReview = nextReview,
+        };
         return (dispatcher, context, state);
     }
 

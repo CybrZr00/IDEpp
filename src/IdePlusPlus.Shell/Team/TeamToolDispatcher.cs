@@ -5,6 +5,7 @@ using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.Roslyn.Mutation;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.TestRunner;
 
@@ -79,6 +80,13 @@ public sealed class TeamToolDispatcher
     /// <summary>The review item this specialist is working on, for the status card and for the
     /// refusal messages. Null before its first team_next_review.</summary>
     public string? CurrentReviewId { get; set; }
+
+    /// <summary>
+    /// The line ranges the review item's merge changed, keyed by file, so run_mutation_tests mutates
+    /// only what the merge touched rather than the whole file. Set by the run with the review item;
+    /// null mutates every mutable construct in the file.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<LineRange>>? CurrentReviewChangedLines { get; set; }
 
     /// <summary>
     /// Called after a fast-forward lands on the team branch, with who merged and the merge range, so
@@ -299,6 +307,9 @@ public sealed class TeamToolDispatcher
 
             case TeamTools.CheckConformityToolName:
                 return await CheckConformityAsync(arguments, cancellationToken);
+
+            case TeamTools.RunMutationTestsToolName:
+                return await RunMutationTestsAsync(arguments, cancellationToken);
 
             case TeamTools.BoardGrepToolName:
                 return (false, _board.Grep(Arg("query")));
@@ -562,6 +573,66 @@ public sealed class TeamToolDispatcher
         {
             _buildSlots.Release();
         }
+    }
+
+    /// <summary>
+    /// run_mutation_tests, the mutation tester's lane: mutate the changed lines of one file and see
+    /// which mutants the tests kill. It takes the shared build slots itself (each mutant is a build
+    /// and a test run), and it accepts the review item's changed lines so only what the merge touched
+    /// is mutated - a whole-file run on a large class would spend its whole budget on code the merge
+    /// never went near.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunMutationTestsAsync(JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        var file = arguments?["file"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(file))
+        {
+            return (true, "run_mutation_tests requires a 'file'.");
+        }
+
+        var maxMutants = arguments?["max_mutants"] is { } maxNode && int.TryParse(maxNode.ToString(), out var parsedMax)
+            ? parsedMax
+            : TeamTools.DefaultMutantsPerRun;
+        var filter = arguments?["test_filter"]?.GetValue<string>();
+
+        var runner = new TeamMutationRunner(
+            new MutationRunnerContext(
+                _context.WorktreeRoot,
+                _context.SolutionDirectory,
+                _context.TestProjectPaths,
+                _configuration),
+            _buildSlots);
+
+        var (isError, text) = await runner.RunAsync(
+            file.Trim(), maxMutants, filter, ChangedLinesFor(file.Trim()), cancellationToken);
+        if (!isError)
+        {
+            _state.HadVisibleActivityThisCycle = true;
+        }
+
+        return (isError, text);
+    }
+
+    /// <summary>The review item's changed line ranges for one file, or null to mutate the whole file.
+    /// The keys are the paths the merge named, which may differ in slashes from the tool argument.</summary>
+    private IReadOnlyList<LineRange>? ChangedLinesFor(string file)
+    {
+        if (CurrentReviewChangedLines is null)
+        {
+            return null;
+        }
+
+        var normalized = file.Replace('\\', '/');
+        foreach (var (path, ranges) in CurrentReviewChangedLines)
+        {
+            if (string.Equals(path.Replace('\\', '/'), normalized, StringComparison.OrdinalIgnoreCase)
+                || normalized.EndsWith('/' + path.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return ranges;
+            }
+        }
+
+        return null;
     }
 
     private (bool IsError, string Text) EditFile(JsonNode? arguments)
