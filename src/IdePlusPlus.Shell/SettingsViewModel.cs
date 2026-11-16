@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.Mcp;
@@ -62,13 +63,23 @@ public sealed partial class SettingsViewModel : ObservableObject
         useLmStudioEmbeddings = _appSettingsStore.Get(EmbeddingClientSelector.ProviderSettingName) == EmbeddingClientSelector.LmStudioProvider;
         systemPrompt = _appSettingsStore.Get(CopilotChatPaneViewModel.SystemPromptSettingKey) ?? "";
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
-        ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraWorkerCount(_appSettingsStore);
+        // Builders, not every worker: the 'Workers' box this card used to have counted them all
+        // because they all were builders, and a settings file from then has no builder key.
+        ultraWorkerCount = CopilotChatPaneViewModel.ReadUltraBuilders(_appSettingsStore);
         ultraTimeBudgetMinutes = CopilotChatPaneViewModel.ReadUltraTimeBudgetMinutes(_appSettingsStore);
         ultraConcurrentRequests = CopilotChatPaneViewModel.ReadUltraConcurrentRequests(_appSettingsStore);
         ultraMaxRunMinutes = CopilotChatPaneViewModel.ReadUltraMaxRunMinutes(_appSettingsStore);
         ultraMaxTokensMillions = CopilotChatPaneViewModel.ReadUltraMaxTokensMillions(_appSettingsStore);
         ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
         ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
+        ultraCompositionPreset = CopilotChatPaneViewModel.ReadUltraCompositionPreset(_appSettingsStore).ToString();
+        ultraMutationTesters = CopilotChatPaneViewModel.ReadUltraSpecialistCount(_appSettingsStore, TeamRoleKind.MutationTester);
+        ultraAdversaries = CopilotChatPaneViewModel.ReadUltraSpecialistCount(_appSettingsStore, TeamRoleKind.Adversary);
+        ultraConformity = CopilotChatPaneViewModel.ReadUltraSpecialistCount(_appSettingsStore, TeamRoleKind.Conformity);
+        ultraGapFinders = CopilotChatPaneViewModel.ReadUltraSpecialistCount(_appSettingsStore, TeamRoleKind.GapFinder);
+        ultraFollowUpScouts = CopilotChatPaneViewModel.ReadUltraSpecialistCount(_appSettingsStore, TeamRoleKind.FollowUpScout);
+        ultraLeadReviewMode = CopilotChatPaneViewModel.ReadUltraLeadReviewMode(_appSettingsStore).ToString();
+        ultraSpecialistEffort = CopilotChatPaneViewModel.ReadUltraSpecialistEffort(_appSettingsStore)?.ToString() ?? DefaultEffortChoice;
         ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
         ultraWorkFolder = CopilotChatPaneViewModel.ReadUltraWorkFolder(_appSettingsStore) ?? "";
         ultraOrchestratorProvider = CopilotChatPaneViewModel.ReadUltraOrchestratorProvider(_appSettingsStore) ?? SameAsChatChoice;
@@ -166,6 +177,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>How many workers an Ultra message starts, and how long they get. Read with the same
     /// clamping the chat pane applies, so what this shows is what a run will use.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionSummary))]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionProblem))]
     private int ultraWorkerCount;
 
     [ObservableProperty]
@@ -189,6 +202,107 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraStartWorkers;
+
+    /// <summary>Which roster the counts below were filled in from. Choosing one sets the counts; the
+    /// counts are what a run uses, so editing one afterwards is not undone by the preset.</summary>
+    [ObservableProperty]
+    private string ultraCompositionPreset;
+
+    /// <summary>How many of each specialist lane. Builders are <see cref="UltraWorkerCount"/> - the
+    /// 'Workers' box on the same card - since every worker before the roster existed was one.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionSummary))]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionProblem))]
+    private int ultraMutationTesters;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionSummary))]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionProblem))]
+    private int ultraAdversaries;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionSummary))]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionProblem))]
+    private int ultraConformity;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionSummary))]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionProblem))]
+    private int ultraGapFinders;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionSummary))]
+    [NotifyPropertyChangedFor(nameof(UltraCompositionProblem))]
+    private int ultraFollowUpScouts;
+
+    /// <summary>Blocking (the lead's verdict holds a merge up) or Advisory (the merge lands and the
+    /// verdict follows as a FINDING).</summary>
+    [ObservableProperty]
+    private string ultraLeadReviewMode;
+
+    /// <summary>What effort specialists run at; <see cref="DefaultEffortChoice"/> uses each role's own
+    /// default - Low for the conformity and follow-up lanes, High for the adversary.</summary>
+    [ObservableProperty]
+    private string ultraSpecialistEffort;
+
+    /// <summary>What one worker's checkout plus build output is guessed at on the composition card.
+    /// The run measures the real figure before any worker starts and refuses then if it will not fit.</summary>
+    public const long EstimatedWorkerDiskBytes = 2L * 1024 * 1024 * 1024;
+
+    public IReadOnlyList<string> CompositionPresetChoices { get; } = [.. Enum.GetNames<TeamCompositionPreset>()];
+
+    public IReadOnlyList<string> LeadReviewModeChoices { get; } = [nameof(LeadReviewMode.Blocking), nameof(LeadReviewMode.Advisory)];
+
+    /// <summary>The team the settings describe, read the same way a run reads it.</summary>
+    public TeamComposition Composition => new(
+        UltraWorkerCount,
+        new Dictionary<TeamRoleKind, int>
+        {
+            [TeamRoleKind.MutationTester] = UltraMutationTesters,
+            [TeamRoleKind.Adversary] = UltraAdversaries,
+            [TeamRoleKind.Conformity] = UltraConformity,
+            [TeamRoleKind.GapFinder] = UltraGapFinders,
+            [TeamRoleKind.FollowUpScout] = UltraFollowUpScouts,
+        });
+
+    /// <summary>The running total under the count boxes, and the disk that many checkouts and build
+    /// outputs are guessed to take.</summary>
+    public string UltraCompositionSummary
+    {
+        get
+        {
+            var composition = Composition;
+            var lanes = TeamRoles.Specialists
+                .Where(role => composition.CountOf(role.Kind) > 0)
+                .Select(role => $"{composition.CountOf(role.Kind)} {role.DisplayName.ToLowerInvariant()}")
+                .ToList();
+            var gigabytes = composition.Total * EstimatedWorkerDiskBytes / (1024.0 * 1024 * 1024);
+            return $"{composition.Total} worker{(composition.Total == 1 ? "" : "s")}: "
+                   + $"{composition.Builders} builder{(composition.Builders == 1 ? "" : "s")}"
+                   + (lanes.Count > 0 ? ", " + string.Join(", ", lanes) : "")
+                   + $". Their checkouts and build output: roughly {gigabytes:0.#} GB, plus 2 GB kept free.";
+        }
+    }
+
+    /// <summary>What is wrong with the composition, or null when a run would start it.</summary>
+    public string? UltraCompositionProblem => Composition.Validate();
+
+    /// <summary>Choosing a preset fills in its lane counts. The counts stay editable afterwards - the
+    /// presets are a starting point, not a mode.</summary>
+    partial void OnUltraCompositionPresetChanged(string value)
+    {
+        if (!Enum.TryParse<TeamCompositionPreset>(value, ignoreCase: true, out var preset))
+        {
+            return;
+        }
+
+        var composition = TeamComposition.For(preset, UltraWorkerCount);
+        UltraMutationTesters = composition.CountOf(TeamRoleKind.MutationTester);
+        UltraAdversaries = composition.CountOf(TeamRoleKind.Adversary);
+        UltraConformity = composition.CountOf(TeamRoleKind.Conformity);
+        UltraGapFinders = composition.CountOf(TeamRoleKind.GapFinder);
+        UltraFollowUpScouts = composition.CountOf(TeamRoleKind.FollowUpScout);
+    }
 
     /// <summary>Where Ultra runs keep their worktrees and build output; blank means
     /// <see cref="UltraWorkFolderDefault"/>. Each worker has a full checkout plus its own build output,
@@ -430,9 +544,38 @@ public sealed partial class SettingsViewModel : ObservableObject
             UltraMaxRunMinutes, CopilotChatPaneViewModel.MinUltraTimeBudgetMinutes, CopilotChatPaneViewModel.MaxUltraMaxRunMinutes);
         UltraMaxTokensMillions = Math.Clamp(UltraMaxTokensMillions, 0, CopilotChatPaneViewModel.MaxUltraMaxTokensMillions);
         UltraStartWorkers = Math.Clamp(UltraStartWorkers, 1, UltraWorkerCount);
+        UltraMutationTesters = Math.Clamp(UltraMutationTesters, 0, TeamComposition.MaxSpecialistsPerKind);
+        UltraAdversaries = Math.Clamp(UltraAdversaries, 0, TeamComposition.MaxSpecialistsPerKind);
+        UltraConformity = Math.Clamp(UltraConformity, 0, TeamComposition.MaxSpecialistsPerKind);
+        UltraGapFinders = Math.Clamp(UltraGapFinders, 0, TeamComposition.MaxSpecialistsPerKind);
+        UltraFollowUpScouts = Math.Clamp(UltraFollowUpScouts, 0, TeamComposition.MaxSpecialistsPerKind);
+
+        // A roster that cannot be started is refused here rather than at send time, where the team
+        // would have been set up - worktrees and all - before anyone noticed.
+        if (UltraCompositionProblem is { } compositionProblem)
+        {
+            StatusMessage = $"{compositionProblem} Nothing was saved.";
+            return;
+        }
+
+        var preset = Enum.TryParse<TeamCompositionPreset>(UltraCompositionPreset, ignoreCase: true, out var parsedPreset)
+            ? parsedPreset
+            : TeamCompositionPreset.Speed;
+        var leadReviewMode = Enum.TryParse<LeadReviewMode>(UltraLeadReviewMode, ignoreCase: true, out var parsedMode)
+            ? parsedMode
+            : LeadReviewMode.Blocking;
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraAutoScaleSettingKey, UltraAutoScale.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraStartWorkersSettingKey, UltraStartWorkers.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraBuildersSettingKey, UltraWorkerCount.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraCompositionPresetSettingKey, preset.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMutationTestersSettingKey, UltraMutationTesters.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraAdversariesSettingKey, UltraAdversaries.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConformitySettingKey, UltraConformity.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraGapFindersSettingKey, UltraGapFinders.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraFollowUpScoutsSettingKey, UltraFollowUpScouts.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraLeadReviewModeSettingKey, leadReviewMode.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraSpecialistEffortSettingKey, StoredEffort(UltraSpecialistEffort));
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraTimeBudgetSettingKey, UltraTimeBudgetMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConcurrentRequestsSettingKey, UltraConcurrentRequests.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
@@ -443,8 +586,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
         StatusMessage = $"Ultra settings saved - "
-                        + (UltraAutoScale ? $"auto mode, {UltraStartWorkers} workers growing to {UltraWorkerCount}" : $"{UltraWorkerCount} workers")
-                        + (UltraOrchestrated ? " with a lead" : "")
+                        + (UltraAutoScale
+                            ? $"auto mode, {UltraStartWorkers} workers growing to {Composition.Total}"
+                            : $"{Composition.Total} workers ({UltraWorkerCount} builders"
+                              + (Composition.SpecialistTotal > 0 ? $" and {Composition.SpecialistTotal} specialists" : "") + ")")
+                        + (UltraOrchestrated ? $" with a lead reviewing merges {UltraLeadReviewMode.ToLowerInvariant()}" : "")
                         + $", up to {UltraTimeBudgetMinutes} minutes, "
                         + $"{UltraConcurrentRequests} model requests at a time; run until done stops after "
                         + $"{UltraMaxRunMinutes} minutes"

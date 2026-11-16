@@ -702,20 +702,7 @@
 
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <TextBlock Text="Team size and time" Style="{StaticResource CardTitleStyle}" Margin="0,0,0,12" />
-
-                                <Grid Margin="0,0,0,12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="Workers" Style="{StaticResource RowLabelStyle}" />
-                                        <TextBlock Text="1 to 64." Style="{StaticResource HintStyle}" />
-                                    </StackPanel>
-                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center"
-                                             Text="{Binding UltraWorkerCount, UpdateSourceTrigger=PropertyChanged}" />
-                                </Grid>
+                                <TextBlock Text="Team time and requests" Style="{StaticResource CardTitleStyle}" Margin="0,0,0,12" />
 
                                 <Grid Margin="0,0,0,12">
                                     <Grid.ColumnDefinitions>
@@ -754,13 +741,138 @@
                                         <CheckBox Content="Auto mode" IsChecked="{Binding UltraAutoScale}"
                                                   FontWeight="SemiBold"
                                                   ToolTip="The team starts small and its workers ask for more when the work left won't fit the time left. The runner grants at most 2 at a time, spaced out, up to the worker count above - and not when too little time, token budget or disk space is left." />
-                                        <TextBlock Text="Start with this many workers; they can ask for more, up to the worker count."
+                                        <TextBlock Text="Start with this many builders; they can ask for more, up to the builder count."
                                                    Style="{StaticResource HintStyle}" Margin="22,2,0,0" />
                                     </StackPanel>
                                     <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
                                              Text="{Binding UltraStartWorkers, UpdateSourceTrigger=PropertyChanged}"
                                              IsEnabled="{Binding UltraAutoScale}" />
                                 </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Team composition: the roster Ultra is built from. Speed (builders only) is the
+                             default, so nothing changes until a preset is chosen here. -->
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Team composition" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="Who is on the team. Builders take the goal's TASKs; the specialist lanes work through what the builders merge - reviewing it, mutation-testing it, linting it - while the builders carry on. Speed is builders only, the team Ultra has always started."
+                                           Style="{StaticResource HintStyle}" Margin="0,0,0,12" />
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Preset" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="Fills the counts in below. The counts are what a run uses, so a preset is a starting point, not a mode."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding CompositionPresetChoices}" SelectedItem="{Binding UltraCompositionPreset}"
+                                              HorizontalAlignment="Left" MinWidth="140" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Specialist effort" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="How hard the specialist lanes think. Default uses each role's own: Low for conformity and follow-ups, High for the adversary."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraSpecialistEffort}"
+                                              HorizontalAlignment="Left" MinWidth="140" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Builders" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="1 to 64. Take the goal's TASKs one at a time and merge each small and early."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraWorkerCount, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Mutation testers" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="0 to 2. Mutate the lines each merge changed and write the tests that kill the survivors. Edits tests only."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraMutationTesters, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Adversaries" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="0 to 2. What-ifs and security over each merge; a high finding needs a failing test as evidence. Edits tests only."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraAdversaries, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Conformity" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="0 to 2. dotnet format and analyzer warnings over the merged files; fixes style itself. Edits the review item's files only."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraConformity, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Gap finders" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="0 to 2. Compare the goal, the plan and the code, and write TASKs for what is missing. Read-only."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraGapFinders, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Follow-up scouts" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="0 to 2. Collect work that is worth doing but out of scope, for the result's suggested next prompts. Never edits."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraFollowUpScouts, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <TextBlock Text="{Binding UltraCompositionSummary}" Style="{StaticResource HintStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding UltraCompositionProblem}" Foreground="#C42B1C" TextWrapping="Wrap" Margin="0,6,0,0" />
                             </StackPanel>
                         </Border>
 
@@ -845,6 +957,16 @@
                                     <TextBlock Text="Lead effort" VerticalAlignment="Center" />
                                     <ComboBox Grid.Column="1" ItemsSource="{Binding EffortChoices}" SelectedItem="{Binding UltraOrchestratorEffort}"
                                               HorizontalAlignment="Left" MinWidth="160" ToolTip="Default is High." />
+                                </Grid>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Lead review" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding LeadReviewModeChoices}" SelectedItem="{Binding UltraLeadReviewMode}"
+                                              HorizontalAlignment="Left" MinWidth="160"
+                                              ToolTip="Blocking: the lead's verdict holds each merge up. Advisory: the merge lands and the verdict follows as a finding, so merges stop queueing behind the lead." />
                                 </Grid>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
