@@ -509,6 +509,9 @@ public partial class App : Application
             sp.GetRequiredService<OnnxEmbeddingClient>(),
             sp.GetRequiredService<LmStudioEmbeddingClient>()));
         services.AddSingleton<CodebaseIndexService>();
+        services.AddSingleton<TranscriptStore>();
+        services.AddSingleton(sp => new TranscriptMemoryService(
+            sp.GetRequiredService<IEmbeddingClient>(), sp.GetRequiredService<TranscriptStore>()));
         services.AddSingleton<GitService>();
         services.AddSingleton<SourceControlPaneViewModel>();
         services.AddSingleton<NuGetService>();

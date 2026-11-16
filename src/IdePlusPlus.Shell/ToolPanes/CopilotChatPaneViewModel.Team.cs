@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.Copilot.Memory;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Shell.Team;
 using IdePlusPlus.SourceControl;
@@ -572,6 +573,7 @@ public sealed partial class CopilotChatPaneViewModel
                     _editApplicationService.ReloadFromDisk(
                         (landing.ChangedPaths ?? []).Select(p => Path.GetFullPath(Path.Combine(repositoryRoot, p))));
                     assistantMessage.Text = DescribeTeamResult(run, result, 0, [], landing);
+                    RecordTranscript(TranscriptKinds.Assistant, assistantMessage.Text, source: "ultra team report");
                 }
                 else
                 {
@@ -751,6 +753,7 @@ public sealed partial class CopilotChatPaneViewModel
         }
 
         assistantMessage.Text = DescribeTeamResult(run, result, proposals.Count, notProposed, notLandedNote: notLandedNote);
+        RecordTranscript(TranscriptKinds.Assistant, assistantMessage.Text, source: "ultra team report");
 
         foreach (var (operation, note) in proposals)
         {

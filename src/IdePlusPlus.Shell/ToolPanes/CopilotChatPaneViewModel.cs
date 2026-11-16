@@ -114,6 +114,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         "is not the same as the change being correct.\n" +
         "- Finish on a green build. If it fails, fix it and build again rather than handing back " +
         "something you know is broken - and if you cannot, say plainly what is still wrong.\n" +
+        "- Earlier conversations in this project are kept in full, your own reasoning included, and " +
+        "search_transcripts searches them. Use it when the user refers to something discussed before, or " +
+        "when you need the reasoning behind a past decision, rather than asking them to repeat it. Don't " +
+        "use it for anything already in this conversation.\n" +
         "- Keep narration short. One line on what you're doing beats a paragraph on what you're about to do.";
 
     /// <summary>
@@ -284,9 +288,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         ReadOnlyToolDispatcher readOnlyToolDispatcher,
         HookService hookService,
         TemplateCatalog templateCatalog,
-        TemplateInstantiationService templateInstantiation)
+        TemplateInstantiationService templateInstantiation,
+        TranscriptMemoryService? transcriptMemory = null)
         : base(PaneContentId, "Copilot Chat")
     {
+        // Optional, so a pane built without one (most tests) simply keeps no transcript.
+        _transcripts = transcriptMemory;
         _openRouterClient = openRouterClient;
         _lmStudioClient = lmStudioClient;
         _deepSeekClient = deepSeekClient;
@@ -602,6 +609,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             }
         }
 
+        // After the history above, since whether a conversation came back decides which transcript
+        // carries on.
+        OpenTranscriptsFor(directory);
+
         // Last: loading a solution's hooks can show a trust prompt, and a modal prompt pumps the
         // dispatcher - by this point everything queued behind it sees the new solution throughout.
         _hookService.SetSolution(directory);
@@ -750,6 +761,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         Messages.Clear();
         _lastUserRequestText = null;
         StatusMessage = null;
+
+        // The next thing said starts a new transcript. The one just ended is kept as it is.
+        _transcriptConversationId = null;
 
         if (solutionChanged)
         {
@@ -903,6 +917,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         // Before the (potentially very long) network call, so the question itself survives even if
         // the response never arrives.
         PersistChatHistory();
+        RecordTranscript(TranscriptKinds.User, userText);
 
         var history = BuildChatHistory(Messages.Where(m => m != userMessage));
         history.Add(new ChatMessage(ChatRole.User, userText));
@@ -1661,6 +1676,9 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     ? (true, $"No skill named '{skillName}' was found. Check the catalog at the top of this "
                              + "conversation for the exact name.")
                     : (false, skillText);
+
+            case TranscriptTools.SearchTranscriptsToolName:
+                return await RunSearchTranscriptsAsync(arguments, cancellationToken);
 
             case TestTools.RunTestsToolName:
                 return await RunTestsAsync(
@@ -2554,6 +2572,11 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         var routeByIndex = new Dictionary<int, ToolCallRoute>();
         var reportedError = false;
 
+        // What the model itself sent, apart from the notes the IDE adds to the bubble - this is what
+        // goes into the transcript when the call ends, however it ends.
+        var streamedText = new StringBuilder();
+        var streamedReasoning = new StringBuilder();
+
         var tools = new List<ToolDefinition> { PlanToolsActive ? ProposePlanTool.Definition : ProposeEditTool.Definition };
         tools.AddRange(BuiltInTools.All);
         if (AreShellCommandsEnabled)
@@ -2598,10 +2621,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                     {
                         case TextDelta delta:
                             assistantMessage.Append(delta.Text);
+                            streamedText.Append(delta.Text);
                             break;
 
                         case ReasoningDelta reasoning:
                             assistantMessage.AppendReasoning(reasoning.Text);
+                            streamedReasoning.Append(reasoning.Text);
                             break;
 
                         case ToolCallDelta toolCallDelta:
@@ -2658,6 +2683,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             // However the stream ended - finished, cut off, cancelled or failed - a plan that never
             // parsed is marked failed rather than left looking like it is still arriving.
             _dispatcher.Invoke(() => FailUnparsedPlans(planParser, planProposalsByToolCallId));
+
+            // Likewise whatever the model got as far as saying is kept, a half-finished thought
+            // included. A turn cut loose by New Chat or a solution switch records nothing: the
+            // conversation it belonged to is no longer the one this pane is keeping a transcript of.
+            if (IsLive(turn))
+            {
+                RecordTranscript(TranscriptKinds.Thought, streamedReasoning.ToString());
+                RecordTranscript(TranscriptKinds.Assistant, streamedText.ToString());
+            }
         }
 
         // A no-op unless a PreToolUse hook made an accept asynchronous: the loop's next decision
@@ -3062,6 +3096,13 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             """;
         _lastUserRequestText = instruction;
 
+        // The plan itself reached the model as a tool call, not a message, so this is the only place
+        // it would otherwise be lost to a cleared conversation.
+        RecordTranscript(
+            TranscriptKinds.User,
+            $"Approved this plan. Summary: {proposal.Summary}\nSteps:\n{stepsList}",
+            source: "plan approved");
+
         var history = BuildChatHistory(Messages.Where(m => m != marker));
         history.Add(new ChatMessage(ChatRole.User, instruction));
 
@@ -3279,6 +3320,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             // solution's embeddings.json.
             cancellation.Token.ThrowIfCancellationRequested();
             _codebaseIndexService.SaveToDisk(ProjectMemoryStore.IndexFilePath(solutionDirectory));
+
+            // Indexing is what downloads the built-in embedding model, so this is when any
+            // transcript passages that were waiting for one can finally be embedded.
+            _transcripts?.ResumeEmbedding();
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
