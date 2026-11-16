@@ -33,6 +33,11 @@ public enum MutantOutcome
 
     /// <summary>The build or test run did not finish within the mutant's timeout.</summary>
     TimedOut,
+
+    /// <summary>No test result was produced: the filter matched nothing, or the test host crashed
+    /// (a mutant that loops forever or overflows the stack). Nothing is known about the mutant, so it
+    /// is neither killed nor survived and stays out of the score.</summary>
+    NoTestResults,
 }
 
 /// <summary>
@@ -221,14 +226,44 @@ public sealed class TeamMutationRunner
                 return MutantOutcome.TimedOut;
             }
 
-            return results.Any(r => r.Outcome == TestOutcome.Failed)
-                ? MutantOutcome.Killed
-                : MutantOutcome.Survived;
+            // The caller was cancelled: the run is abandoned, not classified.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // TestRunService's WaitForExitAsync swallows the cancellation, kills `dotnet test` and
+            // returns whatever the .trx holds - which, because the .trx is only written at the end, is
+            // nothing. So the token, not an exception, is what says the run was cut short. A mutant
+            // that loops forever (a negated `while`, a boundary flip) lands here, and calling that
+            // Survived would send the mutation tester off writing tests the suite already passes.
+            return Classify(results, timeout.IsCancellationRequested);
         }
         finally
         {
             _buildSlots.Release();
         }
+    }
+
+    /// <summary>
+    /// What a completed (or abandoned) test run says about one mutant. Empty input is deliberately not
+    /// <see cref="MutantOutcome.Survived"/>: no tests ran, so the score knows nothing, and lumping it in
+    /// with the survivors both overstates the gap and sends the mutation tester after a phantom.
+    /// </summary>
+    internal static MutantOutcome Classify(IReadOnlyList<TestResult> results, bool timedOut)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+
+        if (timedOut)
+        {
+            return MutantOutcome.TimedOut;
+        }
+
+        if (results.Count == 0)
+        {
+            return MutantOutcome.NoTestResults;
+        }
+
+        return results.Any(r => r.Outcome == TestOutcome.Failed)
+            ? MutantOutcome.Killed
+            : MutantOutcome.Survived;
     }
 
     /// <summary>The restore write, then git's own checkout of that one path if the write failed. The
@@ -241,8 +276,12 @@ public sealed class TeamMutationRunner
             File.WriteAllText(fullPath, original, encoding);
             return;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
+            // Any failure to write the original back leaves the mutated file in place, so the git
+            // fallback below is worth trying whatever went wrong. Catching everything matters here
+            // because this runs from a finally: an exception thrown out of it would replace the
+            // mutant's real outcome with an unrelated one.
         }
 
         try
@@ -251,7 +290,7 @@ public sealed class TeamMutationRunner
             new GitService().DiscardChangesAsync(_context.WorktreeRoot, relative, CancellationToken.None)
                 .GetAwaiter().GetResult();
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+        catch (Exception)
         {
             // Nothing more to try - the report names the file so the worker can restore it.
         }
@@ -485,6 +524,10 @@ public sealed class TeamMutationRunner
         var survived = outcomes.Count(o => o.Outcome == MutantOutcome.Survived);
         var unbuildable = outcomes.Count(o => o.Outcome == MutantOutcome.BuildFailed);
         var timedOut = outcomes.Count(o => o.Outcome == MutantOutcome.TimedOut);
+        var noResults = outcomes.Count(o => o.Outcome == MutantOutcome.NoTestResults);
+
+        // Only killed and survived say anything about the tests; a mutant that did not compile, ran
+        // out of time, or produced no test result at all stays out of the score.
         var scored = killed + survived;
         var score = scored == 0 ? 0 : (int)Math.Round(100.0 * killed / scored);
 
@@ -502,6 +545,11 @@ public sealed class TeamMutationRunner
             report.Append($", {timedOut} timed out");
         }
 
+        if (noResults > 0)
+        {
+            report.Append($", {noResults} ran no tests");
+        }
+
         report.Append(scored == 0 ? "." : $". Mutation score {killed}/{scored} ({score}%).");
         if (strykerAttempted)
         {
@@ -517,6 +565,14 @@ public sealed class TeamMutationRunner
             }
         }
 
+        if (noResults > 0)
+        {
+            report.Append("\n\n'no-results' means the mutant produced no test result at all: the filter matched no test, "
+                + "or the test host crashed (a mutant that loops forever or overflows the stack). Narrow the filter, "
+                + "or add a test that reaches that line. These mutants are neither killed nor survived, so they are "
+                + "not in the score.");
+        }
+
         report.Append(survived > 0
             ? "\n\nSurvived mutants are gaps in the tests. Write a test that fails for each survivor (TestsOnly edits), merge it, "
               + "and post a FINDING with `severity=low kind=mutation score=k/n`."
@@ -530,6 +586,7 @@ public sealed class TeamMutationRunner
         MutantOutcome.Killed => "killed",
         MutantOutcome.Survived => "survived",
         MutantOutcome.BuildFailed => "build-fail",
+        MutantOutcome.NoTestResults => "no-results",
         _ => "timed-out",
     };
 }

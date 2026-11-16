@@ -1,5 +1,6 @@
 using IdePlusPlus.Roslyn.Mutation;
 using IdePlusPlus.Shell.Team;
+using IdePlusPlus.TestRunner;
 using Shouldly;
 using Xunit;
 
@@ -177,5 +178,80 @@ public class TeamMutationRunnerTests : IDisposable
 
         isError.ShouldBeTrue();
         text.ShouldContain("No test projects");
+    }
+
+    // ---- Classify: what a test run really says about a mutant ----
+
+    private static TestResult Result(TestOutcome outcome) =>
+        new("Ns.C.M", outcome, TimeSpan.Zero, outcome == TestOutcome.Failed ? "boom" : null, null);
+
+    [Fact]
+    public void Classify_AFailedTest_KillsTheMutant()
+    {
+        TeamMutationRunner.Classify([Result(TestOutcome.Passed), Result(TestOutcome.Failed)], timedOut: false)
+            .ShouldBe(MutantOutcome.Killed);
+    }
+
+    [Fact]
+    public void Classify_AllTestsPassed_LeavesTheMutantAlive()
+    {
+        TeamMutationRunner.Classify(
+            [Result(TestOutcome.Passed), Result(TestOutcome.Skipped)], timedOut: false)
+            .ShouldBe(MutantOutcome.Survived);
+    }
+
+    [Fact]
+    public void Classify_AnEmptyResultList_IsNoTestResults_NotSurvived()
+    {
+        // What TestRunService produces when the filter matched nothing, the host crashed, or the run
+        // was killed on its timeout: [] - which used to be counted as a survivor.
+        TeamMutationRunner.Classify([], timedOut: false).ShouldBe(MutantOutcome.NoTestResults);
+    }
+
+    [Fact]
+    public void Classify_AFinishedTimeout_IsTimedOut()
+    {
+        // The linked token fired: dotnet test was killed and its .trx never written, so whatever the
+        // results hold says nothing about the mutant.
+        TeamMutationRunner.Classify([], timedOut: true).ShouldBe(MutantOutcome.TimedOut);
+        TeamMutationRunner.Classify([Result(TestOutcome.Passed)], timedOut: true).ShouldBe(MutantOutcome.TimedOut);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReportsNoResultsSeparatelyAndLeavesThemOutOfTheScore()
+    {
+        WriteSource("C.cs", Original);
+        var outcomes = new Queue<MutantOutcome>([MutantOutcome.Killed, MutantOutcome.NoTestResults]);
+        var runner = Runner(_ => Task.FromResult(outcomes.Dequeue()));
+
+        var (isError, text) = await runner.RunAsync("src/C.cs", maxMutants: 2, changedLines: [new LineRange(1, 1)]);
+
+        isError.ShouldBeFalse();
+        text.ShouldContain("1 ran no tests");
+        text.ShouldContain("Mutation score 1/1 (100%)");
+        text.ShouldContain("no-results");
+        text.ShouldContain("neither killed nor survived");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheCallerCancels_StopsAndRestoresTheFile()
+    {
+        WriteSource("C.cs", Original);
+        using var cancellation = new CancellationTokenSource();
+        var calls = 0;
+        var runner = Runner(_ =>
+        {
+            calls++;
+            cancellation.Cancel();
+            return Task.FromResult(MutantOutcome.Killed);
+        });
+
+        var (isError, text) = await runner.RunAsync(
+            "src/C.cs", maxMutants: 5, changedLines: [new LineRange(1, 1)], cancellationToken: cancellation.Token);
+
+        isError.ShouldBeFalse();
+        calls.ShouldBe(1);
+        text.ShouldContain("1 killed");
+        File.ReadAllText(Path.Combine(_root, "src", "C.cs")).ShouldBe(Original);
     }
 }
