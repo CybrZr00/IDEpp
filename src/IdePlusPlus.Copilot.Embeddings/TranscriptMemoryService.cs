@@ -132,10 +132,18 @@ public sealed partial class TranscriptMemoryService
     /// when it could not be written; blank text is not an error and records nothing. Never throws:
     /// a transcript is a convenience and must not be able to cost a chat turn.
     /// </summary>
-    public bool Record(string conversationId, string kind, string text, string? source = null)
+    /// <param name="onlyIfSolution">For a run that outlives a solution switch (a sub-agent, a scheduled
+    /// run): when set, nothing is recorded unless this is still the open solution, so a late entry
+    /// cannot land in the next solution's transcripts.</param>
+    public bool Record(string conversationId, string kind, string text, string? source = null, string? onlyIfSolution = null)
     {
         var state = _state;
         if (state.Directory is not { } directory)
+        {
+            return false;
+        }
+
+        if (onlyIfSolution is not null && !SameDirectory(directory, onlyIfSolution))
         {
             return false;
         }
@@ -162,6 +170,18 @@ public sealed partial class TranscriptMemoryService
 
         SignalPump(state);
         return true;
+    }
+
+    private static bool SameDirectory(string a, string b)
+    {
+        try
+        {
+            return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Splits an entry into passages and adds them. Caller holds the state's gate.</summary>
