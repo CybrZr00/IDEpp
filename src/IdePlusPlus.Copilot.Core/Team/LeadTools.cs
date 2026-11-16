@@ -3,6 +3,18 @@ using System.Text.Json.Nodes;
 namespace IdePlusPlus.Copilot.Core.Team;
 
 /// <summary>
+/// What the lead's review does to a merge. Blocking is the original behaviour: the worker waits for the
+/// verdict and a rejection sends it back to work. Advisory lets the merge land at once and the verdict
+/// arrives afterwards as a FINDING - the lead reviews every merge either way, so at a fixed roster the
+/// review is no longer the one thing every merge queues behind.
+/// </summary>
+public enum LeadReviewMode
+{
+    Blocking,
+    Advisory,
+}
+
+/// <summary>
 /// What the lead can call when an Ultra run is orchestrated. The lead never edits code and has no
 /// worktree: it plans, supervises and reviews. Its reading tools are the same read-only set a
 /// sub-agent gets, and everything it does to the team goes through these four.
@@ -13,6 +25,7 @@ public static class LeadTools
     public const string VerdictToolName = "lead_verdict";
     public const string MessageToolName = "lead_message";
     public const string AddTaskToolName = "lead_add_task";
+    public const string TriageToolName = "lead_triage";
 
     /// <summary>The lead's name on the message bus and the board.</summary>
     public const string LeadName = "lead";
@@ -68,7 +81,7 @@ public static class LeadTools
             {
               "type": "object",
               "properties": {
-                "to": { "type": "string", "description": "A worker's name, e.g. w2, or \"all\"." },
+                "to": { "type": "string", "description": "A worker's name, e.g. b2 or adv1, or \"all\"." },
                 "text": { "type": "string" }
               },
               "required": ["to", "text"]
@@ -89,11 +102,28 @@ public static class LeadTools
             }
             """)!);
 
+    public static readonly ToolDefinition Triage = new(
+        Name: TriageToolName,
+        Description: "Decide what becomes of a FINDING a specialist lane posted. promote turns it into a TASK for a " +
+                     "builder (linked to the finding, so the fix shows up as its answer); dismiss records the reason " +
+                     "on the board so the finding stops holding up wrap-up and nobody revisits it.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "finding": { "type": "string", "description": "The FINDING's board id, e.g. \"G12\"." },
+                "decision": { "type": "string", "enum": ["promote", "dismiss"] },
+                "reason": { "type": "string", "description": "One line: why the team should do this work now, or why it does not matter." }
+              },
+              "required": ["finding", "decision", "reason"]
+            }
+            """)!);
+
     /// <summary>What the lead may read while planning: the same read-only tools a sub-agent gets.</summary>
     public static IReadOnlyList<ToolDefinition> ForPlanning { get; } = [.. SubAgentTools.AllowedTools, SubmitPlan];
 
     /// <summary>What the lead has on a supervision check.</summary>
-    public static IReadOnlyList<ToolDefinition> ForSupervision { get; } = [.. SubAgentTools.AllowedTools, Message, AddTask];
+    public static IReadOnlyList<ToolDefinition> ForSupervision { get; } = [.. SubAgentTools.AllowedTools, Message, AddTask, Triage];
 
     /// <summary>What the lead has when reviewing one merge.</summary>
     public static IReadOnlyList<ToolDefinition> ForReview { get; } = [.. SubAgentTools.AllowedTools, Verdict];

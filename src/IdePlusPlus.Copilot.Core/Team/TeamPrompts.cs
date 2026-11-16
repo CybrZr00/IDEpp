@@ -440,28 +440,34 @@ public static class TeamPrompts
         $"{LeadIntro}\n\nThe workers are: {string.Join(", ", workers)}.\n\n"
         + "Your job now is to plan. Read the parts of the code the goal touches (read_file, list_files, "
         + "search_codebase, find_symbol) - enough to split the goal sensibly, not to solve it - then call "
-        + "lead_submit_plan once. Good tasks are independent: each names the files or area it owns, so two workers "
-        + "rarely edit the same thing, and each is small enough to finish and merge in one sitting. Put anything "
-        + "that must happen first (a shared interface, a rename) in an early task, and give the tasks that need it "
-        + "an 'after' list: a task with 'after' is held back from the workers until those tasks are merged, so "
-        + "nobody claims it early and sits waiting. Write 'after' only where a task truly cannot start without the "
-        + "other's merged code, and leave documentation that describes the finished work until last. "
-        + "Do not plan more tasks than the work needs, and do not plan polish the goal did not ask for.";
+        + "lead_submit_plan once. The workers run at the same time, so the plan is judged on its first wave: the "
+        + "tasks that wait for nothing. A wide first wave is the default, and it is you who has to justify leaving "
+        + "it - a plan where half the team would sit idle at the first minute, or one long chain of tasks, is sent "
+        + "back once to be split. So split by file or area, and where pieces need something in common (a type, an "
+        + "interface, a setting) put it in the first wave as a stub - an empty type or a signature the others "
+        + "compile against - then fan the rest out against it. Give a task an 'after' list only where it truly "
+        + "cannot start without the other's merged code: a task with 'after' is held back from the workers until "
+        + "those tasks are merged, so nobody claims it early and sits waiting. Documentation that describes the "
+        + "finished work goes last. Do not plan more tasks than the work needs, and do not plan polish the goal did "
+        + "not ask for.";
 
     public static string LeadPlanningOpening(string goal, int workerCount) =>
         $"Goal:\n{goal.Trim()}\n\nThere are {workerCount} workers. Investigate, then submit the plan.";
 
     public static string LeadSupervisionPrompt(IReadOnlyCollection<string> workers) =>
         $"{LeadIntro}\n\nThe workers are: {string.Join(", ", workers)}.\n\n"
-        + "You are checking in on the team. You are given the board and what each worker is doing. Step in only "
-        + "when something is wrong: a worker has gone quiet on a task, two workers are on the same thing, a FAIL "
-        + "means a TASK needs a different approach, a worker asked you a question, or the plan missed work the "
-        + "board now shows is needed. Use lead_message to redirect or answer, lead_add_task for missed work. "
-        + "If everything is on track, change nothing and reply with one line. Be brief - the workers read what "
-        + "you send between their steps.";
+        + "You are checking in on the team. You are given the board, the open findings and what each worker is "
+        + "doing. Step in only when something is wrong: a worker has gone quiet on a task, two workers are on the "
+        + "same thing, a FAIL means a TASK needs a different approach, a worker asked you a question, or the plan "
+        + "missed work the board now shows is needed. The specialist lanes post FINDINGs on merged work: triage "
+        + "them with lead_triage - promote the ones the goal needs into TASKs for the builders, dismiss the ones it "
+        + "does not, saying why. Use lead_message to redirect or answer, lead_add_task for missed work. If "
+        + "everything is on track, change nothing and reply with one line. Be brief - the workers read what you "
+        + "send between their steps.";
 
     public static string LeadSupervisionOpening(
-        string goal, TimeSpan timeLeft, string workerStatus, IReadOnlyList<TeamMessage> questions, string board)
+        string goal, TimeSpan timeLeft, string workerStatus, IReadOnlyList<TeamMessage> questions, string board,
+        string? openFindings = null)
     {
         var message = new StringBuilder();
         message.Append("Goal:\n").Append(goal.Trim()).Append("\n\n");
@@ -473,6 +479,11 @@ public static class TeamPrompts
             {
                 message.Append($"  {question.From}: {question.Text}\n");
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(openFindings))
+        {
+            message.Append("\nOpen findings:\n").Append(openFindings).Append('\n');
         }
 
         message.Append("\nBoard:\n").Append(board);

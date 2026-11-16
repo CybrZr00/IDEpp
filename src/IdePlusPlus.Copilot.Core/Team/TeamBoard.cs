@@ -470,14 +470,33 @@ public sealed partial class TeamBoard
             .Select(pair => (pair.Entry, pair.Finding!))
             .ToList();
 
+    /// <summary>
+    /// Whether a FINDING has been answered: a later PATCH_SUMMARY names its id - the same rule that
+    /// marks a TASK done - or a later OBSERVED says it was dismissed. A dismissed finding is the
+    /// lead's call to record and drop; it must stop holding up wrap-up, or one dismissal the lead
+    /// already made would keep the team working past the plan.
+    /// </summary>
+    public static bool IsAnswered(TeamBoardEntry finding, IReadOnlyList<TeamBoardEntry> entries)
+    {
+        var mention = new Regex($@"\b{Regex.Escape(finding.Id)}\b", RegexOptions.IgnoreCase);
+        return entries.Any(e => e.Number > finding.Number
+                                && mention.IsMatch(e.Text)
+                                && (e.Type == TeamBoardEntryType.PatchSummary
+                                    || (e.Type == TeamBoardEntryType.Observed
+                                        && e.Text.Contains("dismiss", StringComparison.OrdinalIgnoreCase))));
+    }
+
+    /// <summary>The findings nobody has answered yet, oldest first - what the lead triages and what
+    /// the runner turns into builder TASKs.</summary>
+    public static IReadOnlyList<(TeamBoardEntry Entry, TeamFinding Finding)> OpenFindings(
+        IReadOnlyList<TeamBoardEntry> entries) =>
+        Findings(entries).Where(f => !IsAnswered(f.Entry, entries)).ToList();
+
     /// <summary>The high-severity findings nobody has answered yet - what holds up wrap-up, and
-    /// what the runner turns into a builder TASK. A finding counts as answered when a later
-    /// PATCH_SUMMARY names its id, the same rule that marks a TASK done.</summary>
+    /// what the runner turns into a builder TASK.</summary>
     public static IReadOnlyList<(TeamBoardEntry Entry, TeamFinding Finding)> OpenHighFindings(
         IReadOnlyList<TeamBoardEntry> entries) =>
-        Findings(entries)
-            .Where(f => f.Finding.Severity == TeamFindingSeverity.High && !IsDone(f.Entry, entries))
-            .ToList();
+        OpenFindings(entries).Where(f => f.Finding.Severity == TeamFindingSeverity.High).ToList();
 
     /// <summary>
     /// The board as a cycle's opening carries it - only what this worker has not seen, not the
