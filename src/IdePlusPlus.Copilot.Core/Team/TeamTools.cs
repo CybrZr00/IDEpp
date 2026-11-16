@@ -27,6 +27,16 @@ public static class TeamTools
     public const string RequestHelpToolName = "team_request_help";
     public const string WaitToolName = "team_wait";
     public const string EditFileToolName = "edit_file";
+    public const string NextReviewToolName = "team_next_review";
+    public const string ReportFindingToolName = "report_finding";
+    public const string RunMutationTestsToolName = "run_mutation_tests";
+    public const string CheckConformityToolName = "check_conformity";
+
+    /// <summary>The most mutants one run_mutation_tests call tries: each one is a build and a test
+    /// run, so a dozen is already several minutes of one worktree.</summary>
+    public const int MaxMutantsPerRun = 12;
+
+    public const int DefaultMutantsPerRun = 8;
 
     /// <summary>Most workers one help request can bring in - the team grows a little at a time.</summary>
     public const int MaxWorkersPerHelpRequest = 2;
@@ -200,6 +210,79 @@ public static class TeamTools
             }
             """)!);
 
+    /// <summary>A specialist's wake-up. The runner fills a queue on every merge that lands; this takes
+    /// the oldest item waiting for the caller's lane and hands back the diff and the PATCH_SUMMARY that
+    /// came with it. With nothing queued it waits, spending nothing, the way team_wait does.</summary>
+    public static readonly ToolDefinition NextReview = new(
+        Name: NextReviewToolName,
+        Description: "Take the oldest merge waiting for your lane. The call syncs your worktree to the team branch " +
+                     "and returns the diff stat and the PATCH_SUMMARY to review. If nothing is queued for your lane " +
+                     "it waits for the next merge, spending nothing. Review one item per cycle.",
+        ParametersSchema: JsonNode.Parse("""{ "type": "object", "properties": {} }""")!);
+
+    /// <summary>The specialist lanes' way onto the board. Not a free-text post: the severity, the kind
+    /// and the evidence are what turn a finding into a TASK or into a report line, so they are fields
+    /// rather than a format a model has to remember.</summary>
+    public static readonly ToolDefinition ReportFinding = new(
+        Name: ReportFindingToolName,
+        Description: "Report a problem with merged work. severity=high only with evidence of a failing test or a " +
+                     "reproducer; anything else is medium or low. fix_by says who should act: builders (means it " +
+                     "becomes a TASK when it is high), me (your lane fixes it), or user (out of scope - it is shown " +
+                     "to the user at the end). The finding is posted to the board for you.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "severity": { "type": "string", "enum": ["high", "medium", "low"], "description": "high needs evidence: a failing test or a concrete reproducer." },
+                "kind": { "type": "string", "description": "What sort of problem: mutation, security, robustness, style, gap, followup, ..." },
+                "text": { "type": "string", "description": "The finding, in one or two sentences." },
+                "files": { "type": "array", "items": { "type": "string" }, "description": "The files it is about." },
+                "evidence": { "type": "string", "description": "How you know: a test name, a reproducer, or branch:<sha> for a failing test committed in your own branch." },
+                "fix_by": { "type": "string", "enum": ["builders", "me", "user"], "description": "Who should act on it. Default builders." }
+              },
+              "required": ["severity", "kind", "text"]
+            }
+            """)!);
+
+    /// <summary>The mutation tester's lane. Each mutant is a write, a build and a test run, so the
+    /// caller says how many it can afford; the original file is always restored.</summary>
+    public static readonly ToolDefinition RunMutationTests = new(
+        Name: RunMutationTestsToolName,
+        Description: "Mutate the changed lines of a file and see whether the tests notice. Operators: relational and " +
+                     "equality flips, an off-by-one boundary, a negated condition, an &&/|| swap, a statement-level " +
+                     "return of default, and a removed void call. Each surviving mutant is a gap in the tests. The " +
+                     "file is restored afterwards. Costs one build and one test run per mutant.",
+        ParametersSchema: JsonNode.Parse($$"""
+            {
+              "type": "object",
+              "properties": {
+                "file": { "type": "string", "description": "The file to mutate, relative to the solution directory." },
+                "max_mutants": { "type": "integer", "minimum": 1, "maximum": {{MaxMutantsPerRun}}, "description": "How many mutants to try (default {{DefaultMutantsPerRun}})." },
+                "test_filter": { "type": "string", "description": "Optional test filter, the same value run_tests takes." }
+              },
+              "required": ["file"]
+            }
+            """)!);
+
+    /// <summary>The conformity lane's check: style and analyzers in verify mode over the merged files,
+    /// plus the build's warnings for those files. Run through the SDK directly, not run_command, so the
+    /// user is never asked to approve the team's own lint.</summary>
+    public static readonly ToolDefinition CheckConformity = new(
+        Name: CheckConformityToolName,
+        Description: "Check the style of merged files: dotnet format style and dotnet format analyzers in verify " +
+                     "mode over exactly these files, then a build keeping the warnings those files raise. Returns " +
+                     "what is wrong and where. Style-only problems are yours to fix; anything that would change " +
+                     "behaviour is a FINDING instead.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "files": { "type": "array", "items": { "type": "string" }, "description": "The files to check, relative to the solution directory." }
+              },
+              "required": ["files"]
+            }
+            """)!);
+
     public static IReadOnlyList<ToolDefinition> Coordination { get; } =
         [BoardRead, BoardWrite, BoardGrep, BoardUnfold, Post, DirectMessage, Commit, Sync, Merge, Done];
 
@@ -219,19 +302,49 @@ public static class TeamTools
         TestTools.RunTests,
     ];
 
-    /// <summary>Everything a worker is offered. edit_file's definition comes from the caller because
-    /// it shares propose_edit's schema, which lives in IdePlusPlus.Copilot.Diff.</summary>
+    /// <summary>
+    /// Everything a worker is offered, by role. edit_file's definition comes from the caller because
+    /// it shares propose_edit's schema, which lives in IdePlusPlus.Copilot.Diff.
+    ///
+    /// A role that may not edit is not offered edit_file at all, and one with no branch to merge is
+    /// not offered team_merge - a tool the prompt never explains is a tool the model still reaches
+    /// for, and refusing it afterwards costs a step. The dispatcher refuses both as well, since what
+    /// is hidden is not what is enforced.
+    /// </summary>
+    /// <param name="role">The worker's role. Null means a builder - the roster Ultra ran with before
+    /// roles existed, which keeps every existing caller and test working unchanged.</param>
     public static IReadOnlyList<ToolDefinition> ForWorker(
-        ToolDefinition editFile, bool shellCommandsEnabled, bool canRequestHelp = false, bool canWait = false) =>
-    [
-        .. AllowedExistingTools,
-        editFile,
-        .. shellCommandsEnabled ? ShellTools.All : [],
-        .. Coordination,
-        .. canRequestHelp ? [RequestHelp] : Array.Empty<ToolDefinition>(),
-        .. canWait ? [Wait] : Array.Empty<ToolDefinition>(),
-    ];
+        ToolDefinition editFile, bool shellCommandsEnabled, bool canRequestHelp = false, bool canWait = false,
+        TeamRole? role = null)
+    {
+        var effective = role ?? TeamRoles.Builder;
+        return
+        [
+            .. AllowedExistingTools,
+            .. effective.CanEdit ? new[] { editFile } : [],
+            .. shellCommandsEnabled ? ShellTools.All : [],
+            .. CoordinationFor(effective),
+            .. canRequestHelp ? [RequestHelp] : Array.Empty<ToolDefinition>(),
+            .. canWait ? [Wait] : Array.Empty<ToolDefinition>(),
+        ];
+    }
+
+    /// <summary>The team tools a role is offered: the ordinary set, minus team_merge where the role
+    /// has nothing to merge, plus the specialist lane's own.</summary>
+    public static IReadOnlyList<ToolDefinition> CoordinationFor(TeamRole? role)
+    {
+        var effective = role ?? TeamRoles.Builder;
+        return
+        [
+            .. effective.CanMerge ? Coordination : Coordination.Where(t => t.Name != MergeToolName),
+            .. effective.IsSpecialist ? new ToolDefinition[] { NextReview, ReportFinding } : Array.Empty<ToolDefinition>(),
+            .. effective.Kind == TeamRoleKind.MutationTester ? new ToolDefinition[] { RunMutationTests } : Array.Empty<ToolDefinition>(),
+            .. effective.Kind == TeamRoleKind.Conformity ? new ToolDefinition[] { CheckConformity } : Array.Empty<ToolDefinition>(),
+        ];
+    }
 
     public static bool IsCoordinationTool(string toolName) =>
-        toolName is RequestHelpToolName or WaitToolName || Coordination.Any(t => t.Name == toolName);
+        toolName is RequestHelpToolName or WaitToolName or NextReviewToolName or ReportFindingToolName
+            or RunMutationTestsToolName or CheckConformityToolName
+        || Coordination.Any(t => t.Name == toolName);
 }
