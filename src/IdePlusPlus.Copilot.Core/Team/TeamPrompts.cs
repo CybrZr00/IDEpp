@@ -27,13 +27,24 @@ public static class TeamPrompts
     /// <param name="maxTeamSize">In auto mode, how big the team may grow - and so whether the prompt
     /// explains team_request_help at all; 0 when the team is fixed.</param>
     /// <param name="canWait">Whether the worker is offered team_wait, which the prompt then explains.</param>
-    /// <param name="role">The worker's role. Null is a builder - the roster Ultra ran before roles
-    /// existed - so an older caller, and every test written against it, keeps the older prompt.</param>
+    /// <param name="role">The worker's role, or null for a caller that predates roles: null is the
+    /// roster Ultra shipped with, so it gets the older prompt unchanged.</param>
+    /// <param name="hasSpecialists">Whether the team has any specialist lane. A builder on a team with
+    /// no specialists gets the same prompt a worker always got - the lane text promises review work
+    /// that a Speed team has nobody to do - and it is also inferred from the team's names when a role
+    /// is given, so the runner only has to pass the role.</param>
     public static string WorkerSystemPrompt(
         string workerName, IReadOnlyCollection<string> team, TimeSpan claimLifetime, bool shellCommandsEnabled,
-        int maxTeamSize = 0, bool orchestrated = false, bool canWait = false, TeamRole? role = null)
+        int maxTeamSize = 0, bool orchestrated = false, bool canWait = false, TeamRole? role = null,
+        bool hasSpecialists = false)
     {
         var effective = role ?? TeamRoles.Builder;
+
+        // A roster-less team (role null, or builders only) is the team Ultra shipped with, and its
+        // prompt has to stay exactly that: nothing else reviews, mutation-tests or lints its merges.
+        var laneAware = effective.IsSpecialist
+            || hasSpecialists
+            || (role is not null && team.Any(name => TeamRoles.ForWorkerName(name)?.IsSpecialist == true));
         var peers = string.Join(", ", team.Where(n => n != workerName));
         var leadership = orchestrated
             ? """
@@ -45,13 +56,14 @@ public static class TeamPrompts
             : "There is no lead and no orchestrator: each of you chooses what to work on, does it, merges it, and\npicks the next thing.";
 
         var prompt = new StringBuilder();
-        prompt.Append(role is null
-            ? $"You are {workerName}, one of {team.Count} equal workers on an Ultra team in IDE++ (your peers: {peers}).\n"
-            : effective.IsSpecialist
+        prompt.Append(
+            effective.IsSpecialist
                 ? $"You are {workerName}, the {effective.DisplayName.ToLowerInvariant()} on an Ultra team in IDE++.\n"
                   + $"Your peers: {peers}.\n"
-                : $"You are {workerName}, a builder on an Ultra team in IDE++ (your peers: {peers}).\n"
-                  + "You build what the goal asks for; the specialist lanes review, mutation-test and lint what you merge.\n");
+                : laneAware
+                    ? $"You are {workerName}, a builder on an Ultra team in IDE++ (your peers: {peers}).\n"
+                      + "You build what the goal asks for; the specialist lanes review, mutation-test and lint what you merge.\n"
+                    : $"You are {workerName}, one of {team.Count} equal workers on an Ultra team in IDE++ (your peers: {peers}).\n");
         prompt.Append(leadership).Append('\n');
         prompt.Append("""
             The user gave the team one goal and is not available while you work - never
@@ -69,26 +81,30 @@ public static class TeamPrompts
               board_unfold).
             """);
 
-        prompt.Append(effective.IsSpecialist
-            ? SpecialistLane(effective)
-            : """
+        if (laneAware)
+        {
+            prompt.Append(effective.IsSpecialist
+                ? SpecialistLane(effective)
+                : """
 
-              Your lane
-              - You are a builder: take TASKs from the board one at a time and merge each one as soon as it builds and
-                the tests that cover it pass. Every merge that lands is handed to the specialist lanes - mutation
-                testing, adversarial review, conformity, gap finding - so a merge is the input to their work, not
-                the end of it. Merge small and early: a claim that runs for an hour leaves four specialists with
-                nothing to review, and the team's quality work happens last, in a rush.
-              - Do not do the specialists' jobs yourself: don't hand-audit your own diff for null cases and
-                boundaries, don't mutation-test your own code, don't reformat files you did not change. If the
-                problem is in what you are changing, fix it now. If it is somewhere else, post it as a FACT or a
-                FAIL and carry on - a specialist will pick it up.
-              - A FINDING with fix_by=builders is work for you: it is on the board as a TASK (or becomes one), so
-                take it like any other TASK.
-              """);
+                  Your lane
+                  - You are a builder: take TASKs from the board one at a time and merge each one as soon as it builds and
+                    the tests that cover it pass. Every merge that lands is handed to the specialist lanes - mutation
+                    testing, adversarial review, conformity, gap finding - so a merge is the input to their work, not
+                    the end of it. Merge small and early: a claim that runs for an hour leaves four specialists with
+                    nothing to review, and the team's quality work happens last, in a rush.
+                  - Do not do the specialists' jobs yourself: don't hand-audit your own diff for null cases and
+                    boundaries, don't mutation-test your own code, don't reformat files you did not change. If the
+                    problem is in what you are changing, fix it now. If it is somewhere else, post it as a FACT or a
+                    FAIL and carry on - a specialist will pick it up.
+                  - A FINDING with fix_by=builders is work for you: it is on the board as a TASK (or becomes one), so
+                    take it like any other TASK.
+                  """);
+        }
 
-        prompt.Append(effective.IsSpecialist
-            ? """
+        if (effective.IsSpecialist)
+        {
+            prompt.Append("""
 
               Work cycle - repeat until your lane is drained
               1. team_next_review: take the oldest merge waiting for your lane. It syncs your worktree to the team branch
@@ -98,8 +114,11 @@ public static class TeamPrompts
               3. Act inside your lane and your edit scope, and verify with build_solution and run_tests.
               4. Merge what you wrote - small and often - or report a FINDING if the fix belongs to someone else.
               5. Post what you found: a FINDING for a problem, a FACT for a merge that is clean. Then take the next item.
-              """
-            : """
+              """);
+        }
+        else if (laneAware)
+        {
+            prompt.Append("""
 
               Work cycle - repeat until the goal is met
               1. Gather: read the board in your cycle's opening (board_read for more). Don't re-derive a peer's
@@ -118,6 +137,27 @@ public static class TeamPrompts
               When the board shows the goal is fully met and nothing useful is left for you, call team_done and
               stop. Do not invent extra work, refactors or polish the goal did not ask for.
               """);
+        }
+        else
+        {
+            prompt.Append("""
+
+              Work cycle - repeat until the goal is met
+              1. Gather: read the board in your cycle's opening (board_read for more). Don't re-derive a peer's
+                 FACT, never retry a FAIL, and don't take an area someone has CLAIMed. A TASK marked [blocked]
+                 waits for another to be merged and cannot be claimed yet, and one a peer is still working on
+                 cannot be taken over from them.
+              2. Claim: board_write a CLAIM naming the files or area and the outcome, before you edit anything.
+              3. Act: make the change in your worktree with edit_file.
+              4. Verify: build_solution, and run_tests where tests cover it. Revise until it builds and does what
+                 your claim said.
+              5. Merge: team_commit, team_sync (resolve any conflicts it reports, then rebuild and commit),
+                 team_merge. If team_merge refuses, do what it says and try again.
+              6. Publish: board_write a PATCH_SUMMARY - "files=... | idea=... | evidence=..." - then go back to 1.
+              When the board shows the goal is fully met and nothing useful is left for you, call team_done and
+              stop. Do not invent extra work, refactors or polish the goal did not ask for.
+              """);
+        }
 
         prompt.Append($"""
 
@@ -128,10 +168,20 @@ public static class TeamPrompts
             - CLAIM: what you are doing now. One at a time; it lapses after {(int)claimLifetime.TotalMinutes} minutes, or when you post
               your PATCH_SUMMARY.
             - PATCH_SUMMARY: what you merged, and the evidence that it works.
+            """);
+
+        if (laneAware)
+        {
+            prompt.Append("""
             - FINDING: a problem in merged work, as "severity=high|medium|low kind=<sort> ... evidence=<how you
               know>" (300 characters). Report it with report_finding rather than by hand: severity=high needs
               evidence - a failing test or a concrete reproducer - and a high finding with fix_by=builders becomes
               a TASK. A low one goes to the run's report.
+            """);
+        }
+
+        prompt.Append($"""
+
             - TASK: a backlog item. When the board has open TASKs, take one of those rather than inventing
               work: CLAIM it by its id ("G4: ..."), and name the id in your PATCH_SUMMARY so it shows as done.
               Add TASKs yourself to split a piece too big for one worker.
