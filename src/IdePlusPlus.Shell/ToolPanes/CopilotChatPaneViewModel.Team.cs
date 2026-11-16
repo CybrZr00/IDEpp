@@ -47,6 +47,31 @@ public sealed partial class CopilotChatPaneViewModel
     /// another, the role's model setting (or that provider's last-used or default model) is used.</summary>
     public const string SubAgentProviderSettingKey = "SubAgentProvider";
     public const string UltraOrchestratorProviderSettingKey = "UltraOrchestratorProvider";
+
+    /// <summary>Which roster a team is built from: Speed (builders only, the roster Ultra shipped
+    /// with), Balanced (one of each review lane) or Hardening (two mutation testers, two adversaries).
+    /// The card writes the counts below from it; the counts are what a run really uses, so a preset
+    /// picked in an older version is not silently overridden.</summary>
+    public const string UltraCompositionPresetSettingKey = "UltraCompositionPreset";
+
+    /// <summary>The builder count. Falls back to <see cref="UltraWorkerCountSettingKey"/>, which is
+    /// what an existing settings file has - every worker then was a builder.</summary>
+    public const string UltraBuildersSettingKey = "UltraBuilders";
+
+    public const string UltraMutationTestersSettingKey = "UltraMutationTesters";
+    public const string UltraAdversariesSettingKey = "UltraAdversaries";
+    public const string UltraConformitySettingKey = "UltraConformity";
+    public const string UltraGapFindersSettingKey = "UltraGapFinders";
+    public const string UltraFollowUpScoutsSettingKey = "UltraFollowUpScouts";
+
+    /// <summary>Whether the lead's review holds a merge up (Blocking, the behaviour run with a lead
+    /// has always had) or follows it as a FINDING (Advisory).</summary>
+    public const string UltraLeadReviewModeSettingKey = "UltraLeadReviewMode";
+
+    /// <summary>The effort specialists run at, when it should differ from the workers' own. Blank uses
+    /// each role's default: Low for the conformity and follow-up lanes, High for the adversary.</summary>
+    public const string UltraSpecialistEffortSettingKey = "UltraSpecialistEffort";
+
     public const int DefaultUltraWorkerCount = 4;
     public const int MaxUltraWorkerCount = 64;
     public const int DefaultUltraConcurrentRequests = 16;
@@ -218,6 +243,66 @@ public sealed partial class CopilotChatPaneViewModel
         int.TryParse(settings.Get(UltraStartWorkersSettingKey), out var count)
             ? Math.Clamp(count, 1, MaxUltraWorkerCount)
             : DefaultUltraStartWorkers;
+
+    /// <summary>The preset last chosen in Settings. Only the count boxes are authoritative - the preset
+    /// fills them in - but reading it back means the card opens on what the user picked.</summary>
+    public static TeamCompositionPreset ReadUltraCompositionPreset(AppSettingsStore settings) =>
+        Enum.TryParse<TeamCompositionPreset>(settings.Get(UltraCompositionPresetSettingKey), ignoreCase: true, out var preset)
+            ? preset
+            : TeamCompositionPreset.Speed;
+
+    /// <summary>How many builders. A settings file from before the roster - which only has a worker
+    /// count, and every worker was a builder - reads as that many builders.</summary>
+    public static int ReadUltraBuilders(AppSettingsStore settings) =>
+        int.TryParse(settings.Get(UltraBuildersSettingKey), out var builders)
+            ? Math.Clamp(builders, 1, MaxUltraWorkerCount)
+            : ReadUltraWorkerCount(settings);
+
+    private static string SpecialistCountSettingKey(TeamRoleKind kind) => kind switch
+    {
+        TeamRoleKind.MutationTester => UltraMutationTestersSettingKey,
+        TeamRoleKind.Adversary => UltraAdversariesSettingKey,
+        TeamRoleKind.Conformity => UltraConformitySettingKey,
+        TeamRoleKind.GapFinder => UltraGapFindersSettingKey,
+        TeamRoleKind.FollowUpScout => UltraFollowUpScoutsSettingKey,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Builders are counted separately."),
+    };
+
+    /// <summary>How many of one specialist lane. Unset, the preset decides - so a settings file that
+    /// only names a preset still builds that roster - and clamped to the two a lane can use.</summary>
+    public static int ReadUltraSpecialistCount(AppSettingsStore settings, TeamRoleKind kind) =>
+        int.TryParse(settings.Get(SpecialistCountSettingKey(kind)), out var count)
+            ? Math.Clamp(count, 0, TeamComposition.MaxSpecialistsPerKind)
+            : TeamComposition.For(ReadUltraCompositionPreset(settings), ReadUltraBuilders(settings)).CountOf(kind);
+
+    /// <summary>The team a run starts: the builder count, then however many of each specialist lane.</summary>
+    public static TeamComposition ReadUltraComposition(AppSettingsStore settings)
+    {
+        var builders = ReadUltraBuilders(settings);
+        var specialists = new Dictionary<TeamRoleKind, int>();
+        foreach (var role in TeamRoles.Specialists)
+        {
+            var count = ReadUltraSpecialistCount(settings, role.Kind);
+            if (count > 0)
+            {
+                specialists[role.Kind] = count;
+            }
+        }
+
+        return new TeamComposition(builders, specialists);
+    }
+
+    /// <summary>Whether a lead's review blocks each merge or only follows it as a FINDING. Blocking is
+    /// the behaviour a lead run has always had.</summary>
+    public static LeadReviewMode ReadUltraLeadReviewMode(AppSettingsStore settings) =>
+        Enum.TryParse<LeadReviewMode>(settings.Get(UltraLeadReviewModeSettingKey), ignoreCase: true, out var mode)
+        && mode is LeadReviewMode.Blocking or LeadReviewMode.Advisory
+            ? mode
+            : LeadReviewMode.Blocking;
+
+    /// <summary>The specialists' effort, or null when they run at each role's own default.</summary>
+    public static ChatEffort? ReadUltraSpecialistEffort(AppSettingsStore settings) =>
+        ReadEffortSetting(settings, UltraSpecialistEffortSettingKey);
 
     /// <summary>The token budget, in millions, a run left to go until done ends at; 0 means none.</summary>
     public static int ReadUltraMaxTokensMillions(AppSettingsStore settings) =>
