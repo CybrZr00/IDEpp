@@ -5,6 +5,7 @@ using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Diff;
+using IdePlusPlus.Roslyn.Mutation;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.TestRunner;
 
@@ -51,8 +52,56 @@ public sealed class TeamToolDispatcher
     private readonly Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? _requestHelp;
     private readonly Func<int, CancellationToken, Task<(bool IsError, string Text)>>? _waitForChange;
     private readonly Func<string, string?>? _claimGuard;
+    private readonly TeamRole _role;
+    private readonly HashSet<string> _offeredTools;
     private readonly BuildService _buildService = new();
     private readonly TestRunService _testRunService = new();
+
+    /// <summary>The `dotnet format` / build process the conformity check runs. Its own instance
+    /// because BuildService refuses a second invocation while one is running, and a lint check must
+    /// not make this worker's ordinary build fail.</summary>
+    private readonly BuildService _conformityDotnet = new();
+
+    /// <summary>
+    /// The role this worker runs as. It decides what it is offered (see <see cref="Tools"/>), what it
+    /// may edit, and which board lane its findings land in. Hidden tools are not enough on their own:
+    /// a model that has seen a peer edit or merge still reaches for the tool, so
+    /// <see cref="ExecuteCoreAsync"/> refuses anything the role was not offered as well.
+    /// </summary>
+    public TeamRole Role => _role;
+
+    /// <summary>
+    /// The files the review item this specialist is on changed, set by the run when
+    /// team_next_review hands it one. A <see cref="TeamRoleEditScope.ChangedFilesStyleOnly"/> role -
+    /// the conformity lane - may change exactly these files and nothing else.
+    /// </summary>
+    public IReadOnlyList<string>? CurrentReviewFiles { get; set; }
+
+    /// <summary>The review item this specialist is working on, for the status card and for the
+    /// refusal messages. Null before its first team_next_review.</summary>
+    public string? CurrentReviewId { get; set; }
+
+    /// <summary>
+    /// The line ranges the review item's merge changed, keyed by file, so run_mutation_tests mutates
+    /// only what the merge touched rather than the whole file. Set by the run with the review item;
+    /// null mutates every mutable construct in the file.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<LineRange>>? CurrentReviewChangedLines { get; set; }
+
+    /// <summary>
+    /// Called after a fast-forward lands on the team branch, with who merged and the merge range, so
+    /// the run can queue the merge for the specialist lanes. A failure here is swallowed: the merge
+    /// has already happened, and a queue that cannot enqueue must not turn a landed merge into an
+    /// error the worker would try again.
+    /// </summary>
+    public Func<MergeLandedEvent, CancellationToken, Task>? MergeLanded { get; set; }
+
+    /// <summary>
+    /// team_next_review's implementation, answered by the run: take the oldest merge waiting for this
+    /// worker's lane, sync its worktree to the team branch, and hand back the diff and the
+    /// PATCH_SUMMARY. Null leaves the tool out of what the worker is offered.
+    /// </summary>
+    public Func<CancellationToken, Task<(bool IsError, string Text)>>? NextReview { get; set; }
 
     /// <summary>True from any change to the worktree until a build passes - so committing right
     /// after a passing build can record that commit as known-good without building it again.</summary>
@@ -79,6 +128,8 @@ public sealed class TeamToolDispatcher
     /// <param name="claimGuard">Asked before a CLAIM is written, with its text: a reason to refuse it (the task
     /// is blocked, or a peer who is still working holds it) or null. Null leaves claims unchecked, as they
     /// always were.</param>
+    /// <param name="role">The worker's roster role. Null is a builder - the team Ultra ran with before
+    /// roles existed, so every existing caller keeps its behaviour.</param>
     public TeamToolDispatcher(
         TeamWorkerContext context,
         TeamWorkerState state,
@@ -93,11 +144,21 @@ public sealed class TeamToolDispatcher
         TimeSpan? buildTimeout = null,
         Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? requestHelp = null,
         Func<int, CancellationToken, Task<(bool IsError, string Text)>>? waitForChange = null,
-        Func<string, string?>? claimGuard = null)
+        Func<string, string?>? claimGuard = null,
+        TeamRole? role = null)
     {
         _requestHelp = requestHelp;
         _waitForChange = waitForChange;
         _claimGuard = claimGuard;
+        _role = role ?? TeamRoles.Builder;
+        _offeredTools = new HashSet<string>(
+            TeamTools.ForWorker(
+                TeamEditTool.Definition,
+                shellCommandsEnabled: runCommand is not null,
+                canRequestHelp: requestHelp is not null,
+                canWait: waitForChange is not null,
+                role: _role).Select(tool => tool.Name),
+            StringComparer.Ordinal);
         _buildTimeout = buildTimeout ?? DefaultBuildTimeout;
         _context = context;
         _state = state;
@@ -113,11 +174,13 @@ public sealed class TeamToolDispatcher
 
     /// <summary>The tools this worker is offered - the same list ExecuteAsync routes.</summary>
     public IReadOnlyList<ToolDefinition> Tools =>
-        TeamTools.ForWorker(
+        [.. TeamTools.ForWorker(
             TeamEditTool.Definition,
             shellCommandsEnabled: _runCommand is not null,
             canRequestHelp: _requestHelp is not null,
-            canWait: _waitForChange is not null);
+            canWait: _waitForChange is not null,
+            role: _role)
+            .Where(tool => tool.Name != TeamTools.NextReviewToolName || NextReview is not null)];
 
     public string? DrainNotices() => TeamNotices.Compose(_context.Name, _board, _bus);
 
@@ -158,6 +221,14 @@ public sealed class TeamToolDispatcher
         string toolName, JsonNode? arguments, CancellationToken cancellationToken)
     {
         string? Arg(string name) => arguments?[name]?.GetValue<string>();
+
+        // Hiding a tool from the list is a prompt-level measure; this is the hard one. A model that
+        // saw a peer edit or merge reaches for the same tool from muscle memory, and a role that was
+        // not offered it must be told no here rather than quietly allowed.
+        if (!_offeredTools.Contains(toolName))
+        {
+            return (true, RoleRefusal(toolName));
+        }
 
         switch (toolName)
         {
@@ -217,7 +288,28 @@ public sealed class TeamToolDispatcher
                 return await _waitForChange(minutes, cancellationToken);
 
             case TeamTools.BoardWriteToolName:
-                return BoardWrite(Arg("type"), Arg("text"), Arg("detail"), arguments?["after"]);
+                return BoardWrite(Arg("type"), Arg("text"), Arg("detail"), arguments?["after"], Arg("lane"));
+
+            case TeamTools.ReportFindingToolName:
+                return ReportFinding(arguments);
+
+            case TeamTools.NextReviewToolName:
+                if (NextReview is null)
+                {
+                    return (true, "There is no review queue in this run - build TASKs from the board instead.");
+                }
+
+                // A review item is work the team does see, and taking one (even waiting for one) is
+                // what a specialist's cycle is for, so it counts as activity either way.
+                _state.HadVisibleActivityThisCycle = true;
+                _state.WroteToBoardThisCycle = true;
+                return await NextReview(cancellationToken);
+
+            case TeamTools.CheckConformityToolName:
+                return await CheckConformityAsync(arguments, cancellationToken);
+
+            case TeamTools.RunMutationTestsToolName:
+                return await RunMutationTestsAsync(arguments, cancellationToken);
 
             case TeamTools.BoardGrepToolName:
                 return (false, _board.Grep(Arg("query")));
@@ -256,6 +348,293 @@ public sealed class TeamToolDispatcher
         }
     }
 
+    /// <summary>
+    /// What this role may change, checked as a hard rule rather than left to the prompt: the
+    /// specialists that write tests may not touch production code, the conformity lane may only touch
+    /// the files its review item changed, and a role that reports rather than fixes may not write at
+    /// all. Prompt guidance alone does not hold - a model that can see edit_file in a peer's
+    /// transcript will try it.
+    /// </summary>
+    private string? ScopeRefusal(string fullPath, string file)
+    {
+        switch (_role.EditScope)
+        {
+            case TeamRoleEditScope.Any:
+                return null;
+
+            case TeamRoleEditScope.None:
+                return $"Refused: the {_role.DisplayName} lane changes nothing - it reads and reports. Use "
+                       + "report_finding (or a lane TASK) instead of editing.";
+
+            case TeamRoleEditScope.TestsOnly:
+                if (IsUnderTestProject(fullPath))
+                {
+                    return null;
+                }
+
+                var testProjects = _context.TestProjectPaths
+                    .Select(path => Path.GetRelativePath(_context.SolutionDirectory, Path.GetDirectoryName(path) ?? path))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return $"Refused: the {_role.DisplayName} lane writes tests only, and '{file}' is not under a test "
+                       + "project. " + (testProjects.Count == 0
+                           ? "This solution has no test project to add to - post a FAIL saying so."
+                           : $"Put the test under {string.Join(", ", testProjects)}. Production code that looks wrong "
+                             + "is a FINDING, not an edit.");
+
+            case TeamRoleEditScope.ChangedFilesStyleOnly:
+                if (CurrentReviewFiles is null)
+                {
+                    return $"Refused: no review item has been taken yet, so the files the {_role.DisplayName} lane may "
+                           + "change are not known. Call team_next_review first, then fix only what that item changed.";
+                }
+
+                if (CurrentReviewFiles.Any(reviewed => SameFile(reviewed, fullPath)))
+                {
+                    return null;
+                }
+
+                return $"Refused: the {_role.DisplayName} lane changes only the files its review item changed "
+                       + $"({string.Join(", ", CurrentReviewFiles)}). '{file}' is not one of them - anything wider is a "
+                       + "FINDING rather than an edit.";
+
+            default:
+                return $"Refused: the {_role.DisplayName} lane may not edit '{file}'.";
+        }
+    }
+
+    private bool IsUnderTestProject(string fullPath)
+    {
+        foreach (var project in _context.TestProjectPaths)
+        {
+            if (Path.GetDirectoryName(project) is not { } directory)
+            {
+                continue;
+            }
+
+            var root = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar)
+                       + Path.DirectorySeparatorChar;
+            if (fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Path equality for the review scope: both are full paths already, but one comes from
+    /// git's diff and the other from a resolved edit, so slashes and case may differ.</summary>
+    private static bool SameFile(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).Replace('/', Path.DirectorySeparatorChar),
+            Path.GetFullPath(right).Replace('/', Path.DirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The message a role gets for a tool it was not offered. Naming the tool that would do
+    /// the job is what turns a refusal into the next step.</summary>
+    private string RoleRefusal(string toolName) => toolName switch
+    {
+        TeamTools.EditFileToolName when !_role.CanEdit =>
+            $"Refused: no edit_file in the {_role.DisplayName} lane - it reads and reports rather than changes. "
+            + "Use report_finding.",
+
+        TeamTools.MergeToolName when !_role.CanMerge =>
+            $"Refused: no team_merge in the {_role.DisplayName} lane - nothing it produces is merged. "
+            + (_role.CanEdit
+                ? "Commit your failing test to your own branch and quote it as evidence=branch:<sha>."
+                : "Write what you found with report_finding or a lane TASK."),
+
+        _ => $"Refused: '{toolName}' is not one of the tools the {_role.DisplayName} lane is offered. "
+             + "Use the tools in your list; if the job genuinely needs this one, post a FAIL saying why.",
+    };
+
+    /// <summary>
+    /// report_finding turns the fields into the board's FINDING shape, so the runner (which triages on
+    /// severity and evidence) and the report (which shows severity, status and the evidence branch)
+    /// never have to parse a model's prose. The text cap is the board's own.
+    /// </summary>
+    private (bool IsError, string Text) ReportFinding(JsonNode? arguments)
+    {
+        var severity = (arguments?["severity"]?.GetValue<string>() ?? "").Trim().ToLowerInvariant() switch
+        {
+            "high" or "critical" or "blocker" => "high",
+            "medium" or "moderate" => "medium",
+            _ => "low",
+        };
+
+        var text = (arguments?["text"]?.GetValue<string>() ?? "").Trim();
+        if (text.Length == 0)
+        {
+            return (true, "report_finding requires 'text' - what is wrong, in one or two sentences.");
+        }
+
+        var kind = (arguments?["kind"]?.GetValue<string>() ?? "general").Trim().ToLowerInvariant();
+        var fixBy = (arguments?["fix_by"]?.GetValue<string>() ?? "builders").Trim().ToLowerInvariant() switch
+        {
+            "me" => "me",
+            "user" => "user",
+            _ => "builders",
+        };
+
+        var evidence = (arguments?["evidence"]?.GetValue<string>() ?? "").Trim();
+        if (evidence.Length == 0)
+        {
+            if (severity == "high")
+            {
+                return (true, "severity=high needs evidence: a failing test's name, a reproducer, or branch:<sha> for a "
+                              + "test you committed in your own branch. Without one this is at most medium - report it "
+                              + "as medium with what you did see.");
+            }
+
+            evidence = "read-the-merge";
+        }
+
+        var files = arguments?["files"] is JsonArray array
+            ? string.Join(",", array.Select(item => item?.GetValue<string>()?.Trim()).Where(item => !string.IsNullOrEmpty(item)))
+            : "";
+
+        var head = $"severity={severity} kind={kind} fix_by={fixBy} evidence={evidence}"
+                   + (files.Length == 0 ? "" : $" files={files}") + " | ";
+
+        // The board's own cap, applied here rather than left to a refusal: a finding that is too long
+        // to post is a finding lost, and the fields in front are the part that is read back.
+        const int cap = TeamBoard.MaxPatchSummaryLength;
+        if (head.Length + text.Length > cap)
+        {
+            text = text[..Math.Max(0, cap - head.Length - 1)] + "…";
+        }
+
+        var (entry, error) = _board.Write(
+            _context.Name, "FINDING", head + text, arguments?["detail"]?.GetValue<string>(), null, _role.NamePrefix);
+        if (entry is null)
+        {
+            return (true, error!);
+        }
+
+        _state.HadVisibleActivityThisCycle = true;
+        _state.WroteToBoardThisCycle = true;
+        return (false, $"Posted {entry.Id} as a {severity} {kind} finding in the {_role.NamePrefix} lane.");
+    }
+
+    /// <summary>
+    /// check_conformity runs the SDK itself - `dotnet format` and a build - rather than going through
+    /// run_command, so the team's own lint never needs the user's approval. It takes one of the shared
+    /// build slots, because the build it runs is a full MSBuild like any other.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> CheckConformityAsync(JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        var files = arguments?["files"] is JsonArray array
+            ? array.Select(item => item?.GetValue<string>()?.Trim()).Where(item => !string.IsNullOrEmpty(item))
+                .Select(item => item!).ToList()
+            : [];
+
+        if (files.Count == 0)
+        {
+            return (true, "check_conformity requires 'files' - the files your review item changed.");
+        }
+
+        var checker = new TeamConformityChecker(
+            _context.SolutionDirectory,
+            _context.SolutionPath,
+            _configuration,
+            runDotnet: RunDotnetForConformityAsync,
+            diagnostics: (file, token) => _readOnlyTools.ExecuteAsync(
+                DiagnosticTools.GetDiagnosticsToolName,
+                new JsonObject { ["file"] = file },
+                _context.SolutionDirectory,
+                token));
+
+        var report = await checker.CheckAsync(files, cancellationToken);
+        if (report.Refused)
+        {
+            return (true, report.Text);
+        }
+
+        _state.HadVisibleActivityThisCycle = true;
+        return (false, report.Text);
+    }
+
+    private async Task<DotnetRunResult> RunDotnetForConformityAsync(
+        IReadOnlyList<string> arguments, string workingDirectory, CancellationToken cancellationToken)
+    {
+        await _buildSlots.WaitAsync(cancellationToken);
+        try
+        {
+            var output = new List<string>();
+            var exitCode = await _conformityDotnet.RunDotnetAsync(
+                arguments,
+                workingDirectory,
+                line => { lock (output) { output.Add(line); } },
+                cancellationToken);
+            return new DotnetRunResult(exitCode, string.Join('\n', output));
+        }
+        finally
+        {
+            _buildSlots.Release();
+        }
+    }
+
+    /// <summary>
+    /// run_mutation_tests, the mutation tester's lane: mutate the changed lines of one file and see
+    /// which mutants the tests kill. It takes the shared build slots itself (each mutant is a build
+    /// and a test run), and it accepts the review item's changed lines so only what the merge touched
+    /// is mutated - a whole-file run on a large class would spend its whole budget on code the merge
+    /// never went near.
+    /// </summary>
+    private async Task<(bool IsError, string Text)> RunMutationTestsAsync(JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        var file = arguments?["file"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(file))
+        {
+            return (true, "run_mutation_tests requires a 'file'.");
+        }
+
+        var maxMutants = arguments?["max_mutants"] is { } maxNode && int.TryParse(maxNode.ToString(), out var parsedMax)
+            ? parsedMax
+            : TeamTools.DefaultMutantsPerRun;
+        var filter = arguments?["test_filter"]?.GetValue<string>();
+
+        var runner = new TeamMutationRunner(
+            new MutationRunnerContext(
+                _context.WorktreeRoot,
+                _context.SolutionDirectory,
+                _context.TestProjectPaths,
+                _configuration),
+            _buildSlots);
+
+        var (isError, text) = await runner.RunAsync(
+            file.Trim(), maxMutants, filter, ChangedLinesFor(file.Trim()), cancellationToken);
+        if (!isError)
+        {
+            _state.HadVisibleActivityThisCycle = true;
+        }
+
+        return (isError, text);
+    }
+
+    /// <summary>The review item's changed line ranges for one file, or null to mutate the whole file.
+    /// The keys are the paths the merge named, which may differ in slashes from the tool argument.</summary>
+    private IReadOnlyList<LineRange>? ChangedLinesFor(string file)
+    {
+        if (CurrentReviewChangedLines is null)
+        {
+            return null;
+        }
+
+        var normalized = file.Replace('\\', '/');
+        foreach (var (path, ranges) in CurrentReviewChangedLines)
+        {
+            if (string.Equals(path.Replace('\\', '/'), normalized, StringComparison.OrdinalIgnoreCase)
+                || normalized.EndsWith('/' + path.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return ranges;
+            }
+        }
+
+        return null;
+    }
+
     private (bool IsError, string Text) EditFile(JsonNode? arguments)
     {
         var file = arguments?["file"]?.GetValue<string>();
@@ -269,6 +648,11 @@ public sealed class TeamToolDispatcher
         if (WorkspaceFileReader.ResolveWithinRoot(_context.SolutionDirectory, file) is not { } fullPath)
         {
             return (true, $"Refused: '{file}' resolves outside your worktree's solution directory.");
+        }
+
+        if (ScopeRefusal(fullPath, file) is { } scopeRefusal)
+        {
+            return (true, scopeRefusal);
         }
 
         if (RefuseWrite(fullPath, file) is { } refusal)
@@ -501,7 +885,7 @@ public sealed class TeamToolDispatcher
         }
     }
 
-    private (bool IsError, string Text) BoardWrite(string? type, string? text, string? detail, JsonNode? after)
+    private (bool IsError, string Text) BoardWrite(string? type, string? text, string? detail, JsonNode? after, string? lane)
     {
         // A claim is the one entry that is a decision about who does what, so it is the one that can be
         // refused for that: a task that cannot start yet, or that a peer who is still at it holds.
@@ -511,7 +895,17 @@ public sealed class TeamToolDispatcher
             return (true, refusal);
         }
 
-        var (entry, error) = _board.Write(_context.Name, type, text, detail, TeamBoard.ParseTaskIds(after));
+        // A specialist's finding is that lane's business, so it carries the lane tag without the model
+        // having to remember. Everything else - a TASK for the builders, a FACT for everyone - is
+        // tagged only when the caller says so, since the gap finder's TASKs are the builders' work.
+        var effectiveLane = TeamBoard.NormalizeLane(lane)
+                            ?? (TeamBoard.TryParseType(type, out var entryType)
+                                && entryType == TeamBoardEntryType.Finding
+                                && _role.IsSpecialist
+                                    ? _role.NamePrefix
+                                    : null);
+
+        var (entry, error) = _board.Write(_context.Name, type, text, detail, TeamBoard.ParseTaskIds(after), effectiveLane);
         if (entry is null)
         {
             return (true, error!);
@@ -640,12 +1034,30 @@ public sealed class TeamToolDispatcher
         _state.RecordMerge();
         _state.HadVisibleActivityThisCycle = true;
         _bus.Post(_context.Name, $"Merged {Short(head)} into the team branch.");
+
+        if (MergeLanded is { } onMergeLanded)
+        {
+            try
+            {
+                await onMergeLanded(new MergeLandedEvent(_context.Name, teamHead, head), cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The merge has landed and cannot be taken back. A queue that fails to record it costs
+                // the specialist lanes one review item, which is not worth turning the worker's step
+                // into an error it would retry - a retry would be refused as "nothing to merge" anyway.
+            }
+        }
+
         return (false, $"Merged {Short(head)} into the team branch. Post a PATCH_SUMMARY for it.");
     }
 
     private async Task<(bool IsError, string Text)> DoneAsync(string? summary, CancellationToken cancellationToken)
     {
-        if (!_warnedAboutUnmergedWork && await DescribeUnmergedWorkAsync(cancellationToken) is { } unmerged)
+        // Only a role that merges can be told to merge first. The adversary's whole product is a
+        // failing test committed on its own branch and quoted as evidence - there is deliberately
+        // nothing of its to bring onto the team branch, so asking it to merge would loop forever.
+        if (_role.CanMerge && !_warnedAboutUnmergedWork && await DescribeUnmergedWorkAsync(cancellationToken) is { } unmerged)
         {
             _warnedAboutUnmergedWork = true;
             return (true,

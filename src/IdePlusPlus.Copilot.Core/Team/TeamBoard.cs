@@ -12,6 +12,12 @@ public enum TeamBoardEntryType
     Claim,
     PatchSummary,
 
+    /// <summary>A problem a specialist lane found in merged work - a survived mutant, an unanswered
+    /// what-if, a conformance break, a gap against the plan, or a follow-up worth doing later. Its
+    /// text carries the fields <see cref="TeamFinding"/> reads: severity, kind, evidence, fix_by.
+    /// A high-severity one interrupts other workers the way a FAIL does.</summary>
+    Finding,
+
     /// <summary>A backlog item - seeded from an approved plan, carried from an earlier run, or added
     /// by a worker splitting a big piece. Claimed by naming its id in a CLAIM, done when a
     /// PATCH_SUMMARY names it.</summary>
@@ -31,15 +37,76 @@ public enum TeamTaskStatus
 
 /// <param name="After">For a TASK: the numbers of the TASK entries that must be merged before it can be
 /// started. Null or empty when it can start at once.</param>
+/// <param name="Lane">The role lane an entry belongs to: a role's name prefix - "b" for a builder,
+/// "mut", "adv", "lint", "gap", "next" - or null for something that concerns the whole team (the
+/// runner's TASKs, the lead's entries, a FACT any worker may act on). <see cref="TeamBoard.CycleDigest"/>
+/// shows a worker's own lane first and only counts the others, so one lane's chatter costs the other
+/// lanes nothing.</param>
 public sealed record TeamBoardEntry(
     int Number, TeamBoardEntryType Type, string Author, string Text, string? Detail, DateTimeOffset Time,
-    IReadOnlyList<int>? After = null)
+    IReadOnlyList<int>? After = null, string? Lane = null)
 {
     /// <summary>The handle peers pass to board_unfold. "G" for the Agensh paper's gist labels,
     /// which this board is modelled on.</summary>
     public string Id => $"G{Number}";
 
     public string TypeName => TeamBoard.TypeNameOf(Type);
+}
+
+public enum TeamFindingSeverity
+{
+    Low,
+    Medium,
+    High,
+}
+
+/// <summary>
+/// A FINDING's text read back into fields. The text keeps the board's one-line gist shape, with the
+/// machine-readable part in front:
+/// <c>severity=high kind=security fix_by=builders evidence=branch:3f9a | ..\..\ etc\passwd is read</c>.
+/// Only severity and evidence are required - the runner turns findings into TASKs on those two.
+/// </summary>
+public sealed record TeamFinding(TeamFindingSeverity Severity, string? Kind, string? FixBy, string? Evidence, string Text)
+{
+    private static readonly Regex Field = new(
+        @"\b(?<key>severity|kind|fix_by|evidence)\s*=\s*(?<value>[^\s|,;]+)", RegexOptions.IgnoreCase);
+
+    /// <summary>Null when the text carries no usable severity - a FINDING that cannot be triaged.</summary>
+    public static TeamFinding? TryParse(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        string? severity = null, kind = null, fixBy = null, evidence = null;
+        foreach (var match in Field.Matches(text).Cast<Match>())
+        {
+            var value = match.Groups["value"].Value.Trim();
+            switch (match.Groups["key"].Value.ToLowerInvariant())
+            {
+                case "severity": severity ??= value; break;
+                case "kind": kind ??= value; break;
+                case "fix_by": fixBy ??= value; break;
+                case "evidence": evidence ??= value; break;
+            }
+        }
+
+        return severity is null ? null : new TeamFinding(SeverityOf(severity), kind, fixBy, evidence, text);
+    }
+
+    public static TeamFindingSeverity SeverityOf(string? severity) => severity?.Trim().ToLowerInvariant() switch
+    {
+        "high" or "critical" or "blocker" => TeamFindingSeverity.High,
+        "medium" or "moderate" => TeamFindingSeverity.Medium,
+        _ => TeamFindingSeverity.Low,
+    };
+
+    /// <summary>Whether a FINDING entry's text should interrupt other workers mid-step.</summary>
+    public static bool IsHigh(string? text) => TryParse(text)?.Severity == TeamFindingSeverity.High;
+
+    /// <summary>The severity as a tool argument or a report would name it.</summary>
+    public string SeverityName => Severity.ToString().ToLowerInvariant();
 }
 
 /// <summary>
@@ -62,6 +129,10 @@ public sealed partial class TeamBoard
 {
     public const int MaxTextLength = 100;
     public const int MaxPatchSummaryLength = 300;
+
+    /// <summary>Long enough for a role's name prefix ("lint", "next"), short enough that a lane tag
+    /// never takes up much of a digest line.</summary>
+    public const int MaxLaneLength = 12;
 
     /// <summary>How much of the board a cycle's opening carries before pointing at board_read and
     /// board_grep for the rest. Small on purpose: every cycle of every worker pays for it.</summary>
@@ -99,6 +170,7 @@ public sealed partial class TeamBoard
         TeamBoardEntryType.Fail => "FAIL",
         TeamBoardEntryType.Claim => "CLAIM",
         TeamBoardEntryType.PatchSummary => "PATCH_SUMMARY",
+        TeamBoardEntryType.Finding => "FINDING",
         TeamBoardEntryType.Task => "TASK",
         _ => type.ToString().ToUpperInvariant(),
     };
@@ -118,12 +190,30 @@ public sealed partial class TeamBoard
         return false;
     }
 
+    /// <summary>A lane tag as the board stores it: trimmed, lower case, null when nothing was given.</summary>
+    public static string? NormalizeLane(string? lane)
+    {
+        var trimmed = lane?.Trim().Trim('[', ']', ' ');
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed[..Math.Min(trimmed.Length, MaxLaneLength)].ToLowerInvariant();
+    }
+
+    /// <summary>Whether a worker viewing as <paramref name="viewerLane"/> should be shown an entry in
+    /// <paramref name="entryLane"/>: any untagged entry, anything when the viewer has no lane, and
+    /// otherwise only its own lane.</summary>
+    public static bool InLane(string? entryLane, string? viewerLane) =>
+        entryLane is null
+        || viewerLane is null
+        || string.Equals(entryLane, viewerLane, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Adds an entry, or returns why not. Refusals say how to fix the entry rather than
     /// just that it is wrong - the caller is a model that will try again with whatever it is told.</summary>
     /// <param name="after">For a TASK: the numbers of earlier TASKs on the board that must be merged
     /// before this one can be started.</param>
+    /// <param name="lane">The role lane the entry belongs to ("b", "mut", "adv", "lint", "gap",
+    /// "next"), or null for the whole team. See <see cref="TeamBoardEntry.Lane"/>.</param>
     public (TeamBoardEntry? Entry, string? Error) Write(
-        string author, string? typeName, string? text, string? detail, IReadOnlyList<int>? after = null)
+        string author, string? typeName, string? text, string? detail, IReadOnlyList<int>? after = null,
+        string? lane = null)
     {
         if (!TryParseType(typeName, out var type))
         {
@@ -137,7 +227,9 @@ public sealed partial class TeamBoard
             return (null, "A board entry needs some text.");
         }
 
-        var limit = type is TeamBoardEntryType.PatchSummary or TeamBoardEntryType.Task ? MaxPatchSummaryLength : MaxTextLength;
+        var limit = type is TeamBoardEntryType.PatchSummary or TeamBoardEntryType.Task or TeamBoardEntryType.Finding
+            ? MaxPatchSummaryLength
+            : MaxTextLength;
         if (text.Length > limit)
         {
             return (null,
@@ -153,6 +245,17 @@ public sealed partial class TeamBoard
                 "A PATCH_SUMMARY has the form \"files=<what changed> | idea=<what it does> | evidence=<the build "
                 + "or test result that shows it works>\" - peers rely on the evidence part to trust it without "
                 + "re-checking.");
+        }
+
+        if (type == TeamBoardEntryType.Finding
+            && (!text.Contains("severity=", StringComparison.OrdinalIgnoreCase)
+                || !text.Contains("evidence=", StringComparison.OrdinalIgnoreCase)))
+        {
+            return (null,
+                "A FINDING has the form \"severity=<high|medium|low> kind=<mutation|security|what-if|conformity|gap|"
+                + "followup> [fix_by=builders|me|user] evidence=<how you know: a failing test, a command's output, "
+                + "branch:<sha>> | <what is wrong and where>\". Severity and evidence are what decide whether the "
+                + "runner turns it into a TASK, so both are required.");
         }
 
         detail = string.IsNullOrWhiteSpace(detail) ? null : detail.Trim();
@@ -187,7 +290,8 @@ public sealed partial class TeamBoard
 
             if (afterError is null)
             {
-                entry = new TeamBoardEntry(_entries.Count + 1, type, author, text, detail, _time.GetUtcNow(), prerequisites);
+                entry = new TeamBoardEntry(
+                    _entries.Count + 1, type, author, text, detail, _time.GetUtcNow(), prerequisites, NormalizeLane(lane));
                 _entries.Add(entry);
             }
         }
@@ -252,7 +356,8 @@ public sealed partial class TeamBoard
             added = incoming
                 .Select(e => new TeamBoardEntry(
                     renumbered[e.Number], e.Type, $"{e.Author} ({origin})", Renumber(e.Text),
-                    e.Detail is null ? null : Renumber(e.Detail), _time.GetUtcNow(), RenumberAfter(e.After)))
+                    e.Detail is null ? null : Renumber(e.Detail), _time.GetUtcNow(), RenumberAfter(e.After),
+                    NormalizeLane(e.Lane)))
                 .ToList();
             _entries.AddRange(added);
         }
@@ -298,6 +403,9 @@ public sealed partial class TeamBoard
                     root.TryGetProperty("time", out var time) && time.TryGetDateTimeOffset(out var at) ? at : DateTimeOffset.MinValue,
                     root.TryGetProperty("after", out var after) && after.ValueKind == JsonValueKind.Array
                         ? after.EnumerateArray().Where(n => n.ValueKind == JsonValueKind.Number).Select(n => n.GetInt32()).ToList()
+                        : null,
+                    root.TryGetProperty("lane", out var lane) && lane.ValueKind == JsonValueKind.String
+                        ? NormalizeLane(lane.GetString())
                         : null));
             }
             catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -352,6 +460,44 @@ public sealed partial class TeamBoard
             .Where(e => e.Type == TeamBoardEntryType.Task && StatusOf(e, entries, []) != TeamTaskStatus.Done)
             .ToList();
 
+    /// <summary>The FINDINGs on the board, oldest first, with the severity parsed out. A finding the
+    /// text cannot be parsed out of is left out - <see cref="Write"/> does not accept one.</summary>
+    public static IReadOnlyList<(TeamBoardEntry Entry, TeamFinding Finding)> Findings(IReadOnlyList<TeamBoardEntry> entries) =>
+        entries
+            .Where(e => e.Type == TeamBoardEntryType.Finding)
+            .Select(e => (Entry: e, Finding: TeamFinding.TryParse(e.Text)))
+            .Where(pair => pair.Finding is not null)
+            .Select(pair => (pair.Entry, pair.Finding!))
+            .ToList();
+
+    /// <summary>
+    /// Whether a FINDING has been answered: a later PATCH_SUMMARY names its id - the same rule that
+    /// marks a TASK done - or a later OBSERVED says it was dismissed. A dismissed finding is the
+    /// lead's call to record and drop; it must stop holding up wrap-up, or one dismissal the lead
+    /// already made would keep the team working past the plan.
+    /// </summary>
+    public static bool IsAnswered(TeamBoardEntry finding, IReadOnlyList<TeamBoardEntry> entries)
+    {
+        var mention = new Regex($@"\b{Regex.Escape(finding.Id)}\b", RegexOptions.IgnoreCase);
+        return entries.Any(e => e.Number > finding.Number
+                                && mention.IsMatch(e.Text)
+                                && (e.Type == TeamBoardEntryType.PatchSummary
+                                    || (e.Type == TeamBoardEntryType.Observed
+                                        && e.Text.Contains("dismiss", StringComparison.OrdinalIgnoreCase))));
+    }
+
+    /// <summary>The findings nobody has answered yet, oldest first - what the lead triages and what
+    /// the runner turns into builder TASKs.</summary>
+    public static IReadOnlyList<(TeamBoardEntry Entry, TeamFinding Finding)> OpenFindings(
+        IReadOnlyList<TeamBoardEntry> entries) =>
+        Findings(entries).Where(f => !IsAnswered(f.Entry, entries)).ToList();
+
+    /// <summary>The high-severity findings nobody has answered yet - what holds up wrap-up, and
+    /// what the runner turns into a builder TASK.</summary>
+    public static IReadOnlyList<(TeamBoardEntry Entry, TeamFinding Finding)> OpenHighFindings(
+        IReadOnlyList<TeamBoardEntry> entries) =>
+        OpenFindings(entries).Where(f => f.Finding.Severity == TeamFindingSeverity.High).ToList();
+
     /// <summary>
     /// The board as a cycle's opening carries it - only what this worker has not seen, not the
     /// whole board every time. Every cycle of every worker pays for this text, and the full board
@@ -359,7 +505,10 @@ public sealed partial class TeamBoard
     /// then, on the first cycle, every FAIL and PATCH_SUMMARY so far (what not to retry, what is
     /// already done) plus the latest few entries, and on later cycles just what is new since.
     /// </summary>
-    public string CycleDigest(string viewer)
+    /// <param name="lane">The viewer's role lane. Entries and TASKs in it - and untagged ones, which
+    /// concern the whole team - are listed; other lanes' are only counted. Null shows everything,
+    /// which is what a worker without a lane, or the lead, wants.</param>
+    public string CycleDigest(string viewer, string? lane = null)
     {
         lock (_lock)
         {
@@ -403,7 +552,7 @@ public sealed partial class TeamBoard
 
                 // Open first, so the first line is something a worker can take; blocked last.
                 foreach (var (task, status) in statuses
-                             .Where(s => s.Status != TeamTaskStatus.Done)
+                             .Where(s => s.Status != TeamTaskStatus.Done && InLane(s.Task.Lane, lane))
                              .OrderBy(s => s.Status switch { TeamTaskStatus.Open => 0, TeamTaskStatus.Claimed => 1, _ => 2 })
                              .Take(DigestTasks))
                 {
@@ -415,9 +564,24 @@ public sealed partial class TeamBoard
                         _ => "",
                     }).Append('\n');
                 }
+
+                // Another lane's TASKs are that lane's work: counted so the reader knows the backlog is
+                // not empty, but not listed, which would invite a builder into a specialist's queue.
+                var elsewhere = statuses
+                    .Where(s => s.Status != TeamTaskStatus.Done && !InLane(s.Task.Lane, lane))
+                    .GroupBy(s => s.Task.Lane!, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => $"{g.Key} {g.Count()}")
+                    .ToList();
+                if (elsewhere.Count > 0)
+                {
+                    report.Append($"  {string.Join(", ", elsewhere)} other-lane TASK(s) - those belong to their lane's role, ")
+                        .Append("not yours (board_grep \"lane:<name>\" to read them).\n");
+                }
             }
 
             var others = _entries.Where(e => e.Type is not (TeamBoardEntryType.Claim or TeamBoardEntryType.Task)).ToList();
+            var foreign = others.Where(e => !InLane(e.Lane, lane)).ToList();
+            others = others.Where(e => InLane(e.Lane, lane)).ToList();
             if (cursor == 0)
             {
                 var lessons = others.Where(e => e.Type is TeamBoardEntryType.Fail or TeamBoardEntryType.PatchSummary).ToList();
@@ -455,6 +619,15 @@ public sealed partial class TeamBoard
                 }
             }
 
+            if (foreign.Count > 0)
+            {
+                var byLane = foreign
+                    .GroupBy(e => e.Lane!, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => $"{g.Key} {g.Count()}")
+                    .ToList();
+                report.Append($"\nOther lanes ({string.Join(", ", byLane)} entries - counted only, they are their ")
+                    .Append("lane's business): board_grep \"lane:<name>\" to read them.\n");
+            }
             report.Append($"\n({_entries.Count} entries in all - board_read for the latest, board_grep to search everything.)");
             return report.ToString();
         }
@@ -550,7 +723,7 @@ public sealed partial class TeamBoard
             matches = _entries
                 .Where(e =>
                 {
-                    var haystack = $"{e.TypeName} {e.Author} {e.Text} {e.Detail}";
+                    var haystack = $"{e.TypeName} {e.Author} {e.Text} {e.Detail} lane:{e.Lane}";
                     return groups.Any(g => g.All(term => haystack.Contains(term, StringComparison.OrdinalIgnoreCase)));
                 })
                 .ToList();
@@ -605,7 +778,9 @@ public sealed partial class TeamBoard
     }
 
     public static string Format(TeamBoardEntry entry) =>
-        $"{entry.Id} [{entry.TypeName}] {entry.Author}: {entry.Text}"
+        $"{entry.Id} [{entry.TypeName}]"
+        + (entry.Lane is null ? "" : $" [lane:{entry.Lane}]")
+        + $" {entry.Author}: {entry.Text}"
         + (entry.Detail is null ? "" : $" (+detail: board_unfold {entry.Id})");
 
     private List<TeamBoardEntry> ActiveClaimsLocked(DateTimeOffset now)
@@ -648,6 +823,7 @@ public sealed partial class TeamBoard
             detail = entry.Detail,
             time = entry.Time,
             after = entry.After,
+            lane = entry.Lane,
         });
 
         try

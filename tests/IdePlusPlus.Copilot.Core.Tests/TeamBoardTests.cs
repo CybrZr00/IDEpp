@@ -268,6 +268,126 @@ public class TeamBoardTests
         TeamBoard.StatusOf(task!, board.Snapshot(), []).ShouldBe(TeamTaskStatus.Open);
     }
 
+    // --- Lanes and FINDINGs ---
+
+    private const string AFinding = "severity=high kind=security evidence=branch:3f9a | ..\\..\\ read outside the worktree";
+
+    [Fact]
+    public void ALaneAndAFinding_SurviveTheJournal_AndAreCarriedThroughImport()
+    {
+        var journal = Path.Combine(Path.GetTempPath(), $"board-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var board = CreateBoard(journal);
+            var (finding, error) = board.Write("adv1", "FINDING", AFinding, null, null, "adv");
+            error.ShouldBeNull();
+            finding!.Type.ShouldBe(TeamBoardEntryType.Finding);
+            finding.Lane.ShouldBe("adv");
+            TeamBoard.Format(finding).ShouldContain("[lane:adv]");
+
+            var read = TeamBoard.ReadJournal(journal);
+            var back = read.ShouldHaveSingleItem();
+            back.Type.ShouldBe(TeamBoardEntryType.Finding);
+            back.Lane.ShouldBe("adv");
+            back.Text.ShouldBe(AFinding);
+
+            var later = CreateBoard();
+            later.Import(read, "run x");
+            later.Snapshot().ShouldHaveSingleItem().Lane.ShouldBe("adv");
+        }
+        finally
+        {
+            File.Delete(journal);
+        }
+    }
+
+    [Fact]
+    public void Write_RefusesAFindingWithoutSeverityAndEvidence_AndSaysTheForm()
+    {
+        var (entry, error) = CreateBoard().Write("adv1", "FINDING", "the parser can loop forever", null, null, "adv");
+
+        entry.ShouldBeNull();
+        error!.ShouldContain("severity=");
+        error.ShouldContain("evidence=");
+    }
+
+    [Fact]
+    public void Write_AllowsAFindingUpToTheLongerCap()
+    {
+        var text = "severity=low kind=mutation evidence=score=7/9 | survivors " + new string('y', 400);
+
+        var (entry, error) = CreateBoard().Write("mut1", "FINDING", text[..TeamBoard.MaxPatchSummaryLength], null, null, "mut");
+
+        error.ShouldBeNull();
+        entry.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void TeamFinding_ReadsItsFields_AndOnlyAHighOneIsOpenHigh()
+    {
+        var finding = TeamFinding.TryParse(
+            "severity=HIGH kind=what-if fix_by=builders evidence=tests/ParseTests.cs:12 | null input throws")!;
+
+        finding.Severity.ShouldBe(TeamFindingSeverity.High);
+        finding.SeverityName.ShouldBe("high");
+        finding.Kind.ShouldBe("what-if");
+        finding.FixBy.ShouldBe("builders");
+        finding.Evidence.ShouldBe("tests/ParseTests.cs:12");
+        TeamFinding.IsHigh(finding.Text).ShouldBeTrue();
+        TeamFinding.IsHigh("severity=low kind=gap evidence=read the plan | a missing test").ShouldBeFalse();
+        TeamFinding.TryParse("no fields here").ShouldBeNull();
+
+        var board = CreateBoard();
+        board.Write("adv1", "FINDING", finding.Text, null, null, "adv");
+        board.Write("mut1", "FINDING", "severity=low kind=mutation evidence=score=1/4 | survivors", null, null, "mut");
+        TeamBoard.Findings(board.Snapshot()).Count.ShouldBe(2);
+        TeamBoard.OpenHighFindings(board.Snapshot()).ShouldHaveSingleItem().Entry.Author.ShouldBe("adv1");
+
+        // Answering it - a PATCH_SUMMARY that names its id - clears it, the same way a TASK is done.
+        board.Write("b1", "PATCH_SUMMARY", Merged("G1"), null);
+        TeamBoard.OpenHighFindings(board.Snapshot()).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void TheDigest_ListsTheViewersOwnLane_AndOnlyCountsTheOthers()
+    {
+        var board = CreateBoard();
+        board.Write("runner", "TASK", "Builder work", null, null, "b");
+        board.Write("runner", "TASK", "Mutation work", null, null, "mut");
+        board.Write("mut1", "FINDING", "severity=low kind=mutation evidence=score=1/4 | survivors", null, null, "mut");
+        board.Write("adv1", "FACT", "Adversary note", null, null, "adv");
+
+        var builder = board.CycleDigest("b1", "b");
+        builder.ShouldContain("Builder work");
+        builder.ShouldNotContain("Mutation work");
+        builder.ShouldContain("mut 1 other-lane TASK(s)");
+        builder.ShouldContain("mut 1, adv 1 entries");
+
+        var mut = board.CycleDigest("mut1", "mut");
+        mut.ShouldContain("Mutation work");
+        mut.ShouldContain("survivors");
+        mut.ShouldNotContain("Builder work");
+
+        // A worker with no lane (the lead, an older caller) still sees everything.
+        var lead = board.CycleDigest("lead");
+        lead.ShouldContain("Builder work");
+        lead.ShouldContain("Mutation work");
+    }
+
+    [Fact]
+    public void AHighFindingInterrupts_ButALowOneWaitsForTheNextBoardRead()
+    {
+        var board = CreateBoard();
+        var bus = new TeamMessageBus(_time, ["b1", "adv1", "mut1"]);
+        board.Write("adv1", "FINDING", AFinding, null, null, "adv");
+        board.Write("mut1", "FINDING", "severity=low kind=mutation evidence=score=1/4 | survivors", null, null, "mut");
+
+        var notices = TeamNotices.Compose("b1", board, bus)!;
+
+        notices.ShouldContain("severity=high");
+        notices.ShouldNotContain("score=1/4");
+    }
+
     // --- Tasks that wait for other tasks ---
 
     private static string Merged(string taskId) => $"files=x | idea={taskId} done | evidence=build ok";
