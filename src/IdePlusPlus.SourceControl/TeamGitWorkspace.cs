@@ -41,7 +41,7 @@ public sealed partial class TeamGitWorkspace
     /// </summary>
     public static string GetTeamBranchName(string runId) => $"{BranchPrefix}{runId}/team";
 
-    public static string GetWorkerBranchName(string runId, int workerNumber) => $"{BranchPrefix}{runId}/w{workerNumber}";
+    public static string GetWorkerBranchName(string runId, int workerNumber) => BranchFor(runId, $"w{workerNumber}");
 
     /// <summary>The top of the working tree containing <paramref name="directory"/>, as a Windows
     /// full path (git reports it with forward slashes), or null when it isn't inside one.</summary>
