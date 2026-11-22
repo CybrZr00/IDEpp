@@ -670,7 +670,7 @@ public sealed partial class CopilotChatPaneViewModel
     /// <param name="notLandedNote">Why a run left to go until done could not be merged into the
     /// user's branch, put at the top of the summary - null for an ordinary run.</param>
     private async Task ProposeTeamResultAsync(
-        UltraTeamRun run,
+        ITeamRunStatus run,
         UltraTeamResult result,
         ChatMessageViewModel assistantMessage,
         CancellationToken cancellationToken,
@@ -766,8 +766,8 @@ public sealed partial class CopilotChatPaneViewModel
 
     /// <param name="landing">Set when the result was merged into the user's branch (or already in
     /// it) instead of offered for review.</param>
-    private static string DescribeTeamResult(
-        UltraTeamRun run,
+    internal static string DescribeTeamResult(
+        ITeamRunStatus run,
         UltraTeamResult result,
         int proposalCount,
         IReadOnlyList<string> notProposed,
@@ -782,6 +782,8 @@ public sealed partial class CopilotChatPaneViewModel
             UltraTeamEndReason.Cancelled => "stopped.",
             UltraTeamEndReason.Stalled => "stopped: the team had stalled - nothing could merge, and merge builds kept failing.",
             UltraTeamEndReason.BudgetSpent => $"stopped: the token budget ({run.MaxTokens:N0}) was spent.",
+            UltraTeamEndReason.LoopCapReached => "stopped: the judges still had open findings after the last repair round.",
+            UltraTeamEndReason.NoProgress => "stopped: repairs were no longer reducing the open findings.",
             _ => "stopped: no worker was still making progress.",
         });
         text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min"
@@ -876,7 +878,7 @@ public sealed partial class CopilotChatPaneViewModel
 
     /// <summary>The merge commit's message: the request, then what the run was - enough for someone
     /// reading the log later to know a team made this and where its full history is.</summary>
-    internal static string LandingCommitMessage(string goal, UltraTeamRun run, UltraTeamResult result)
+    internal static string LandingCommitMessage(string goal, ITeamRunStatus run, UltraTeamResult result)
     {
         var request = goal.Split('\n', 2)[0].Trim();
         if (request.Length > 60)

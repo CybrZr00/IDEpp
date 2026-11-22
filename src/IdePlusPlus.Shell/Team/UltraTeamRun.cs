@@ -164,6 +164,14 @@ public enum UltraTeamEndReason
 
     /// <summary>The team used up its token budget (<see cref="UltraTeamOptions.MaxTokens"/>).</summary>
     BudgetSpent,
+
+    /// <summary>A pipeline run's judges still had open findings after the last repair round it was allowed.
+    /// What builds has landed on the team branch; the open findings are in the report.</summary>
+    LoopCapReached,
+
+    /// <summary>A pipeline run stopped early because its repairs were no longer lowering the open findings
+    /// - two judge rounds in a row with no improvement.</summary>
+    NoProgress,
 }
 
 /// <summary>What a finished run leaves behind. The team branch is kept (when anything was merged)
@@ -200,7 +208,7 @@ public sealed record UltraTeamResult(
 /// board and the code it merged, which is the paper's design and also means a worker's context
 /// never grows past one cycle's worth.
 /// </summary>
-public sealed class UltraTeamRun
+public sealed class UltraTeamRun : IUltraRun
 {
     private const int MaxConsecutiveIdleCycles = 3;
 
@@ -375,6 +383,9 @@ public sealed class UltraTeamRun
 
     /// <summary>How many board entries this run took over from the earlier run it carries on from.</summary>
     public int CarriedBoardEntries { get; private set; }
+
+    /// <summary>The team has no stages.</summary>
+    public string? StageText => null;
 
     /// <summary>True while the run's preflight build is going, before any worker starts.</summary>
     public bool IsCheckingBuild { get; private set; }
