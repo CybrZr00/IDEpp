@@ -86,10 +86,10 @@ internal sealed class PipelineConductor(
                 return (true, AlreadyRecorded("roster"));
             }
 
-            var parsed = PipelineLeadTools.ParseArguments<RosterDecision>(arguments, PipelineLeadTools.SubmitRosterToolName);
+            var parsed = PipelineToolArguments.Parse<RosterDecision>(arguments, PipelineLeadTools.SubmitRosterToolName);
             if (parsed.Value is null)
             {
-                return (true, NotRecorded(PipelineLeadTools.SubmitRosterToolName, parsed.Feedback));
+                return (true, PipelinePrompts.NotRecorded(PipelineLeadTools.SubmitRosterToolName, parsed.Feedback));
             }
 
             var check = RosterValidator.Validate(parsed.Value, limits);
@@ -101,7 +101,7 @@ internal sealed class PipelineConductor(
 
             if (++refusals <= MaxRosterRefusals)
             {
-                return (true, NotRecorded(PipelineLeadTools.SubmitRosterToolName, check.Feedback));
+                return (true, PipelinePrompts.NotRecorded(PipelineLeadTools.SubmitRosterToolName, check.Feedback));
             }
 
             // The lead is not told: it stops here, and the change is in the outcome's note for the record.
@@ -178,16 +178,16 @@ internal sealed class PipelineConductor(
                 return (true, AlreadyRecorded("triage"));
             }
 
-            var parsed = PipelineLeadTools.ParseArguments<TriageSubmission>(arguments, PipelineLeadTools.SubmitTriageToolName);
+            var parsed = PipelineToolArguments.Parse<TriageSubmission>(arguments, PipelineLeadTools.SubmitTriageToolName);
             if (parsed.Value is null)
             {
-                return (true, NotRecorded(PipelineLeadTools.SubmitTriageToolName, parsed.Feedback));
+                return (true, PipelinePrompts.NotRecorded(PipelineLeadTools.SubmitTriageToolName, parsed.Feedback));
             }
 
             var check = TriageValidator.Validate(parsed.Value, findings, ownership);
             if (!check.IsValid)
             {
-                return (true, NotRecorded(PipelineLeadTools.SubmitTriageToolName, check.Feedback));
+                return (true, PipelinePrompts.NotRecorded(PipelineLeadTools.SubmitTriageToolName, check.Feedback));
             }
 
             accepted = check.Value;
@@ -229,16 +229,16 @@ internal sealed class PipelineConductor(
                 return (true, AlreadyRecorded("ruling"));
             }
 
-            var parsed = PipelineLeadTools.ParseArguments<ArbitrationSubmission>(arguments, PipelineLeadTools.ArbitrateToolName);
+            var parsed = PipelineToolArguments.Parse<ArbitrationSubmission>(arguments, PipelineLeadTools.ArbitrateToolName);
             if (parsed.Value is null)
             {
-                return (true, NotRecorded(PipelineLeadTools.ArbitrateToolName, parsed.Feedback));
+                return (true, PipelinePrompts.NotRecorded(PipelineLeadTools.ArbitrateToolName, parsed.Feedback));
             }
 
             var check = ArbitrationValidator.Validate(parsed.Value, request.Id);
             if (!check.IsValid)
             {
-                return (true, NotRecorded(PipelineLeadTools.ArbitrateToolName, check.Feedback));
+                return (true, PipelinePrompts.NotRecorded(PipelineLeadTools.ArbitrateToolName, check.Feedback));
             }
 
             accepted = check.Value;
@@ -296,7 +296,4 @@ internal sealed class PipelineConductor(
         $"Roster recorded: {plan.Surveyors.Count} surveyor(s), {plan.CustomJudges.Count} custom judge(s). You are done.";
 
     private static string AlreadyRecorded(string what) => $"The {what} is already recorded. You are done - stop.";
-
-    private static string NotRecorded(string tool, string feedback) =>
-        $"Not recorded:\n{feedback}\nFix these and call {tool} again.";
 }

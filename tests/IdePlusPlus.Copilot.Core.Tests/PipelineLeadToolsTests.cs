@@ -79,7 +79,7 @@ public sealed class PipelineLeadToolsTests
             }
             """);
 
-        var parsed = PipelineLeadTools.ParseArguments<RosterDecision>(arguments, PipelineLeadTools.SubmitRosterToolName);
+        var parsed = PipelineToolArguments.Parse<RosterDecision>(arguments, PipelineLeadTools.SubmitRosterToolName);
         parsed.IsValid.ShouldBeTrue(parsed.Feedback);
         var plan = RosterValidator.Validate(parsed.Value, new RosterLimits(3, 2)).Value!;
 
@@ -97,7 +97,7 @@ public sealed class PipelineLeadToolsTests
             { "decisions": [ { "finding": "F1.1", "action": "defer", "reason": "Outside the goal, and a bigger change.", "nextPrompt": "Cache the loader." } ], "notes": "n" }
             """);
 
-        var parsed = PipelineLeadTools.ParseArguments<TriageSubmission>(arguments, PipelineLeadTools.SubmitTriageToolName);
+        var parsed = PipelineToolArguments.Parse<TriageSubmission>(arguments, PipelineLeadTools.SubmitTriageToolName);
 
         parsed.IsValid.ShouldBeTrue(parsed.Feedback);
         parsed.Value!.Decisions.ShouldHaveSingleItem().NextPrompt.ShouldBe("Cache the loader.");
@@ -107,7 +107,7 @@ public sealed class PipelineLeadToolsTests
     [Fact]
     public void PropertyNamesInAnyCase_AreAccepted_AndAMissingListIsJustEmpty()
     {
-        var parsed = PipelineLeadTools.ParseArguments<RosterDecision>(
+        var parsed = PipelineToolArguments.Parse<RosterDecision>(
             JsonNode.Parse("""{ "SURVEYORS": [ { "Area": "Lib" } ] }"""), PipelineLeadTools.SubmitRosterToolName);
 
         parsed.IsValid.ShouldBeTrue(parsed.Feedback);
@@ -118,10 +118,10 @@ public sealed class PipelineLeadToolsTests
     [Fact]
     public void ArgumentsThatCannotBeRead_AreSaidSoByToolName_WithoutThrowing()
     {
-        var wrongShape = PipelineLeadTools.ParseArguments<TriageSubmission>(JsonNode.Parse("[1, 2]"), PipelineLeadTools.SubmitTriageToolName);
-        var wrongType = PipelineLeadTools.ParseArguments<TriageSubmission>(
+        var wrongShape = PipelineToolArguments.Parse<TriageSubmission>(JsonNode.Parse("[1, 2]"), PipelineLeadTools.SubmitTriageToolName);
+        var wrongType = PipelineToolArguments.Parse<TriageSubmission>(
             JsonNode.Parse("""{ "decisions": "all of them" }"""), PipelineLeadTools.SubmitTriageToolName);
-        var none = PipelineLeadTools.ParseArguments<ArbitrationSubmission>(null, PipelineLeadTools.ArbitrateToolName);
+        var none = PipelineToolArguments.Parse<ArbitrationSubmission>(null, PipelineLeadTools.ArbitrateToolName);
 
         wrongShape.IsValid.ShouldBeFalse();
         wrongShape.Feedback.ShouldContain($"{PipelineLeadTools.SubmitTriageToolName}'s arguments could not be read");

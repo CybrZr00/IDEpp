@@ -127,6 +127,18 @@ public sealed record UltraTeamOptions(
 
     /// <summary>How many times in a row the lead may turn down one worker's merge before it lands anyway.</summary>
     public int MaxConsecutiveRejections { get; init; } = 2;
+
+    // ---- The pipeline strategy (UltraPipelineRun) - the team ignores these ----
+
+    /// <summary>How many repair rounds a pipeline run may spend. It judges one more time than that, so the
+    /// code that lands was always judged.</summary>
+    public int PipelineMaxLoops { get; init; } = 3;
+
+    /// <summary>The most surveyors the orchestrator may start; with none, the designer surveys for itself.</summary>
+    public int PipelineMaxUnderstand { get; init; } = 3;
+
+    /// <summary>The most judges of its own the orchestrator may add to the standard four.</summary>
+    public int PipelineMaxCustomJudges { get; init; } = 2;
 }
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could
