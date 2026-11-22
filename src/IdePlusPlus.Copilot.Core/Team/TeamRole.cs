@@ -14,6 +14,14 @@ public enum TeamRoleKind
     Conformity,
     GapFinder,
     FollowUpScout,
+
+    /// <summary>
+    /// One of the Ultra Pipeline's agents - a surveyor, the designer, a file owner or a judge (see
+    /// <see cref="Pipeline.PipelineRoles"/>). A single kind because the pipeline's roles are made by a
+    /// factory rather than listed in <see cref="TeamRoles.All"/>: the orchestrator defines extra judges
+    /// at run time, so the catalogue cannot be a fixed list. Last, so no existing value moves.
+    /// </summary>
+    Pipeline,
 }
 
 /// <summary>
@@ -36,14 +44,24 @@ public enum TeamRoleEditScope
 
     /// <summary>Nothing: the role reads, reports and merges nothing.</summary>
     None,
+
+    /// <summary>
+    /// Only the files the design gave this agent to own - the pipeline's file owners. Anything else
+    /// is somebody else's file, and the way to change it is to ask its owner. Last in the list, and
+    /// refused by default wherever a scope is switched on, so a place that has not learned about it
+    /// yet denies rather than allows.
+    /// </summary>
+    OwnedFilesOnly,
 }
 
-/// <summary>What wakes a role up: the backlog the lead (or the first worker) wrote, or the queue of
-/// merges that have landed since the role last looked.</summary>
+/// <summary>What wakes a role up: the backlog the lead (or the first worker) wrote, the queue of
+/// merges that have landed since the role last looked, or - for the pipeline - the runner starting
+/// the stage the role belongs to.</summary>
 public enum TeamRoleTrigger
 {
     Backlog,
     MergeQueue,
+    Stage,
 }
 
 /// <param name="NamePrefix">The first part of a worker's name: b, mut, adv, lint, gap, next - so the
@@ -58,15 +76,24 @@ public sealed record TeamRole(
     TeamRoleTrigger Trigger,
     ChatEffort DefaultEffort)
 {
-    /// <summary>True for every role but the builder: specialists review merged work rather than build.</summary>
-    public bool IsSpecialist => Kind != TeamRoleKind.Builder;
+    /// <summary>True for the review lanes: they are woken by merges and review what landed rather than
+    /// build. Not true of a builder, and not of a pipeline role - those are started by the runner
+    /// stage by stage and do not take items from the merge queue.</summary>
+    public bool IsSpecialist => Kind is not (TeamRoleKind.Builder or TeamRoleKind.Pipeline);
 
     public bool CanEdit => EditScope != TeamRoleEditScope.None;
 
-    /// <summary>A role with no edits has no branch to merge, and the adversary's failing test is
-    /// evidence rather than a fix - it travels with the finding, so nothing of the adversary's is
-    /// ever merged.</summary>
-    public bool CanMerge => CanEdit && Kind != TeamRoleKind.Adversary;
+    /// <summary>False for a role whose work is evidence rather than a fix: the adversary's failing
+    /// test, and a pipeline judge's. It travels with the finding on its own branch, so nothing such a
+    /// role produces is ever merged.</summary>
+    public bool AllowsMerge { get; init; } = true;
+
+    /// <summary>Which of the pipeline's roles this is, or null for every role of the original team.</summary>
+    public Pipeline.PipelineRoleKind? PipelineKind { get; init; }
+
+    /// <summary>A role with no edits has no branch to merge, and one whose work is only evidence
+    /// (<see cref="AllowsMerge"/>) never merges it.</summary>
+    public bool CanMerge => CanEdit && AllowsMerge;
 
     public string NameFor(int number) => $"{NamePrefix}{number}";
 }
@@ -114,7 +141,10 @@ public static class TeamRoles
         + "fix_by=builders|me|user.",
         TeamRoleEditScope.TestsOnly,
         TeamRoleTrigger.MergeQueue,
-        ChatEffort.High);
+        ChatEffort.High)
+    {
+        AllowsMerge = false,
+    };
 
     public static TeamRole Conformity { get; } = new(
         TeamRoleKind.Conformity,

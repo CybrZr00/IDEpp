@@ -334,6 +334,11 @@ public static class TeamTools
     public static IReadOnlyList<ToolDefinition> CoordinationFor(TeamRole? role)
     {
         var effective = role ?? TeamRoles.Builder;
+        if (effective.Kind == TeamRoleKind.Pipeline)
+        {
+            return PipelineCoordinationFor(effective);
+        }
+
         return
         [
             .. effective.CanMerge ? Coordination : Coordination.Where(t => t.Name != MergeToolName),
@@ -342,6 +347,21 @@ public static class TeamTools
             .. effective.Kind == TeamRoleKind.Conformity ? new ToolDefinition[] { CheckConformity } : Array.Empty<ToolDefinition>(),
         ];
     }
+
+    /// <summary>
+    /// What a pipeline agent that works through the team dispatcher is offered: the ordinary team tools
+    /// without the two that belong to the original team. It does not write the board - the runner
+    /// records what happened, and an agent's result is the artifact it submits - and it has no
+    /// team_done, because a stage ends when the runner says so. It is never offered the review-queue
+    /// tools (nothing queues work for it). team_merge is kept only for a role that has something to merge.
+    /// The pipeline's own tools are added here by the role's kind as they are defined.
+    /// </summary>
+    private static IReadOnlyList<ToolDefinition> PipelineCoordinationFor(TeamRole role) =>
+    [
+        .. Coordination.Where(tool =>
+            tool.Name is not (BoardWriteToolName or DoneToolName)
+            && (role.CanMerge || tool.Name != MergeToolName)),
+    ];
 
     public static bool IsCoordinationTool(string toolName) =>
         toolName is RequestHelpToolName or WaitToolName or NextReviewToolName or ReportFindingToolName
