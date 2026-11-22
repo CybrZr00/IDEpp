@@ -1,6 +1,4 @@
 using System.IO;
-using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.SourceControl;
@@ -294,7 +292,7 @@ public sealed class UltraTeamRun
         IChatClient Wrap(IChatClient inner) =>
             wrapped.TryGetValue(inner, out var existing)
                 ? existing
-                : wrapped[inner] = new UsageCountingChatClient(new ThrottlingChatClient(inner, options, time), this);
+                : wrapped[inner] = new UsageCountingChatClient(new ThrottlingChatClient(inner, options, time), OnUsage);
         _workerClient = Wrap(options.WorkerClient ?? client);
         _orchestratorClient = Wrap(options.OrchestratorClient ?? client);
         _askToContinue = askToContinue;
@@ -1527,6 +1525,17 @@ public sealed class UltraTeamRun
 
     private void OnChanged() => Changed?.Invoke();
 
+    /// <summary>Adds a response's usage to the run's totals as it arrives (see
+    /// <see cref="UsageCountingChatClient"/>), checks the token budget and tells the status card.</summary>
+    private void OnUsage(UsageReceived usage)
+    {
+        Interlocked.Add(ref _promptTokens, usage.PromptTokens);
+        Interlocked.Add(ref _completionTokens, usage.CompletionTokens);
+        Interlocked.Add(ref _cachedPromptTokens, usage.CachedPromptTokens);
+        CheckTokenBudget();
+        OnChanged();
+    }
+
     /// <summary>Called as usage arrives: warns the team once at 90% of the token budget, and ends the
     /// round at 100%. Workers stop between steps, as they do when time runs out.</summary>
     private void CheckTokenBudget()
@@ -1545,102 +1554,6 @@ public sealed class UltraTeamRun
         else if (used >= _options.MaxTokens * 0.9 && Interlocked.Exchange(ref _budgetWarningSent, 1) == 0)
         {
             Bus.Broadcast(TeamMessageBus.RunnerName, TeamPrompts.BudgetReminder);
-        }
-    }
-
-    /// <summary>
-    /// The team's share of the provider: at most <see cref="UltraTeamOptions.MaxConcurrentModelRequests"/>
-    /// requests in flight, and a request refused for rate limiting retried with backoff instead of
-    /// handed to the worker as a failed step.
-    ///
-    /// A retry is only safe because the refusal is the stream's first and only event - nothing has
-    /// reached the worker yet. The slot is given back while backing off, so one rate-limited worker
-    /// does not hold up the others that might get through.
-    /// </summary>
-    private sealed class ThrottlingChatClient(IChatClient inner, UltraTeamOptions options, TimeProvider time) : IChatClient
-    {
-        private static readonly Regex RateLimited = new(@"\b(429|503|529)\b|rate.?limit|overloaded", RegexOptions.IgnoreCase);
-
-        private readonly SemaphoreSlim _slots = new(Math.Max(1, options.MaxConcurrentModelRequests));
-
-        public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
-            IReadOnlyList<ChatMessage> messages,
-            string model,
-            IReadOnlyList<ToolDefinition>? tools = null,
-            ChatEffort effort = ChatEffort.None,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            for (var attempt = 0; ; attempt++)
-            {
-                await _slots.WaitAsync(cancellationToken);
-                var released = false;
-                try
-                {
-                    await using var events = inner.StreamChatAsync(messages, model, tools, effort, cancellationToken)
-                        .GetAsyncEnumerator(cancellationToken);
-                    if (!await events.MoveNextAsync())
-                    {
-                        yield break;
-                    }
-
-                    if (events.Current is StreamError error && RateLimited.IsMatch(error.Message) && attempt < options.RateLimitRetries)
-                    {
-                        _slots.Release();
-                        released = true;
-                        await Task.Delay(Backoff(attempt), time, cancellationToken);
-                        continue;
-                    }
-
-                    yield return events.Current;
-                    while (await events.MoveNextAsync())
-                    {
-                        yield return events.Current;
-                    }
-
-                    yield break;
-                }
-                finally
-                {
-                    if (!released)
-                    {
-                        _slots.Release();
-                    }
-                }
-            }
-        }
-
-        /// <summary>Doubling from the configured base, capped at a minute, with jitter so workers
-        /// refused together do not all come back together.</summary>
-        private TimeSpan Backoff(int attempt) =>
-            TimeSpan.FromMilliseconds(
-                Math.Min(60_000, options.RateLimitBackoff.TotalMilliseconds * Math.Pow(2, attempt))
-                * (0.75 + Random.Shared.NextDouble() * 0.5));
-    }
-
-    /// <summary>Adds each response's usage to the run's totals as it arrives, so the status card's
-    /// token count moves during a cycle rather than only when one finishes.</summary>
-    private sealed class UsageCountingChatClient(IChatClient inner, UltraTeamRun run) : IChatClient
-    {
-        public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
-            IReadOnlyList<ChatMessage> messages,
-            string model,
-            IReadOnlyList<ToolDefinition>? tools = null,
-            ChatEffort effort = ChatEffort.None,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await foreach (var streamEvent in inner.StreamChatAsync(messages, model, tools, effort, cancellationToken))
-            {
-                if (streamEvent is UsageReceived usage)
-                {
-                    Interlocked.Add(ref run._promptTokens, usage.PromptTokens);
-                    Interlocked.Add(ref run._completionTokens, usage.CompletionTokens);
-                    Interlocked.Add(ref run._cachedPromptTokens, usage.CachedPromptTokens);
-                    run.CheckTokenBudget();
-                    run.OnChanged();
-                }
-
-                yield return streamEvent;
-            }
         }
     }
 }
