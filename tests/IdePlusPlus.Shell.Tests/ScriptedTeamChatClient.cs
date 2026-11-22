@@ -9,7 +9,7 @@ namespace IdePlusPlus.Shell.Tests;
 /// <summary>
 /// Plays each Ultra worker its own scripted replies, one per request. Workers run concurrently and
 /// share one client, so the script is keyed by the worker's name, read from the system prompt
-/// ("You are w1, ..."). Once a worker's script runs out it gets <see cref="WhenScriptEmpty"/>, by
+/// ("You are w1, ..." - or u1, d1, b2, j3 for a pipeline agent). Once a worker's script runs out it gets <see cref="WhenScriptEmpty"/>, by
 /// default a plain-text reply with no tool call.
 /// </summary>
 public sealed partial class ScriptedTeamChatClient : IChatClient
@@ -94,6 +94,8 @@ public sealed partial class ScriptedTeamChatClient : IChatClient
     /// <summary>The usage reported after every reply.</summary>
     public (int Prompt, int Completion) UsagePerReply { get; set; } = (100, 10);
 
-    [GeneratedRegex(@"^You are (w\d+|lead),")]
+    // A team worker is w<N>; a pipeline agent is u<N>, d<N>, b<N> or j<N> - one letter and a number, or a
+    // longer name such as "lead". Every one of their prompts opens "You are <name>, ".
+    [GeneratedRegex(@"^You are ([a-z]+\d+|lead),")]
     private static partial Regex WorkerName();
 }
