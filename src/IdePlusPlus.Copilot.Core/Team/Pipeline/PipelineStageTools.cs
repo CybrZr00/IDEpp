@@ -10,6 +10,7 @@ namespace IdePlusPlus.Copilot.Core.Team.Pipeline;
 public static class PipelineStageTools
 {
     public const string SurveySubmitToolName = "survey_submit";
+    public const string DesignSubmitToolName = "design_submit";
 
     public static readonly ToolDefinition SurveySubmit = new(
         Name: SurveySubmitToolName,
@@ -63,7 +64,82 @@ public static class PipelineStageTools
             }
             """)!);
 
+    public static readonly ToolDefinition DesignSubmit = new(
+        Name: DesignSubmitToolName,
+        Description: "Hand in your design. Call this once, after you have committed the interface stubs (team_commit) and the " +
+                     "solution builds. List every file the work will create or change, each with exactly one owner, and mark " +
+                     "the files you wrote as stubs with isStub - your commit may change those and no others. The runner checks " +
+                     "the design and the commit, builds it, and lands the commit on the team branch for the owners to build " +
+                     "against; if anything is wrong it says what, and you fix it and call this again.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "summary": { "type": "string", "description": "What is being built and how the pieces fit together, in a few sentences." },
+                "owners": { "type": "array", "items": { "type": "string" }, "description": "The owners, named b1, b2, ... in order, with no gaps." },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": { "type": "string", "description": "Relative to the solution folder, with forward slashes. Include files that do not exist yet." },
+                      "owner": { "type": "string", "description": "The one owner who edits this file, e.g. \"b2\"." },
+                      "purpose": { "type": "string", "description": "What the file is for." },
+                      "acceptance": { "type": "array", "items": { "type": "string" }, "description": "What an owner and a judge can check to know the file is right." },
+                      "isStub": { "type": "boolean", "description": "True for a file you wrote in your contract commit: an interface or signature whose bodies throw NotImplementedException." }
+                    },
+                    "required": ["path", "owner", "purpose", "acceptance"]
+                  }
+                },
+                "misuseCases": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "description": "M1, M2, ..." },
+                      "scenario": { "type": "string", "description": "Something a careless or hostile user could try: empty, huge or malformed input, two at once, the wrong user." }
+                    },
+                    "required": ["id", "scenario"]
+                  }
+                },
+                "trims": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "what": { "type": "string" },
+                      "file": { "type": "string" },
+                      "reason": { "type": "string", "description": "Why the goal needs it trimmed. Leave out any trim the goal does not need." }
+                    },
+                    "required": ["what", "file", "reason"]
+                  }
+                }
+              },
+              "required": ["summary", "owners", "files"]
+            }
+            """)!);
+
     /// <summary>What a surveyor has: the read-only tools every sub-agent has, and its submit tool. Nothing
     /// that writes, and no commands.</summary>
     public static IReadOnlyList<ToolDefinition> ForSurveyor { get; } = [.. SubAgentTools.AllowedTools, SurveySubmit];
+
+    /// <summary>
+    /// The tools of the designer's worktree dispatcher that it is given, by name: read the code, edit,
+    /// build, look at the state of its branch, and commit. Not team_merge (the runner lands its commit), not
+    /// the team's chatter, not the tests. The dispatcher defines these; this is which of them the designer sees.
+    /// </summary>
+    public static IReadOnlySet<string> DesignerToolNames { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        WorkspaceTools.ReadFileToolName,
+        WorkspaceTools.ListFilesToolName,
+        WorkspaceTools.SearchCodebaseToolName,
+        SymbolTools.FindSymbolToolName,
+        SymbolTools.FindReferencesToolName,
+        DiagnosticTools.GetDiagnosticsToolName,
+        TeamTools.EditFileToolName,
+        GitTools.StatusToolName,
+        GitTools.DiffToolName,
+        BuildTools.BuildToolName,
+        TeamTools.CommitToolName,
+    };
 }

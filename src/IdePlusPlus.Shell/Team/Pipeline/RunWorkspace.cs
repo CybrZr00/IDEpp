@@ -292,6 +292,52 @@ public sealed class RunWorkspace
         }
     }
 
+    /// <summary>
+    /// A path as the design spells it - relative to the solution folder, forward slashes - as git spells it:
+    /// relative to the repository root. They are the same when the solution is at the root.
+    /// </summary>
+    public string ToRepositoryPath(string solutionRelativePath)
+    {
+        var path = solutionRelativePath.Replace('\\', '/').TrimStart('/');
+        var directory = SolutionRelativeDirectory.Replace('\\', '/').Trim('/');
+        return directory is "" or "." ? path : $"{directory}/{path}";
+    }
+
+    /// <summary>
+    /// A repository-relative path as the design spells files - relative to the solution folder with forward
+    /// slashes - or null for one outside the solution folder, which no design file can name.
+    /// </summary>
+    public string? ToSolutionPath(string repositoryRelativePath)
+    {
+        var path = repositoryRelativePath.Replace('\\', '/').TrimStart('/');
+        var directory = SolutionRelativeDirectory.Replace('\\', '/').Trim('/');
+        if (directory is "" or ".")
+        {
+            return path;
+        }
+
+        var prefix = directory + "/";
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path[prefix.Length..] : null;
+    }
+
+    /// <summary>
+    /// Puts <paramref name="commit"/> on the team branch: moves the branch forward to it, which is only
+    /// possible when the commit descends from where the branch is now. For the designer's contract commit,
+    /// which the runner lands once it has checked it - an agent that could team_merge it would have put it
+    /// there unchecked.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The branch is missing or the commit does not descend from it.</exception>
+    public async Task LandAsync(string commit, CancellationToken cancellationToken)
+    {
+        var teamHead = await _teamGit.ResolveRefAsync(RepositoryRoot, $"refs/heads/{TeamBranch}", cancellationToken)
+                       ?? throw new InvalidOperationException($"The team branch {TeamBranch} is missing.");
+        var result = await _teamGit.FastForwardBranchAsync(RepositoryRoot, TeamBranch, commit, teamHead, cancellationToken);
+        if (result.Status != TeamFastForwardStatus.FastForwarded)
+        {
+            throw new InvalidOperationException(result.Message);
+        }
+    }
+
     /// <summary>The context a dispatcher needs for an agent working in <paramref name="worktree"/>.</summary>
     public TeamWorkerContext ContextFor(WorkspaceWorktree worktree, IReadOnlyList<string> testProjectPaths)
     {

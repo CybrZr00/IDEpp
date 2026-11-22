@@ -79,6 +79,10 @@ public static class PipelineRoles
         TeamRoleTrigger.Stage,
         ChatEffort.High)
     {
+        // The designer's commit is the contract every owner builds against, so the runner lands it - after
+        // checking that it changes only the stubs the design declares, and builds. A designer that could
+        // team_merge would put it on the team branch before that check.
+        AllowsMerge = false,
         PipelineKind = PipelineRoleKind.Designer,
     };
 

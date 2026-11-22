@@ -18,14 +18,16 @@ namespace IdePlusPlus.Shell.Team.Pipeline;
 /// (<see cref="PipelineConductor"/>) is called only where judgement is needed. The agents never talk to
 /// each other except through the runner's own tools; what one stage hands the next is an artifact.
 ///
-/// Stages so far: Setup (snapshot and branch), Roster (the orchestrator), Understand (surveyors) and
-/// Finalize (records and result). Design, Build and the loop are added stage by stage; until then a run
-/// that gets through the stages it has ends <see cref="UltraTeamEndReason.AllDone"/>.
+/// Stages so far: Setup (snapshot and branch), Roster (the orchestrator), Understand (surveyors), Design
+/// (the designer, whose interface stubs are checked and landed as the contract) and Finalize (records
+/// and result). Build and the loop are added stage by stage; until then a run that gets through the
+/// stages it has ends <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in its own part of this
+/// class.
 ///
 /// Like the team run it always cleans up - worktrees, links, branches that hold nothing - and a user's
 /// cancellation ends the run with <see cref="UltraTeamEndReason.Cancelled"/> and a result, not an exception.
 /// </summary>
-public sealed class UltraPipelineRun : IUltraRun
+public sealed partial class UltraPipelineRun : IUltraRun
 {
     /// <summary>The most worktrees counted when the disk is checked before anything exists: the read-only
     /// checkout, the designer's and the gate's. Owners and test-writing judges are counted when they are
@@ -39,12 +41,16 @@ public sealed class UltraPipelineRun : IUltraRun
     private readonly string _model;
     private readonly UltraTeamOptions _options;
     private readonly ReadOnlyToolDispatcher _readOnlyTools;
+    private readonly GitService _gitService;
     private readonly TeamGitWorkspace _teamGit;
     private readonly TimeProvider _time;
     private readonly string _ultraRootDirectory;
     private readonly PipelineBudget _budget;
     private readonly PipelineAgentHost _workerHost;
     private readonly PipelineAgentHost _leadHost;
+
+    /// <summary>Caps how many builds the run's agents have going at once - each is a full MSBuild.</summary>
+    private readonly SemaphoreSlim _buildSlots;
 
     private readonly object _lock = new();
     private readonly List<TeamWorkerState> _agents = [];
@@ -60,6 +66,16 @@ public sealed class UltraPipelineRun : IUltraRun
     private PipelineArtifactStore? _phases;
     private RosterPlan _roster = new([], [], null);
     private string _goal = "";
+    private IReadOnlyList<string> _testProjectPaths = [];
+
+    /// <summary>What the surveyors handed in, for the designer; and who handed in nothing.</summary>
+    private IReadOnlyList<SurveyReport> _surveys = [];
+    private IReadOnlyList<string> _missingSurveys = [];
+
+    /// <summary>The accepted design and the ownership map built from it - set once the design stage lands
+    /// the contract. The stages after it work from these.</summary>
+    private DesignPlan? _design;
+    private OwnershipMap _ownership = OwnershipMap.Empty;
 
     /// <param name="ultraRootDirectory">Where run folders go - outside any repository, so worktrees never
     /// show up in the user's status, file list or index.</param>
@@ -68,6 +84,7 @@ public sealed class UltraPipelineRun : IUltraRun
         string model,
         UltraTeamOptions options,
         ReadOnlyToolDispatcher readOnlyTools,
+        GitService gitService,
         TeamGitWorkspace teamGit,
         TimeProvider time,
         string ultraRootDirectory)
@@ -83,9 +100,11 @@ public sealed class UltraPipelineRun : IUltraRun
         _model = model;
         _options = options;
         _readOnlyTools = readOnlyTools;
+        _gitService = gitService;
         _teamGit = teamGit;
         _time = time;
         _ultraRootDirectory = ultraRootDirectory;
+        _buildSlots = new SemaphoreSlim(Math.Max(1, options.MaxConcurrentBuilds));
 
         RunId = $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..4]}";
         Board = new TeamBoard(time, options.ClaimLifetime);
@@ -176,6 +195,7 @@ public sealed class UltraPipelineRun : IUltraRun
         IReadOnlyList<string>? backlog = null)
     {
         _goal = goal;
+        _testProjectPaths = testProjectPaths;
         var workspace = _workspace = new RunWorkspace(
             _teamGit, _ultraRootDirectory, RunId, repositoryRoot, solutionPath, _options.FreeDiskSpace, SetSetup);
 
@@ -236,8 +256,8 @@ public sealed class UltraPipelineRun : IUltraRun
 
     /// <summary>
     /// The stages, in order, with the run's budget checked between them: a run that has spent its time or
-    /// tokens does not start the next stage. Design, Build and the judge and repair loop come after
-    /// Understand as they are added.
+    /// tokens does not start the next stage. Build and the judge and repair loop come after Design as they
+    /// are added. A run with no design has nothing to build, so it ends there.
     /// </summary>
     private async Task<UltraTeamEndReason> RunStagesAsync(
         string goal, string? approvedPlan, RunWorkspace workspace, WorkspaceWorktree readOnly, CancellationToken cancellationToken)
@@ -253,6 +273,16 @@ public sealed class UltraPipelineRun : IUltraRun
         }
 
         await UnderstandStageAsync(goal, readDirectory, cancellationToken);
+        if (Spent() is { } afterUnderstand)
+        {
+            return afterUnderstand;
+        }
+
+        if (!await DesignStageAsync(goal, approvedPlan, workspace, readOnly, cancellationToken))
+        {
+            return UltraTeamEndReason.WorkersStopped;
+        }
+
         return Spent() ?? UltraTeamEndReason.AllDone;
     }
 
@@ -316,6 +346,8 @@ public sealed class UltraPipelineRun : IUltraRun
                 cancellationToken);
         }
 
+        _surveys = [.. surveys.Where(s => s.Report is not null).Select(s => s.Report!)];
+        _missingSurveys = [.. surveys.Where(s => s.Report is null).Select(s => $"{s.Surveyor.Agent.Name} ({s.Surveyor.Focus.Area})")];
         LogStage(clock, UltraStage.Understand, 0, outcomes, null);
     }
 
@@ -405,6 +437,8 @@ public sealed class UltraPipelineRun : IUltraRun
         {
             _stages.Add(record);
         }
+
+        OnChanged();
     }
 
     /// <summary>A stage the run had nothing to do in - recorded, so the record says it was left out on purpose.</summary>

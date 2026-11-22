@@ -67,6 +67,68 @@ public static class PipelinePrompts
                + $"Survey your area, then call {PipelineStageTools.SurveySubmitToolName}.";
     }
 
+    /// <summary>
+    /// The designer's system prompt: who it is, the role's charter, and how the stage works - what it may
+    /// do in its own checkout, what the contract commit is, and that only <c>design_submit</c> counts. The
+    /// limits are the run's, stated so the first design is not refused for them.
+    /// </summary>
+    public static string Designer(string name, TeamRole role, DesignLimits limits) =>
+        $"You are {name}, the designer in an Ultra Pipeline run in IDE++. {role.Charter}\n\n"
+        + "You have your own git checkout of the code as it stands, on your own branch: you can read it, edit it, "
+        + "build it and commit. The user is not available - never ask them anything. Work in this order.\n"
+        + "1. Read the surveys you are given and as much of the code as you need.\n"
+        + "2. Decide the files the work touches and give each exactly one owner, named b1, b2, ... in order - at most "
+        + $"{limits.MaxOwners} owners and {limits.MaxFiles} files. List EVERY file an owner will create or change - "
+        + "source, tests, docs - because an owner may edit only the files it owns. A file that does not exist yet is "
+        + "listed too; its owner creates it. Paths are relative to the solution folder, with forward slashes.\n"
+        + "3. Write the interface contract in your checkout: only types, signatures and members, with bodies that throw "
+        + "NotImplementedException, so every owner builds against the same contract and nothing is implemented yet. "
+        + "Change no other file. Run build_solution until it passes, then team_commit.\n"
+        + $"4. Call {PipelineStageTools.DesignSubmitToolName} once, marking the files you wrote with isStub: your commit "
+        + "may change those files and no others. If the work needs no new interface, write no stubs and commit nothing.\n"
+        + $"Nothing you write in the conversation is recorded - only {PipelineStageTools.DesignSubmitToolName} is. The "
+        + "runner checks the design, checks that your commit changes only the declared stubs, builds it, and lands it "
+        + "for the owners; a refusal says exactly what to fix, and you call it again. Give every file at least one "
+        + $"acceptance criterion, and list up to {limits.MaxMisuseCases} misuse cases (M1, M2, ...).";
+
+    /// <summary>
+    /// The designer's first message: the goal, the surveys (fenced - they are other agents' words about a
+    /// repository, which is where an attacker's sentence would sit) and which areas have none.
+    /// </summary>
+    /// <param name="surveys">The surveys that were handed in, as the designer reads them.</param>
+    /// <param name="missingSurveys">Who gave none and what they were to cover, so the designer covers it itself.</param>
+    public static string DesignerOpening(
+        string goal, string? approvedPlan, IReadOnlyList<SurveyReport> surveys, IReadOnlyList<string> missingSurveys)
+    {
+        var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
+        if (!string.IsNullOrWhiteSpace(approvedPlan))
+        {
+            text.Append($"Approved plan (the user approved these steps):\n{approvedPlan.Trim()}\n\n");
+        }
+
+        text.AppendLine(DataFence.Instruction);
+        text.AppendLine();
+        if (surveys.Count == 0)
+        {
+            text.AppendLine("No surveys were made for this run: read the code you need yourself.");
+        }
+
+        foreach (var survey in surveys)
+        {
+            text.AppendLine(DataFence.Wrap($"survey of {survey.Area}", survey.Render()));
+            text.AppendLine();
+        }
+
+        if (missingSurveys.Count > 0)
+        {
+            text.AppendLine($"These surveys were not handed in, so cover those areas yourself: {string.Join("; ", missingSurveys)}.");
+            text.AppendLine();
+        }
+
+        text.Append($"Design the work, write and commit the contract, then call {PipelineStageTools.DesignSubmitToolName}.");
+        return text.ToString();
+    }
+
     private static string Because(WrapUpReason reason) => reason switch
     {
         WrapUpReason.Time => "Your stage has run out of time.",

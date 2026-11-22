@@ -40,6 +40,16 @@ public sealed record SurveyRecord(
     string? Gap,
     SurveyReport? Report);
 
+/// <summary>The accepted design (design.json), and the commit that carries its interface stubs when it has any.</summary>
+public sealed record DesignRecord(DesignPlan Design, string? ContractCommit);
+
+/// <summary>Who owns which file (ownership.json): the map the dispatchers enforce, as it stood when the
+/// design was accepted.</summary>
+public sealed record OwnershipRecord(IReadOnlyList<string> Owners, IReadOnlyDictionary<string, string> Files)
+{
+    public static OwnershipRecord From(OwnershipMap map) => new(map.Owners, map.Entries);
+}
+
 /// <summary>How one agent's run in a stage ended.</summary>
 public sealed record AgentRecord(
     string Name,

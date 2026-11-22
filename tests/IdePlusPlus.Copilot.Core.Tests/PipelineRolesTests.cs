@@ -45,11 +45,15 @@ public class PipelineRolesTests
     }
 
     [Fact]
-    public void OnlyTheDesignerAndTheOwnersMergeAnything()
+    public void OnlyTheOwnersMergeAnything_TheRunnerLandsTheDesignersCommit()
     {
         PipelineRoles.Understander.CanMerge.ShouldBeFalse();
-        PipelineRoles.Designer.CanMerge.ShouldBeTrue();
         PipelineRoles.Owner.CanMerge.ShouldBeTrue();
+
+        // The designer edits and commits, but it is the runner that puts its contract commit on the team
+        // branch, once it has checked that it changes only the declared stubs and builds.
+        PipelineRoles.Designer.CanEdit.ShouldBeTrue();
+        PipelineRoles.Designer.CanMerge.ShouldBeFalse();
 
         // j4 can edit (tests), but its failing test is evidence - it is never merged.
         PipelineRoles.StandardJudges[3].Role.CanEdit.ShouldBeTrue();
@@ -166,21 +170,30 @@ public class PipelineRolesTests
     // --- Tool profiles ---
 
     [Fact]
-    public void ADesignerAndAnOwnerGetTheEditAndMergeToolsButNoBoardWriteOrDone()
+    public void AnOwnerGetsTheEditAndMergeToolsButNoBoardWriteOrDone()
     {
-        foreach (var role in new[] { PipelineRoles.Designer, PipelineRoles.Owner })
-        {
-            var names = ToolNamesFor(role);
+        var names = ToolNamesFor(PipelineRoles.Owner);
 
-            names.ShouldContain(TeamTools.EditFileToolName);
-            names.ShouldContain(TeamTools.CommitToolName);
-            names.ShouldContain(TeamTools.SyncToolName);
-            names.ShouldContain(TeamTools.MergeToolName);
-            names.ShouldContain(TeamTools.BoardReadToolName);
-            names.ShouldContain(TeamTools.DirectMessageToolName);
-            names.ShouldNotContain(TeamTools.BoardWriteToolName);
-            names.ShouldNotContain(TeamTools.DoneToolName);
-        }
+        names.ShouldContain(TeamTools.EditFileToolName);
+        names.ShouldContain(TeamTools.CommitToolName);
+        names.ShouldContain(TeamTools.SyncToolName);
+        names.ShouldContain(TeamTools.MergeToolName);
+        names.ShouldContain(TeamTools.BoardReadToolName);
+        names.ShouldContain(TeamTools.DirectMessageToolName);
+        names.ShouldNotContain(TeamTools.BoardWriteToolName);
+        names.ShouldNotContain(TeamTools.DoneToolName);
+    }
+
+    [Fact]
+    public void TheDesignerGetsTheEditAndCommitToolsButNoMerge_BecauseTheRunnerLandsItsCommit()
+    {
+        var names = ToolNamesFor(PipelineRoles.Designer);
+
+        names.ShouldContain(TeamTools.EditFileToolName);
+        names.ShouldContain(TeamTools.CommitToolName);
+        names.ShouldNotContain(TeamTools.MergeToolName);
+        names.ShouldNotContain(TeamTools.BoardWriteToolName);
+        names.ShouldNotContain(TeamTools.DoneToolName);
     }
 
     [Fact]

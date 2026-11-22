@@ -112,6 +112,35 @@ public sealed class PipelineRecordsTests : IDisposable
         text.ShouldNotContain("\"note\""); // nulls are left out
     }
 
+    [Fact]
+    public async Task TheDesignAndTheOwnership_SurviveBeingWrittenAndReadBack()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var design = new DesignPlan(
+            "A greeter.",
+            ["b1", "b2"],
+            [
+                new DesignFile("Lib/IGreeter.cs", "b1", "The contract.", ["Has Greet."], IsStub: true),
+                new DesignFile("Lib/Greeter.cs", "b2", "Implements it.", ["Greets."]),
+            ],
+            [new MisuseCase("M1", "A null name.")],
+            []);
+        var ownership = OwnershipMap.From(design);
+
+        await store.WriteJsonAsync("design.json", new DesignRecord(design, "abc1234"));
+        await store.WriteJsonAsync("ownership.json", OwnershipRecord.From(ownership));
+
+        var readDesign = (await store.ReadJsonAsync<DesignRecord>("design.json")).Value!;
+        readDesign.ContractCommit.ShouldBe("abc1234");
+        readDesign.Design.Files.Select(f => (f.Path, f.Owner, f.IsStub)).ShouldBe([("Lib/IGreeter.cs", "b1", true), ("Lib/Greeter.cs", "b2", false)]);
+        readDesign.Design.MisuseCases.ShouldHaveSingleItem().Scenario.ShouldBe("A null name.");
+
+        var readOwnership = (await store.ReadJsonAsync<OwnershipRecord>("ownership.json")).Value!;
+        readOwnership.Owners.ShouldBe(["b1", "b2"]);
+        readOwnership.Files["Lib/IGreeter.cs"].ShouldBe("b1");
+        OwnershipMap.FromEntries(readOwnership.Files).OwnerOf("lib/greeter.cs").ShouldBe("b2");
+    }
+
     /// <summary>Records hold lists, and a record's own equality compares lists by reference.</summary>
     private sealed class RecordComparer : IEqualityComparer<RosterRecord>
     {

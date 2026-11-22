@@ -408,4 +408,18 @@ public sealed class TeamToolDispatcherOwnershipTests : IDisposable
         names.ShouldNotContain(TeamTools.BoardWriteToolName);
         names.ShouldNotContain(TeamTools.DoneToolName);
     }
+
+    [Fact]
+    public async Task TheDesigner_IsToldTheRunnerLandsItsCommit_NotGivenAWayToMergeIt()
+    {
+        var (d1, _, _) = await _repo.CreateWorkerAsync(1, role: PipelineRoles.Designer);
+
+        d1.Tools.ShouldNotContain(t => t.Name == TeamTools.MergeToolName);
+        d1.Tools.ShouldContain(t => t.Name == TeamTools.CommitToolName);
+        var (isError, text) = await Run(d1, TeamTools.MergeToolName);
+
+        isError.ShouldBeTrue();
+        text.ShouldContain("you do not merge");
+        text.ShouldContain("design_submit");
+    }
 }

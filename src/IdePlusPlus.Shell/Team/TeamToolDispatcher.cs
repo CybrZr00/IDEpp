@@ -581,6 +581,10 @@ public sealed class TeamToolDispatcher
             $"Refused: no edit_file in the {_role.DisplayName} lane - it reads and reports rather than changes. "
             + "Use report_finding.",
 
+        TeamTools.MergeToolName when _role.PipelineKind == PipelineRoleKind.Designer =>
+            "Refused: you do not merge. team_commit your contract, then call design_submit - the runner checks the "
+            + "commit, builds it and lands it on the team branch for you.",
+
         TeamTools.MergeToolName when !_role.CanMerge =>
             $"Refused: no team_merge in the {_role.DisplayName} lane - nothing it produces is merged. "
             + (_role.CanEdit

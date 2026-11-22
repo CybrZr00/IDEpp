@@ -303,6 +303,76 @@ public sealed class RunWorkspaceTests : IDisposable
         context.SolutionPath.ShouldBe(Path.Combine(b1.Path, "src", "App", "App.slnx"));
     }
 
+    [Fact]
+    public async Task PathsAreTheSameInTheDesignAndInGit_WhenTheSolutionIsAtTheRepositoryRoot()
+    {
+        var workspace = await OpenAsync();
+
+        workspace.ToRepositoryPath("Lib/Class1.cs").ShouldBe("Lib/Class1.cs");
+        workspace.ToRepositoryPath("Lib\\Class1.cs").ShouldBe("Lib/Class1.cs");
+        workspace.ToSolutionPath("Lib/Class1.cs").ShouldBe("Lib/Class1.cs");
+    }
+
+    [Fact]
+    public async Task PathsAreTranslatedBothWays_WhenTheSolutionIsInASubfolder_AndOutsideItNothingIsNamed()
+    {
+        Directory.CreateDirectory(Path.Combine(_repo.RepositoryRoot, "src", "App"));
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "src", "App", "App.slnx"), "<Solution />");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "nested solution");
+        var workspace = new RunWorkspace(
+            _repo.TeamGit, Ultra, "nested2", _repo.RepositoryRoot, Path.Combine(_repo.RepositoryRoot, "src", "App", "App.slnx"), _ => _freeBytes);
+        _opened.Add(workspace);
+
+        workspace.ToRepositoryPath("Lib/Class1.cs").ShouldBe("src/App/Lib/Class1.cs");
+        workspace.ToSolutionPath("src/App/Lib/Class1.cs").ShouldBe("Lib/Class1.cs");
+        workspace.ToSolutionPath("SRC\\App\\Lib\\Class1.cs").ShouldBe("Lib/Class1.cs");
+        workspace.ToSolutionPath("README.md").ShouldBeNull();
+        workspace.ToSolutionPath("src/Other/File.cs").ShouldBeNull();
+        workspace.ToSolutionPath("src/AppExtra/File.cs").ShouldBeNull(); // not a folder of the solution, only a name that starts the same
+    }
+
+    [Fact]
+    public async Task LandingACommit_MovesTheTeamBranchOntoIt()
+    {
+        var workspace = await OpenAsync();
+        var d1 = await workspace.AddWorktreeAsync("d1", workspace.Start, CancellationToken.None);
+        File.WriteAllText(Path.Combine(d1.Path, "Lib", "IGreeter.cs"), "public interface IGreeter { }\r\n");
+        (await _repo.TeamGit.CommitAllAsync(d1.Path, "contract", d1.Author)).Status.ShouldBe(TeamCommitStatus.Committed);
+        var head = await _repo.TeamGit.GetHeadAsync(d1.Path);
+
+        await workspace.LandAsync(head, CancellationToken.None);
+
+        (await RefAsync(TeamBranch)).ShouldBe(head);
+        (await _repo.TeamGit.GetChangedFilesAsync(_repo.RepositoryRoot, workspace.Snapshot, TeamBranch))
+            .ShouldHaveSingleItem().RelativePath.ShouldBe("Lib/IGreeter.cs");
+    }
+
+    [Fact]
+    public async Task ACommitThatDoesNotDescendFromTheTeamBranch_CannotBeLanded()
+    {
+        var workspace = await OpenAsync();
+        var d1 = await workspace.AddWorktreeAsync("d1", workspace.Start, CancellationToken.None);
+        var b1 = await workspace.AddWorktreeAsync("b1", workspace.Start, CancellationToken.None);
+        await MergeFileAsync(b1, "Lib/Other.cs", "public class Other { }\r\n"); // the team branch moves on
+        File.WriteAllText(Path.Combine(d1.Path, "Lib", "IGreeter.cs"), "public interface IGreeter { }\r\n");
+        await _repo.TeamGit.CommitAllAsync(d1.Path, "contract", d1.Author);
+        var head = await _repo.TeamGit.GetHeadAsync(d1.Path);
+        var before = await RefAsync(TeamBranch);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => workspace.LandAsync(head, CancellationToken.None));
+
+        (await RefAsync(TeamBranch)).ShouldBe(before);
+    }
+
+    [Fact]
+    public async Task LandingBeforeTheBranchExists_IsAnError()
+    {
+        var workspace = NewWorkspace();
+
+        await Should.ThrowAsync<InvalidOperationException>(() => workspace.LandAsync("0000000000000000000000000000000000000000", CancellationToken.None));
+    }
+
     [Theory]
     [InlineData("team")]
     [InlineData("../x")]

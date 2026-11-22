@@ -139,6 +139,9 @@ public sealed record UltraTeamOptions(
 
     /// <summary>The most judges of its own the orchestrator may add to the standard four.</summary>
     public int PipelineMaxCustomJudges { get; init; } = 2;
+
+    /// <summary>The most owners the designer may name. Each owns a cluster of files, builds them and repairs them.</summary>
+    public int PipelineMaxOwners { get; init; } = 6;
 }
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could
