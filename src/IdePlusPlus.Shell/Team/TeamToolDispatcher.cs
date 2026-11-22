@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using IdePlusPlus.Build;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.Copilot.Core.Team.Pipeline;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Roslyn.Mutation;
 using IdePlusPlus.SourceControl;
@@ -53,7 +54,26 @@ public sealed class TeamToolDispatcher
     private readonly Func<int, CancellationToken, Task<(bool IsError, string Text)>>? _waitForChange;
     private readonly Func<string, string?>? _claimGuard;
     private readonly TeamRole _role;
+    private readonly TeamPipelineHooks? _pipeline;
     private readonly HashSet<string> _offeredTools;
+
+    /// <summary>
+    /// Files this agent may change although it does not own them: the ones a team_sync left in conflict,
+    /// which it has to resolve to carry on. They hold until its next merge lands - not just until its next
+    /// commit, because the merge-time ownership check looks at the committed result and would otherwise
+    /// put the resolution straight back.
+    /// </summary>
+    private readonly HashSet<string> _syncAllowance = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The tools an owner may not use while a colleague's request waits for its answer: the ones
+    /// that change, record or publish work. Reading, building and syncing stay open.</summary>
+    private static readonly HashSet<string> OwnerGuardedTools = new(StringComparer.Ordinal)
+    {
+        TeamTools.EditFileToolName,
+        TeamTools.CommitToolName,
+        TeamTools.MergeToolName,
+        ShellTools.RunCommandToolName,
+    };
     private readonly BuildService _buildService = new();
     private readonly TestRunService _testRunService = new();
 
@@ -130,6 +150,8 @@ public sealed class TeamToolDispatcher
     /// always were.</param>
     /// <param name="role">The worker's roster role. Null is a builder - the team Ultra ran with before
     /// roles existed, so every existing caller keeps its behaviour.</param>
+    /// <param name="pipeline">The pipeline run's file-ownership rules for this agent, or null for every
+    /// other kind of run, which then behaves exactly as it did before they existed.</param>
     public TeamToolDispatcher(
         TeamWorkerContext context,
         TeamWorkerState state,
@@ -145,8 +167,10 @@ public sealed class TeamToolDispatcher
         Func<string, int, string?, CancellationToken, Task<(bool IsError, string Text)>>? requestHelp = null,
         Func<int, CancellationToken, Task<(bool IsError, string Text)>>? waitForChange = null,
         Func<string, string?>? claimGuard = null,
-        TeamRole? role = null)
+        TeamRole? role = null,
+        TeamPipelineHooks? pipeline = null)
     {
+        _pipeline = pipeline;
         _requestHelp = requestHelp;
         _waitForChange = waitForChange;
         _claimGuard = claimGuard;
@@ -228,6 +252,12 @@ public sealed class TeamToolDispatcher
         if (!_offeredTools.Contains(toolName))
         {
             return (true, RoleRefusal(toolName));
+        }
+
+        // A colleague waiting for this owner's answer comes before anything that changes or publishes work.
+        if (_pipeline?.ToolGuard is { } guard && OwnerGuardedTools.Contains(toolName) && guard(toolName) is { } mustAnswerFirst)
+        {
+            return (true, mustAnswerFirst);
         }
 
         switch (toolName)
@@ -398,9 +428,121 @@ public sealed class TeamToolDispatcher
                        + $"({string.Join(", ", CurrentReviewFiles)}). '{file}' is not one of them - anything wider is a "
                        + "FINDING rather than an edit.";
 
+            case TeamRoleEditScope.OwnedFilesOnly:
+                return OwnedFilesRefusal(fullPath, file);
+
             default:
                 return $"Refused: the {_role.DisplayName} lane may not edit '{file}'.";
         }
+    }
+
+    /// <summary>
+    /// The pipeline's rule that only a file's owner edits it. The path is compared with the ownership map
+    /// as the design wrote it - relative to the solution directory, either slash, any case - so a spelling
+    /// trick is not a way round it. The refusal says who does own the file and what to do about it, since
+    /// "ask the owner" is the way the rule is meant to be lived with, not a dead end.
+    /// </summary>
+    private string? OwnedFilesRefusal(string fullPath, string file)
+    {
+        if (_pipeline is null)
+        {
+            return $"Refused: this run has no file ownership set up, so no file is yours to edit ('{file}').";
+        }
+
+        var relative = Path.GetRelativePath(_context.SolutionDirectory, fullPath).Replace('\\', '/');
+        var map = _pipeline.Ownership();
+        if (map.IsOwnedBy(_context.Name, relative) || _syncAllowance.Contains(relative))
+        {
+            return null;
+        }
+
+        if (map.OwnerOf(relative) is { } owner)
+        {
+            return $"Refused: '{file}' is owned by {owner}, not by you ({_context.Name}). Only a file's owner edits it. "
+                   + $"Ask {owner} with request_change (say what should change and why), then await_change for the answer.";
+        }
+
+        var mine = map.FilesOf(_context.Name);
+        return $"Refused: '{file}' is not owned by anyone, and you may edit only the files you own"
+               + (mine.Count == 0 ? "" : $" ({string.Join(", ", mine.Take(10))}{(mine.Count > 10 ? ", ..." : "")})")
+               + ". If your work needs a new file, claim it first with claim_new_file.";
+    }
+
+    /// <summary>
+    /// A repository-relative path as git reports it, as the design spells files: relative to the solution
+    /// directory with forward slashes. Null for a path outside the solution directory, which no owner
+    /// can have.
+    /// </summary>
+    private string? SolutionRelativePath(string repositoryRelative)
+    {
+        var full = Path.GetFullPath(Path.Combine(_context.WorktreeRoot, repositoryRelative.Replace('/', Path.DirectorySeparatorChar)));
+        var relative = Path.GetRelativePath(_context.SolutionDirectory, full);
+        return relative == ".."
+               || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+               || Path.IsPathRooted(relative)
+            ? null
+            : relative.Replace('\\', '/');
+    }
+
+    private bool MayChangeAtMerge(OwnershipMap map, string repositoryRelative) =>
+        SolutionRelativePath(repositoryRelative) is { } relative
+        && (map.IsOwnedBy(_context.Name, relative) || _syncAllowance.Contains(relative));
+
+    /// <summary>
+    /// The merge-time half of file ownership. edit_file is checked as it happens, but an agent with shell
+    /// commands can write anywhere in its worktree, so what an owner commits is checked again against
+    /// what the team branch has: every file the commit changed must be one it owns. Anything else is put
+    /// back exactly as the team branch has it and that is committed, so the agent - which may not have
+    /// a way to undo it itself - ends up with a clean branch and is told what to do instead.
+    ///
+    /// Null when there is nothing to enforce (not a pipeline owner) or nothing wrong.
+    /// </summary>
+    private async Task<(bool IsError, string Text)?> EnforceOwnershipAtMergeAsync(
+        string teamHead, string head, CancellationToken cancellationToken)
+    {
+        if (_pipeline is null || _role.EditScope != TeamRoleEditScope.OwnedFilesOnly)
+        {
+            return null;
+        }
+
+        var map = _pipeline.Ownership();
+        var changes = await _teamGit.GetChangedFilesAsync(_context.RepositoryRoot, teamHead, head, cancellationToken);
+        var offenders = changes.Where(change => !MayChangeAtMerge(map, change.RelativePath)).ToList();
+        if (offenders.Count == 0)
+        {
+            return null;
+        }
+
+        var described = string.Join(", ", offenders.Take(10).Select(o =>
+            SolutionRelativePath(o.RelativePath) is { } relative && map.OwnerOf(relative) is { } owner
+                ? $"{o.RelativePath} (owned by {owner})"
+                : $"{o.RelativePath} (not owned)"))
+            + (offenders.Count > 10 ? $", and {offenders.Count - 10} more" : "");
+
+        var restore = await _teamGit.RestorePathsAsync(
+            _context.WorktreeRoot, teamHead, [.. offenders.Select(o => o.RelativePath)], cancellationToken);
+        if (!restore.Success)
+        {
+            return (true,
+                $"Not merged - your commit changed files you do not own: {described}. I could not put them back "
+                + $"({restore.Output}). Restore them yourself to the team branch's version, team_commit, then team_merge again.");
+        }
+
+        _changedSinceBuild = true;
+        var commit = await _teamGit.CommitAllAsync(
+            _context.WorktreeRoot,
+            $"{_context.Name}: put back files outside its ownership",
+            _context.AuthorName,
+            cancellationToken);
+
+        return (true,
+            $"Not merged - your commit changed files you do not own: {described}. I put them back exactly as the team "
+            + "branch has them"
+            + (commit.Status == TeamCommitStatus.Committed
+                ? $" and committed that ({Short(commit.Commit)}), so your branch is clean again."
+                : $", but could not commit the restoration ({commit.Message}) - team_commit it yourself.")
+            + " If your work needs those files changed, ask their owners with request_change; if it needs a file the design "
+            + "did not list, claim it with claim_new_file. Then team_merge again.");
     }
 
     private bool IsUnderTestProject(string fullPath)
@@ -968,6 +1110,16 @@ public sealed class TeamToolDispatcher
 
             case TeamSyncStatus.Conflicted:
                 _changedSinceBuild = true;
+                // A conflict has to be resolved in the files it is in, owner or not, so those are let through
+                // until this agent's next merge lands (see _syncAllowance).
+                foreach (var conflicted in result.ConflictedPaths)
+                {
+                    if (SolutionRelativePath(conflicted) is { } conflictedRelative)
+                    {
+                        _syncAllowance.Add(conflictedRelative);
+                    }
+                }
+
                 return (true,
                     "The team branch conflicts with your work in: " + string.Join(", ", result.ConflictedPaths)
                     + ". Those files contain git's conflict markers (<<<<<<<, =======, >>>>>>>). Resolve each with "
@@ -998,6 +1150,11 @@ public sealed class TeamToolDispatcher
         if (!await _teamGit.IsAncestorAsync(_context.RepositoryRoot, teamHead, head, cancellationToken))
         {
             return (true, "The team branch has moved on since you last synced. team_sync, rebuild, then team_merge again.");
+        }
+
+        if (await EnforceOwnershipAtMergeAsync(teamHead, head, cancellationToken) is { } ownershipRefusal)
+        {
+            return ownershipRefusal;
         }
 
         if (_state.LastGoodCommit != head)
@@ -1031,6 +1188,7 @@ public sealed class TeamToolDispatcher
             return (true, result.Message);
         }
 
+        _syncAllowance.Clear();
         _state.RecordMerge();
         _state.HadVisibleActivityThisCycle = true;
         _bus.Post(_context.Name, $"Merged {Short(head)} into the team branch.");
