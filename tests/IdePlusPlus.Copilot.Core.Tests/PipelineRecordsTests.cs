@@ -141,6 +141,26 @@ public sealed class PipelineRecordsTests : IDisposable
         OwnershipMap.FromEntries(readOwnership.Files).OwnerOf("lib/greeter.cs").ShouldBe("b2");
     }
 
+    [Fact]
+    public async Task AnOwnersBuildRecord_SurvivesBeingWrittenAndReadBack()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var done = new BuildRecord("b1", ["Lib/IGreeter.cs", "Lib/Class1.cs"], true, "Built it.", ["The docs"], 2, 17, null);
+        var silent = new BuildRecord("b2", ["Lib/Greeter.cs"], false, null, [], 0, 40, "b2: it answered without calling build_submit");
+
+        await store.WriteJsonAsync("build/b1.json", done);
+        await store.WriteJsonAsync("build/b2.json", silent);
+
+        var readDone = (await store.ReadJsonAsync<BuildRecord>("build/b1.json")).Value!;
+        (readDone.Owner, readDone.Submitted, readDone.Summary, readDone.Merges, readDone.Steps).ShouldBe(("b1", true, "Built it.", 2, 17));
+        readDone.Files.ShouldBe(["Lib/IGreeter.cs", "Lib/Class1.cs"]);
+        readDone.Unmet.ShouldBe(["The docs"]);
+        var readSilent = (await store.ReadJsonAsync<BuildRecord>("build/b2.json")).Value!;
+        readSilent.Submitted.ShouldBeFalse();
+        readSilent.Summary.ShouldBeNull();
+        readSilent.Gap.ShouldContain("build_submit");
+    }
+
     /// <summary>Records hold lists, and a record's own equality compares lists by reference.</summary>
     private sealed class RecordComparer : IEqualityComparer<RosterRecord>
     {

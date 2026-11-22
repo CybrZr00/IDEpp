@@ -19,10 +19,10 @@ namespace IdePlusPlus.Shell.Team.Pipeline;
 /// each other except through the runner's own tools; what one stage hands the next is an artifact.
 ///
 /// Stages so far: Setup (snapshot and branch), Roster (the orchestrator), Understand (surveyors), Design
-/// (the designer, whose interface stubs are checked and landed as the contract) and Finalize (records
-/// and result). Build and the loop are added stage by stage; until then a run that gets through the
-/// stages it has ends <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in its own part of this
-/// class.
+/// (the designer, whose interface stubs are checked and landed as the contract), Build (the owners, each
+/// in its own worktree, merging its files to the team branch) and Finalize (records and result). The
+/// judge and repair loop is added next; until then a run that gets through the stages it has ends
+/// <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in its own part of this class.
 ///
 /// Like the team run it always cleans up - worktrees, links, branches that hold nothing - and a user's
 /// cancellation ends the run with <see cref="UltraTeamEndReason.Cancelled"/> and a result, not an exception.
@@ -52,6 +52,8 @@ public sealed partial class UltraPipelineRun : IUltraRun
     /// <summary>Caps how many builds the run's agents have going at once - each is a full MSBuild.</summary>
     private readonly SemaphoreSlim _buildSlots;
 
+    private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
+
     private readonly object _lock = new();
     private readonly List<TeamWorkerState> _agents = [];
     private readonly List<StageRecord> _stages = [];
@@ -75,10 +77,15 @@ public sealed partial class UltraPipelineRun : IUltraRun
     /// <summary>The accepted design and the ownership map built from it - set once the design stage lands
     /// the contract. The stages after it work from these.</summary>
     private DesignPlan? _design;
-    private OwnershipMap _ownership = OwnershipMap.Empty;
+
+    /// <summary>Read by every owner's dispatcher on every call, and replaced (never edited) when an owner claims
+    /// a file the design did not list - hence volatile: the next call anywhere sees the new map.</summary>
+    private volatile OwnershipMap _ownership = OwnershipMap.Empty;
 
     /// <param name="ultraRootDirectory">Where run folders go - outside any repository, so worktrees never
     /// show up in the user's status, file list or index.</param>
+    /// <param name="runCommand">run_command for the owners - (command, reason, working directory, token) - or null.
+    /// Only used when the options allow shell commands.</param>
     public UltraPipelineRun(
         IChatClient client,
         string model,
@@ -87,7 +94,8 @@ public sealed partial class UltraPipelineRun : IUltraRun
         GitService gitService,
         TeamGitWorkspace teamGit,
         TimeProvider time,
-        string ultraRootDirectory)
+        string ultraRootDirectory,
+        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand = null)
     {
         // One throttle per provider: each has its own rate limits, and the run's usage counts them all.
         var wrapped = new Dictionary<IChatClient, IChatClient>(ReferenceEqualityComparer.Instance);
@@ -105,6 +113,7 @@ public sealed partial class UltraPipelineRun : IUltraRun
         _time = time;
         _ultraRootDirectory = ultraRootDirectory;
         _buildSlots = new SemaphoreSlim(Math.Max(1, options.MaxConcurrentBuilds));
+        _runCommand = options.ShellCommandsEnabled ? runCommand : null;
 
         RunId = $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..4]}";
         Board = new TeamBoard(time, options.ClaimLifetime);
@@ -256,8 +265,8 @@ public sealed partial class UltraPipelineRun : IUltraRun
 
     /// <summary>
     /// The stages, in order, with the run's budget checked between them: a run that has spent its time or
-    /// tokens does not start the next stage. Build and the judge and repair loop come after Design as they
-    /// are added. A run with no design has nothing to build, so it ends there.
+    /// tokens does not start the next stage. The judge and repair loop comes after Build as it is added. A
+    /// run with no design has nothing to build, so it ends there.
     /// </summary>
     private async Task<UltraTeamEndReason> RunStagesAsync(
         string goal, string? approvedPlan, RunWorkspace workspace, WorkspaceWorktree readOnly, CancellationToken cancellationToken)
@@ -283,6 +292,12 @@ public sealed partial class UltraPipelineRun : IUltraRun
             return UltraTeamEndReason.WorkersStopped;
         }
 
+        if (Spent() is { } afterDesign)
+        {
+            return afterDesign;
+        }
+
+        await BuildStageAsync(goal, approvedPlan, workspace, readOnly, cancellationToken);
         return Spent() ?? UltraTeamEndReason.AllDone;
     }
 

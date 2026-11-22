@@ -50,6 +50,18 @@ public sealed record OwnershipRecord(IReadOnlyList<string> Owners, IReadOnlyDict
     public static OwnershipRecord From(OwnershipMap map) => new(map.Owners, map.Entries);
 }
 
+/// <summary>One owner's part of the build (build/bN.json): the files it owned, what it said it did, how much of it
+/// reached the team branch, and why it gave no report if it did not.</summary>
+public sealed record BuildRecord(
+    string Owner,
+    IReadOnlyList<string> Files,
+    bool Submitted,
+    string? Summary,
+    IReadOnlyList<string> Unmet,
+    int Merges,
+    int Steps,
+    string? Gap);
+
 /// <summary>How one agent's run in a stage ended.</summary>
 public sealed record AgentRecord(
     string Name,

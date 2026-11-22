@@ -11,6 +11,7 @@ public static class PipelineStageTools
 {
     public const string SurveySubmitToolName = "survey_submit";
     public const string DesignSubmitToolName = "design_submit";
+    public const string BuildSubmitToolName = "build_submit";
 
     public static readonly ToolDefinition SurveySubmit = new(
         Name: SurveySubmitToolName,
@@ -119,9 +120,51 @@ public static class PipelineStageTools
             }
             """)!);
 
+    public static readonly ToolDefinition BuildSubmit = new(
+        Name: BuildSubmitToolName,
+        Description: "Report that you are done building your files. Call this once, when every file you own meets its " +
+                     "acceptance criteria and everything is merged to the team branch - work that is not merged is lost. " +
+                     "Say what you built, and list anything you could not do or that depends on a file you do not own. " +
+                     "If you still have unmerged work the runner tells you so once; merge it, or say why you cannot.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "summary": { "type": "string", "description": "What you built, in a sentence or two." },
+                "unmet": { "type": "array", "items": { "type": "string" }, "description": "Optional: what you could not do, and why - one short item each." }
+              },
+              "required": ["summary"]
+            }
+            """)!);
+
     /// <summary>What a surveyor has: the read-only tools every sub-agent has, and its submit tool. Nothing
     /// that writes, and no commands.</summary>
     public static IReadOnlyList<ToolDefinition> ForSurveyor { get; } = [.. SubAgentTools.AllowedTools, SurveySubmit];
+
+    /// <summary>
+    /// The tools of an owner's worktree dispatcher that it is given, by name: read, edit (its own files - the
+    /// dispatcher enforces which), build, test, commit, bring the team branch in and merge to it, and run a command
+    /// when the run allows one. Not the board or the team channel: nothing is written to the board, and what an owner
+    /// needs from another owner goes through the runner's own tools.
+    /// </summary>
+    public static IReadOnlySet<string> OwnerToolNames { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        WorkspaceTools.ReadFileToolName,
+        WorkspaceTools.ListFilesToolName,
+        WorkspaceTools.SearchCodebaseToolName,
+        SymbolTools.FindSymbolToolName,
+        SymbolTools.FindReferencesToolName,
+        DiagnosticTools.GetDiagnosticsToolName,
+        TeamTools.EditFileToolName,
+        GitTools.StatusToolName,
+        GitTools.DiffToolName,
+        BuildTools.BuildToolName,
+        TestTools.RunTestsToolName,
+        ShellTools.RunCommandToolName,
+        TeamTools.CommitToolName,
+        TeamTools.SyncToolName,
+        TeamTools.MergeToolName,
+    };
 
     /// <summary>
     /// The tools of the designer's worktree dispatcher that it is given, by name: read the code, edit,

@@ -129,6 +129,47 @@ public static class PipelinePrompts
         return text.ToString();
     }
 
+    /// <summary>
+    /// An owner's system prompt: who it is, the role's charter, the files it owns, and how the stage works - build them,
+    /// merge small and early, report once. What it may not do is enforced by its tools, so the prompt says it plainly
+    /// rather than leaving the model to find out from a refusal.
+    /// </summary>
+    public static string Owner(string name, TeamRole role, IReadOnlyList<string> files) =>
+        $"You are {name}, an owner in an Ultra Pipeline run in IDE++. {role.Charter}\n\n"
+        + "You have your own git checkout of the code, on your own branch. It starts from the design's contract: the "
+        + $"interface stubs are already in it. You own exactly these files: {string.Join(", ", files)}. Nobody else may "
+        + "edit them, and you may edit no others. Work in this order.\n"
+        + "1. Read the design, then the contract and the code around your files.\n"
+        + "2. Build your files to their acceptance criteria. Run build_solution until it passes, and run_tests for the "
+        + "tests that cover your files. Then team_commit.\n"
+        + "3. Merge small and early: team_merge puts your commit on the shared team branch once it builds, and your "
+        + "peers build against that branch. If the team branch has moved on, team_sync, build again, then team_merge.\n"
+        + $"4. When every file you own meets its acceptance criteria and everything is merged, call "
+        + $"{PipelineStageTools.BuildSubmitToolName} once. Work that is not merged is lost when the run ends.\n"
+        + $"The user is not available - never ask them anything. Nothing you write in the conversation is recorded - only "
+        + $"{PipelineStageTools.BuildSubmitToolName} is.";
+
+    /// <summary>
+    /// An owner's first message: the goal and the whole design (fenced - the designer's words, from which an owner
+    /// learns its files and what the others build), then which files are its own.
+    /// </summary>
+    public static string OwnerOpening(string goal, string? approvedPlan, DesignPlan design, string name, IReadOnlyList<string> files)
+    {
+        var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
+        if (!string.IsNullOrWhiteSpace(approvedPlan))
+        {
+            text.Append($"Approved plan (the user approved these steps):\n{approvedPlan.Trim()}\n\n");
+        }
+
+        text.AppendLine(DataFence.Instruction);
+        text.AppendLine();
+        text.AppendLine(DataFence.Wrap("design", design.Render()));
+        text.AppendLine();
+        text.AppendLine($"You are {name} and you own exactly these files: {string.Join(", ", files)}.");
+        text.Append($"Build your files, merge them, then call {PipelineStageTools.BuildSubmitToolName}.");
+        return text.ToString();
+    }
+
     private static string Because(WrapUpReason reason) => reason switch
     {
         WrapUpReason.Time => "Your stage has run out of time.",

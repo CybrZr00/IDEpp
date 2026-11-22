@@ -320,6 +320,13 @@ public sealed class RunWorkspace
         return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path[prefix.Length..] : null;
     }
 
+    /// <summary>The commit the team branch is at now - what the owners start from, and what a stage's
+    /// read-only checkout is moved to.</summary>
+    /// <exception cref="InvalidOperationException">The branch is missing.</exception>
+    public async Task<string> TeamHeadAsync(CancellationToken cancellationToken) =>
+        await _teamGit.ResolveRefAsync(RepositoryRoot, $"refs/heads/{TeamBranch}", cancellationToken)
+        ?? throw new InvalidOperationException($"The team branch {TeamBranch} is missing.");
+
     /// <summary>
     /// Puts <paramref name="commit"/> on the team branch: moves the branch forward to it, which is only
     /// possible when the commit descends from where the branch is now. For the designer's contract commit,
@@ -329,8 +336,7 @@ public sealed class RunWorkspace
     /// <exception cref="InvalidOperationException">The branch is missing or the commit does not descend from it.</exception>
     public async Task LandAsync(string commit, CancellationToken cancellationToken)
     {
-        var teamHead = await _teamGit.ResolveRefAsync(RepositoryRoot, $"refs/heads/{TeamBranch}", cancellationToken)
-                       ?? throw new InvalidOperationException($"The team branch {TeamBranch} is missing.");
+        var teamHead = await TeamHeadAsync(cancellationToken);
         var result = await _teamGit.FastForwardBranchAsync(RepositoryRoot, TeamBranch, commit, teamHead, cancellationToken);
         if (result.Status != TeamFastForwardStatus.FastForwarded)
         {

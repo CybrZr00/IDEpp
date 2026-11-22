@@ -17,14 +17,16 @@ namespace IdePlusPlus.Shell.Tests;
 /// a gap and not a failure, and the run cleans up after itself however it ends. The orchestrator is
 /// "lead" in the script; the surveyors are u1, u2 and the designer is d1.
 ///
-/// A designer with no script of its own hands in the plainest design (one owner, one file, no stubs), so
-/// a test about another stage need not script one.
+/// A designer with no script of its own hands in the plainest design (one owner, one file, no stubs) and an
+/// owner with none reports at once that it has nothing to change, so a test about another stage need not
+/// script either.
 /// </summary>
 public sealed class UltraPipelineRunTests : IDisposable
 {
     private const string SubmitRoster = PipelineLeadTools.SubmitRosterToolName;
     private const string SubmitSurvey = PipelineStageTools.SurveySubmitToolName;
     private const string SubmitDesign = PipelineStageTools.DesignSubmitToolName;
+    private const string SubmitBuild = PipelineStageTools.BuildSubmitToolName;
 
     private const string GoodStub = "public interface IGreeter\r\n{\r\n    string Greet(string name);\r\n}\r\n";
     private const string StubMissingASemicolon = "public interface IGreeter\r\n{\r\n    string Greet(string name)\r\n}\r\n";
@@ -34,7 +36,12 @@ public sealed class UltraPipelineRunTests : IDisposable
 
     public UltraPipelineRunTests()
     {
-        _client.WhenScriptEmpty = worker => worker == "d1" ? PlainDesign() : [new TextDelta("Nothing more to do.")];
+        _client.WhenScriptEmpty = worker => worker switch
+        {
+            "d1" => PlainDesign(),
+            _ when worker.StartsWith('b') => _client.Call(SubmitBuild, new { summary = "Nothing to change." }),
+            _ => [new TextDelta("Nothing more to do.")],
+        };
     }
 
     public void Dispose() => _repo.Dispose();
@@ -43,7 +50,9 @@ public sealed class UltraPipelineRunTests : IDisposable
 
     private static ChatStreamEvent[] Text(string text) => [new TextDelta(text)];
 
-    private UltraPipelineRun CreateRun(Func<UltraTeamOptions, UltraTeamOptions>? configure = null)
+    private UltraPipelineRun CreateRun(
+        Func<UltraTeamOptions, UltraTeamOptions>? configure = null,
+        Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? runCommand = null)
     {
         var options = new UltraTeamOptions(1, TimeSpan.FromMinutes(10), ShellCommandsEnabled: false, "Debug", ChatEffort.Ultra)
         {
@@ -53,7 +62,7 @@ public sealed class UltraPipelineRunTests : IDisposable
         };
         return new UltraPipelineRun(
             _client, "chat-model", configure?.Invoke(options) ?? options, _repo.ReadOnlyTools, new GitService(), _repo.TeamGit,
-            TimeProvider.System, UltraRoot);
+            TimeProvider.System, UltraRoot, runCommand);
     }
 
     private Task<UltraTeamResult> RunAsync(
@@ -152,12 +161,13 @@ public sealed class UltraPipelineRunTests : IDisposable
         result.Changes.ShouldBeEmpty();
         result.TeamBranchKept.ShouldBeFalse();
         result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe(
-            [("u1", TeamWorkerPhase.Done), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done)]);
-        result.Workers.Select(w => (w.Name, w.Steps)).ShouldBe([("u1", 2), ("u2", 2), ("d1", 1)]);
+            [("u1", TeamWorkerPhase.Done), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done)]);
+        result.Workers.Select(w => (w.Name, w.Steps)).ShouldBe([("u1", 2), ("u2", 2), ("d1", 1), ("b1", 1)]);
 
-        // One request for the lead, two for each surveyor and one for the designer - none spent on a reply to a submission.
-        _client.Requests.Count.ShouldBe(6);
-        (result.PromptTokens, result.CompletionTokens).ShouldBe((600, 60));
+        // One request for the lead, two for each surveyor, one for the designer and one for the owner - none spent on
+        // a reply to a submission.
+        _client.Requests.Count.ShouldBe(7);
+        (result.PromptTokens, result.CompletionTokens).ShouldBe((700, 70));
 
         var roster = await ReadAsync<RosterRecord>(run, "roster.json");
         roster.Decided.ShouldBeTrue();
@@ -173,9 +183,13 @@ public sealed class UltraPipelineRunTests : IDisposable
         var summary = await ReadAsync<RunSummaryRecord>(run, "summary.json");
         summary.EndReason.ShouldBe("AllDone");
         summary.Gaps.ShouldBeEmpty();
-        summary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design"]);
+        summary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design", "Build"]);
         summary.Stages[1].Agents.Select(a => (a.Name, a.End)).ShouldBe([("u1", "Submitted"), ("u2", "Submitted")]);
-        summary.PromptTokens.ShouldBe(600);
+        summary.PromptTokens.ShouldBe(700);
+
+        var build = await ReadAsync<BuildRecord>(run, "build/b1.json");
+        (build.Owner, build.Submitted, build.Summary, build.Merges).ShouldBe(("b1", true, "Nothing to change.", 0));
+        build.Files.ShouldBe(["Lib/Class1.cs"]);
 
         var ownership = await ReadAsync<OwnershipRecord>(run, "ownership.json");
         ownership.Owners.ShouldBe(["b1"]);
@@ -241,14 +255,15 @@ public sealed class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        result.Workers.Select(w => w.Name).ShouldBe(["d1"]);
-        _client.Requests.Select(r => r.Worker).ShouldBe(["lead", "d1"]);
+        result.Workers.Select(w => w.Name).ShouldBe(["d1", "b1"]);
+        _client.Requests.Select(r => r.Worker).ShouldBe(["lead", "d1", "b1"]);
         var summary = await ReadAsync<RunSummaryRecord>(run, "summary.json");
         summary.Stages.Select(s => (s.Stage, s.Note)).ShouldBe(
             [
                 ("Roster", null),
                 ("Understand", "skipped: no surveyors: the designer surveys for itself"),
                 ("Design", "no stubs, so no contract commit; 1 owner(s)"),
+                ("Build", "0 merge(s) from 1 owner(s)"),
             ]);
         (await ReadAsync<RosterRecord>(run, "roster.json")).Rationale.ShouldBe("One file.");
     }
@@ -261,7 +276,7 @@ public sealed class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        _client.Requests.ShouldAllBe(r => r.Worker == "d1");
+        _client.Requests.ShouldAllBe(r => r.Worker == "d1" || r.Worker == "b1");
         (await ReadAsync<RosterRecord>(run, "roster.json")).Surveyors.ShouldBeEmpty();
     }
 
@@ -275,6 +290,7 @@ public sealed class UltraPipelineRunTests : IDisposable
 
         _client.Requests.First(r => r.Worker == "lead").Messages[1].Content.ShouldContain("1. Change Value to 2\n2. Cover it with a test");
         _client.Requests.First(r => r.Worker == "d1").Messages[1].Content.ShouldContain("1. Change Value to 2\n2. Cover it with a test");
+        _client.Requests.First(r => r.Worker == "b1").Messages[1].Content.ShouldContain("1. Change Value to 2\n2. Cover it with a test");
     }
 
     [Fact]
@@ -288,7 +304,12 @@ public sealed class UltraPipelineRunTests : IDisposable
         await RunAsync(run);
 
         _client.Models.Select(m => (m.Worker, m.Model, m.Effort)).ShouldBe(
-            [("lead", "smart-model", ChatEffort.High), ("u1", "cheap-model", ChatEffort.Medium), ("d1", "cheap-model", ChatEffort.High)]);
+            [
+                ("lead", "smart-model", ChatEffort.High),
+                ("u1", "cheap-model", ChatEffort.Medium),
+                ("d1", "cheap-model", ChatEffort.High),
+                ("b1", "cheap-model", ChatEffort.Medium),
+            ]);
     }
 
     [Fact]
@@ -301,7 +322,7 @@ public sealed class UltraPipelineRunTests : IDisposable
 
         await RunAsync(run);
 
-        _client.Models.Where(m => m.Worker is "u1" or "d1").ShouldAllBe(m => m.Effort == ChatEffort.Low);
+        _client.Models.Where(m => m.Worker is "u1" or "d1" or "b1").ShouldAllBe(m => m.Effort == ChatEffort.Low);
     }
 
     // ---- When an agent gives nothing ----
@@ -315,7 +336,7 @@ public sealed class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        result.Workers.Select(w => w.Name).ShouldBe(["d1"]);
+        result.Workers.Select(w => w.Name).ShouldBe(["d1", "b1"]);
         var roster = await ReadAsync<RosterRecord>(run, "roster.json");
         roster.Decided.ShouldBeFalse();
         roster.Note.ShouldNotBeNull().ShouldContain(SubmitRoster);
@@ -335,7 +356,7 @@ public sealed class UltraPipelineRunTests : IDisposable
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
         result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe(
-            [("u1", TeamWorkerPhase.Stopped), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done)]);
+            [("u1", TeamWorkerPhase.Stopped), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done)]);
         var missing = await ReadAsync<SurveyRecord>(run, "survey/u1.json");
         missing.Submitted.ShouldBeFalse();
         missing.Report.ShouldBeNull();
@@ -403,7 +424,8 @@ public sealed class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe([("d1", TeamWorkerPhase.Done)]);
+        result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe(
+            [("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done), ("b2", TeamWorkerPhase.Done)]);
 
         // The contract is on the team branch, and is the only thing the run has changed so far.
         result.TeamBranchKept.ShouldBeTrue();
@@ -615,6 +637,300 @@ public sealed class UltraPipelineRunTests : IDisposable
         summary.Stages.Last().Note.ShouldBe("no design was accepted");
     }
 
+    // ---- The build stage ----
+
+    private const string Class1Returning2 = "public class Class1\r\n{\r\n    public int Value => 2;\r\n}\r\n";
+
+    private const string GreeterSource =
+        "public class Greeter : IGreeter\r\n{\r\n    public string Greet(string name) => \"Hello, \" + name;\r\n}\r\n";
+
+    /// <summary>b1 owns the contract (IGreeter.cs) and Class1.cs; b2 owns Greeter.cs, a new file that implements it.</summary>
+    private ChatStreamEvent[] BuildDesign() => _client.Call(SubmitDesign, new
+    {
+        summary = "A greeter behind an interface.",
+        owners = new[] { "b1", "b2" },
+        files = new object[]
+        {
+            new { path = "Lib/IGreeter.cs", owner = "b1", purpose = "The contract.", acceptance = new[] { "Has Greet(string)." }, isStub = true },
+            new { path = "Lib/Class1.cs", owner = "b1", purpose = "Holds the value.", acceptance = new[] { "Value is 2." } },
+            new { path = "Lib/Greeter.cs", owner = "b2", purpose = "Implements it.", acceptance = new[] { "Greets by name." } },
+        },
+    });
+
+    /// <summary>No surveyors, and a designer that writes the contract and hands in <see cref="BuildDesign"/>.</summary>
+    private void ScriptTheContract() => _client
+        .Script("lead", NoSurveyors())
+        .Script("d1", WriteStub(), Commit(), BuildDesign());
+
+    private ChatStreamEvent[] EditFile(string file, string text) =>
+        _client.Call(TeamTools.EditFileToolName, new { file, mode = "whole_file", new_text = text });
+
+    private ChatStreamEvent[] MergeToTheTeam() => _client.Call(TeamTools.MergeToolName);
+
+    private ChatStreamEvent[] SyncWithTheTeam() => _client.Call(TeamTools.SyncToolName);
+
+    private ChatStreamEvent[] Report(string summary, params string[] unmet) => _client.Call(SubmitBuild, new { summary, unmet });
+
+    /// <summary>
+    /// Merge, and then merge again after a sync, twice over. Two owners that merge at the same moment cannot both
+    /// fast-forward the team branch: the second is told to sync and try again. An owner that has already merged is
+    /// answered "nothing to merge" and "up to date", so the same script finishes either way, whichever owner is first.
+    /// </summary>
+    private ChatStreamEvent[][] MergeWhicheverWayTheRaceGoes() =>
+        [MergeToTheTeam(), SyncWithTheTeam(), MergeToTheTeam(), SyncWithTheTeam(), MergeToTheTeam()];
+
+    [Fact]
+    public async Task TwoOwners_BuildTheirOwnFiles_AndMergeThemToTheTeamBranchInParallel()
+    {
+        ScriptTheContract();
+        _client
+            .Script("b1", [EditFile("Lib/Class1.cs", Class1Returning2), Commit("Class1 returns 2"), .. MergeWhicheverWayTheRaceGoes(), Report("Class1.Value is 2.")])
+            .Script("b2", [EditFile("Lib/Greeter.cs", GreeterSource), Commit("Add Greeter"), .. MergeWhicheverWayTheRaceGoes(), Report("Greeter implements IGreeter.")]);
+        var run = CreateRun();
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        result.Workers.Where(w => w.Name.StartsWith('b')).Select(w => (w.Name, w.Phase, w.Merges)).ShouldBe(
+            [("b1", TeamWorkerPhase.Done, 1), ("b2", TeamWorkerPhase.Done, 1)]);
+
+        // Everything the owners wrote is on the team branch, on top of the contract - and that is all that changed.
+        result.Changes.Select(c => (c.RelativePath, c.Kind)).Order().ShouldBe(
+            [("Lib/Class1.cs", TeamFileChangeKind.Modified), ("Lib/Greeter.cs", TeamFileChangeKind.Added), ("Lib/IGreeter.cs", TeamFileChangeKind.Added)]);
+        ShowOnTeamBranch(run, "Lib/Class1.cs").ShouldContain("Value => 2");
+        ShowOnTeamBranch(run, "Lib/Greeter.cs").ShouldContain("class Greeter : IGreeter");
+        result.TeamBranchKept.ShouldBeTrue();
+        Branches(run).ShouldBe([TeamBranch(run)]); // every owner's work is on it, so no owner's branch is kept
+
+        var b1 = await ReadAsync<BuildRecord>(run, "build/b1.json");
+        (b1.Submitted, b1.Summary, b1.Merges, b1.Gap).ShouldBe((true, "Class1.Value is 2.", 1, null));
+        b1.Files.ShouldBe(["Lib/IGreeter.cs", "Lib/Class1.cs"]);
+        var b2 = await ReadAsync<BuildRecord>(run, "build/b2.json");
+        (b2.Submitted, b2.Summary, b2.Merges).ShouldBe((true, "Greeter implements IGreeter.", 1));
+        var summary = await ReadAsync<RunSummaryRecord>(run, "summary.json");
+        summary.Gaps.ShouldBeEmpty();
+        summary.Stages.Single(s => s.Stage == "Build").Note.ShouldBe("2 merge(s) from 2 owner(s)");
+    }
+
+    [Fact]
+    public async Task AnOwner_StartsFromTheContract_IsToldItsFiles_AndHasNoBoardOrTeamChannel()
+    {
+        ScriptTheContract();
+        _client.Script("b2",
+            _client.Call("read_file", new { file = "Lib/IGreeter.cs" }),
+            _client.Call(TeamTools.PostToolName, new { text = "hello" }),
+            Report("Nothing yet."));
+        var run = CreateRun();
+
+        await RunAsync(run);
+
+        var b2 = _client.Requests.Where(r => r.Worker == "b2").ToList();
+        b2[0].Messages[0].Content.ShouldStartWith("You are b2, an owner");
+        b2[0].Messages[0].Content.ShouldContain("You own exactly these files: Lib/Greeter.cs");
+        b2[0].Messages[1].Content.ShouldContain("You are b2 and you own exactly these files: Lib/Greeter.cs.");
+        b2[0].Messages[1].Content.ShouldContain("<<<DATA design");
+
+        // It was started from the contract commit, so the stub is in its checkout already.
+        b2[1].Messages.Last().Content.ShouldContain("string Greet(string name);");
+        b2[2].Messages.Last().Content.ShouldContain("'team_post' is not one of your tools");
+    }
+
+    [Fact]
+    public async Task AnOwnerWhoEditsAFileItDoesNotOwn_IsRefused_NamingTheOwner_AndTheReadOnlyCheckoutFollowsTheMerge()
+    {
+        ScriptTheContract();
+        _client.Script("b2",
+            EditFile("Lib/Class1.cs", Class1Returning2),
+            EditFile("Lib/Greeter.cs", GreeterSource),
+            Commit("Add Greeter"),
+            MergeToTheTeam(),
+            Report("Greeter implements IGreeter."));
+        var run = CreateRun();
+        var readOnlyCheckoutSawTheMerge = false;
+        run.Changed += () =>
+        {
+            if (File.Exists(Path.Combine(run.RunDirectory, "_ro", "Lib", "Greeter.cs")))
+            {
+                readOnlyCheckoutSawTheMerge = true;
+            }
+        };
+
+        var result = await RunAsync(run);
+
+        _client.Requests.Where(r => r.Worker == "b2").ElementAt(1).Messages.Last().Content
+            .ShouldContain("'Lib/Class1.cs' is owned by b1, not by you (b2)");
+        ShowOnTeamBranch(run, "Lib/Class1.cs").ShouldContain("Value => 1"); // b1's file is as it was
+        result.Changes.Select(c => c.RelativePath).Order().ShouldBe(["Lib/Greeter.cs", "Lib/IGreeter.cs"]);
+        readOnlyCheckoutSawTheMerge.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AWriteToSomeoneElsesFile_ByShellCommand_IsPutBackWhenTheOwnerMerges()
+    {
+        ScriptTheContract();
+        _client.Script("b2",
+            _client.Call(ShellTools.RunCommandToolName, new { command = "overwrite b1's file", reason = "test" }),
+            EditFile("Lib/Greeter.cs", GreeterSource),
+            Commit("Add Greeter, and a little more"),
+            MergeToTheTeam(), // refused: the commit changed a file b2 does not own, which is put back and committed
+            MergeToTheTeam(), // lands
+            Report("Greeter implements IGreeter."));
+        var run = CreateRun(
+            o => o with { ShellCommandsEnabled = true },
+            runCommand: (command, reason, directory, ct) =>
+            {
+                File.WriteAllText(Path.Combine(directory, "Lib", "Class1.cs"), "public class Tampered { }\r\n");
+                return Task.FromResult((false, "done"));
+            });
+
+        var result = await RunAsync(run);
+
+        var refusal = _client.Requests.Where(r => r.Worker == "b2").ElementAt(4).Messages.Last().Content;
+        refusal.ShouldContain("your commit changed files you do not own");
+        refusal.ShouldContain("Lib/Class1.cs (owned by b1)");
+        ShowOnTeamBranch(run, "Lib/Class1.cs").ShouldContain("Value => 1");
+        ShowOnTeamBranch(run, "Lib/Greeter.cs").ShouldContain("class Greeter");
+        result.Changes.Select(c => c.RelativePath).Order().ShouldBe(["Lib/Greeter.cs", "Lib/IGreeter.cs"]);
+        result.Workers.Single(w => w.Name == "b2").Merges.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AnOwnerWhoNeverReports_IsAGap_AndItsUnmergedWorkStaysOnItsBranch()
+    {
+        ScriptTheContract();
+        _client.Script("b1",
+            EditFile("Lib/Class1.cs", Class1Returning2),
+            Commit("Class1 returns 2"),
+            Text("It is all done, I think."), Text("Truly."), Text("Yes."));
+        var run = CreateRun();
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        result.Workers.Single(w => w.Name == "b1").Phase.ShouldBe(TeamWorkerPhase.Stopped);
+        result.KeptWorkerBranches.ShouldHaveSingleItem().ShouldEndWith("/b1");
+        ShowOnTeamBranch(run, "Lib/Class1.cs").ShouldContain("Value => 1");
+        var record = await ReadAsync<BuildRecord>(run, "build/b1.json");
+        record.Submitted.ShouldBeFalse();
+        record.Gap.ShouldNotBeNull().ShouldContain(SubmitBuild);
+        (await ReadAsync<RunSummaryRecord>(run, "summary.json")).Gaps.ShouldHaveSingleItem().ShouldStartWith("b1:");
+    }
+
+    [Fact]
+    public async Task AnOwnerWithUnmergedWork_IsToldOnce_ThenItsReportIsTaken_AndTheWorkIsAGap()
+    {
+        ScriptTheContract();
+        _client.Script("b1",
+            EditFile("Lib/Class1.cs", Class1Returning2),
+            Commit("Class1 returns 2"),
+            Report("Class1 returns 2."), // refused: that commit is not on the team branch
+            Report("Class1 returns 2, but I could not get it to merge.", "Merging it needs a change to a file I do not own"));
+        var run = CreateRun();
+
+        var result = await RunAsync(run);
+
+        _client.Requests.Where(r => r.Worker == "b1").ElementAt(3).Messages.Last().Content
+            .ShouldContain("You still have commits that are not on the team branch");
+        var record = await ReadAsync<BuildRecord>(run, "build/b1.json");
+        record.Submitted.ShouldBeTrue();
+        record.Summary.ShouldBe("Class1 returns 2, but I could not get it to merge.");
+        record.Unmet.ShouldBe(["Merging it needs a change to a file I do not own"]);
+        (await ReadAsync<RunSummaryRecord>(run, "summary.json")).Gaps.ShouldHaveSingleItem()
+            .ShouldBe("b1 reported with commits that are not on the team branch: that work is on its branch, not the team branch.");
+        result.KeptWorkerBranches.ShouldHaveSingleItem().ShouldEndWith("/b1");
+    }
+
+    [Fact]
+    public async Task AnOwnerWithUncommittedWork_IsToldOnce_Too()
+    {
+        ScriptTheContract();
+        _client.Script("b1",
+            EditFile("Lib/Class1.cs", Class1Returning2),
+            Report("Done."),
+            Commit("Class1 returns 2"),
+            MergeToTheTeam(),
+            Report("Done."));
+        var run = CreateRun();
+
+        var result = await RunAsync(run);
+
+        _client.Requests.Where(r => r.Worker == "b1").ElementAt(2).Messages.Last().Content.ShouldContain("You still have uncommitted changes");
+        ShowOnTeamBranch(run, "Lib/Class1.cs").ShouldContain("Value => 2");
+        result.Workers.Single(w => w.Name == "b1").Merges.ShouldBe(1);
+        (await ReadAsync<RunSummaryRecord>(run, "summary.json")).Gaps.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AReportWithoutASummary_IsSentBack()
+    {
+        ScriptTheContract();
+        _client.Script("b2", _client.Call(SubmitBuild, new { summary = "" }), Report("Nothing needed."));
+        var run = CreateRun();
+
+        await RunAsync(run);
+
+        _client.Requests.Where(r => r.Worker == "b2").ElementAt(1).Messages.Last().Content.ShouldContain("needs a summary");
+        (await ReadAsync<BuildRecord>(run, "build/b2.json")).Summary.ShouldBe("Nothing needed.");
+    }
+
+    [Fact]
+    public async Task OwnersWorktrees_AreCheckedAgainstTheDisk_BeforeAnyIsMade()
+    {
+        var checks = 0;
+        ScriptTheContract();
+        var run = CreateRun(o => o with
+        {
+            // Room for the worktrees the run starts with (the first check); none for the owners (the second).
+            FreeDiskSpace = _ => Interlocked.Increment(ref checks) == 1 ? long.MaxValue / 2 : 0,
+        });
+
+        var error = await Should.ThrowAsync<UltraTeamDiskSpaceException>(() => RunAsync(run));
+
+        error.Message.ShouldContain("2 worktree(s) need about");
+        error.Message.ShouldContain("the owners' worktrees");
+        _client.Requests.ShouldNotContain(r => r.Worker.StartsWith('b'));
+        Branches(run).ShouldBeEmpty();
+        WorktreeCount().ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ARunWhoseTokensAreSpentAfterTheDesign_DoesNotStartTheOwners()
+    {
+        _client.Script("lead", NoSurveyors());
+        var run = CreateRun(o => o with { MaxTokens = 220 }); // the lead's request and the designer's
+
+        var result = await RunAsync(run);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.BudgetSpent);
+        _client.Requests.ShouldNotContain(r => r.Worker.StartsWith('b'));
+        (await ReadAsync<RunSummaryRecord>(run, "summary.json")).Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design"]);
+    }
+
+    [Fact]
+    public async Task ACancelledRun_DuringTheBuild_RemovesEveryWorktree_AndKeepsWhatWasCommitted()
+    {
+        ScriptTheContract();
+        _client.Script("b1", EditFile("Lib/Class1.cs", Class1Returning2), Commit("Class1 returns 2"));
+        var run = CreateRun();
+        using var cancel = new CancellationTokenSource();
+        run.Changed += () =>
+        {
+            if (run.Workers.Any(w => w.Name == "b1" && w.Steps >= 2))
+            {
+                cancel.Cancel();
+            }
+        };
+
+        var result = await RunAsync(run, cancel.Token);
+
+        result.EndReason.ShouldBe(UltraTeamEndReason.Cancelled);
+        result.Workers.ShouldAllBe(w => w.Phase != TeamWorkerPhase.Working);
+        WorktreeCount().ShouldBe(1);
+        Directory.Exists(Path.Combine(run.RunDirectory, "b1")).ShouldBeFalse();
+        Directory.Exists(Path.Combine(run.RunDirectory, "b2")).ShouldBeFalse();
+        result.KeptWorkerBranches.ShouldHaveSingleItem().ShouldEndWith("/b1");
+    }
+
     // ---- The run's own limits ----
 
     [Fact]
@@ -770,14 +1086,15 @@ public sealed class UltraPipelineRunTests : IDisposable
                 "Roster - the lead is deciding who the run needs",
                 "Understand - 2 surveyors reading the code",
                 "Design - d1 is planning the build",
+                "Build - 1 owner building their files",
             ]);
         setups.ShouldContain(s => s.StartsWith("Creating workspace - taking a snapshot"));
-        agentCounts.Max().ShouldBe(3);
-        run.MaxWorkers.ShouldBe(3);
+        agentCounts.Max().ShouldBe(4);
+        run.MaxWorkers.ShouldBe(4);
         run.IsAutoScaling.ShouldBeFalse();
         run.Round.ShouldBe(1);
         run.TimeBudget.ShouldBe(TimeSpan.FromMinutes(10));
         run.Elapsed.ShouldBeGreaterThan(TimeSpan.Zero);
-        run.PromptTokens.ShouldBe(400); // the lead's one request, each surveyor's, and the designer's
+        run.PromptTokens.ShouldBe(500); // the lead's one request, each surveyor's, the designer's and the owner's
     }
 }

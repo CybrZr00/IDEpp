@@ -121,6 +121,35 @@ public sealed class PipelineStageToolsTests
         check.Value.Waves.ShouldBe(1);
     }
 
+    [Fact]
+    public void TheBuildReportTool_RequiresOnlyASummary()
+    {
+        var schema = PipelineStageTools.BuildSubmit.ParametersSchema;
+
+        PipelineStageTools.BuildSubmitToolName.ShouldBe("build_submit");
+        schema["required"]!.AsArray().Select(n => n!.GetValue<string>()).ShouldBe(["summary"]);
+        schema["properties"]!["unmet"]!["type"]!.GetValue<string>().ShouldBe("array");
+    }
+
+    [Fact]
+    public void AnOwner_IsGivenToReadEditBuildTestCommitAndMerge_ButNotTheBoardOrTheTeamChannel()
+    {
+        var names = PipelineStageTools.OwnerToolNames;
+
+        names.ShouldContain("edit_file");
+        names.ShouldContain("build_solution");
+        names.ShouldContain("run_tests");
+        names.ShouldContain("run_command"); // offered only when the run allows commands - the dispatcher decides
+        names.ShouldContain("team_commit");
+        names.ShouldContain("team_sync");
+        names.ShouldContain("team_merge");
+        names.ShouldNotContain("team_post");
+        names.ShouldNotContain("team_dm");
+        names.ShouldNotContain("board_write");
+        names.ShouldNotContain("board_read");
+        names.ShouldNotContain("team_done");
+    }
+
     private static string[] Required(JsonNode schema, string list) =>
         schema["properties"]![list]!["items"]!["required"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
 }

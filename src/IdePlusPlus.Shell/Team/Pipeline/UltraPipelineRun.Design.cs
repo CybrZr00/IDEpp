@@ -98,10 +98,12 @@ public sealed partial class UltraPipelineRun
         await RecordAsync("ownership.json", OwnershipRecord.From(_ownership), cancellationToken);
         await RecordAsync("design.json", new DesignRecord(plan, design.ContractCommit), cancellationToken);
 
-        // What the readers see from here on includes the contract.
+        // What the readers see from here on includes the contract; and a worktree that has built is the real
+        // size the owners' will grow to, which replaces the guess the disk check has been using.
         if (design.ContractCommit is { } contract)
         {
             await workspace.MoveDetachedAsync(readOnly, contract, cancellationToken);
+            workspace.RememberBuiltWorktree(worktree.Path);
         }
 
         var stubs = plan.Files.Count(f => f.IsStub);
