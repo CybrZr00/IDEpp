@@ -19,7 +19,7 @@ namespace IdePlusPlus.Shell.Tests;
 ///
 /// A designer with no script of its own hands in the plainest design (one owner, one file, no stubs) and an
 /// owner with none reports at once that it has nothing to change, so a test about another stage need not
-/// script either.
+/// script either. The gate is a stand-in that passes at once - a real one builds and formats - unless a test is about it.
 /// </summary>
 public sealed partial class UltraPipelineRunTests : IDisposable
 {
@@ -62,8 +62,18 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         };
         return new UltraPipelineRun(
             _client, "chat-model", configure?.Invoke(options) ?? options, _repo.ReadOnlyTools, new GitService(), _repo.TeamGit,
-            TimeProvider.System, UltraRoot, runCommand);
+            TimeProvider.System, UltraRoot, runCommand)
+        {
+            GateRunner = _realGate ? null : GateOverride ?? ((request, _) => Task.FromResult(PassingGate(request.Commit))),
+        };
     }
+
+    /// <summary>What a test sets to make the gate say something other than "pass"; null leaves the stand-in that passes.</summary>
+    private Func<GateRequest, CancellationToken, Task<GateResult>>? GateOverride { get; set; }
+
+    private static GateResult PassingGate(string commit) => new(
+        commit, true, "Build succeeded (Debug). 0 error(s), 0 warning(s).", [], TestsRan: false, 0, 0, 0, [],
+        "no tests in this stand-in", GateConformity.NotRun("not run in this stand-in"));
 
     private Task<UltraTeamResult> RunAsync(
         UltraPipelineRun run, CancellationToken cancellationToken = default, IReadOnlyList<string>? backlog = null) =>
@@ -183,7 +193,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         var summary = await ReadAsync<RunSummaryRecord>(run, "summary.json");
         summary.EndReason.ShouldBe("AllDone");
         summary.Gaps.ShouldBeEmpty();
-        summary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design", "Build"]);
+        summary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design", "Build", "Gate"]);
         summary.Stages[1].Agents.Select(a => (a.Name, a.End)).ShouldBe([("u1", "Submitted"), ("u2", "Submitted")]);
         summary.PromptTokens.ShouldBe(700);
 
@@ -264,6 +274,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
                 ("Understand", "skipped: no surveyors: the designer surveys for itself"),
                 ("Design", "no stubs, so no contract commit; 1 owner(s)"),
                 ("Build", "0 merge(s) from 1 owner(s)"),
+                ("Gate", "builds; tests not run (no tests in this stand-in); conformity not run"),
             ]);
         (await ReadAsync<RosterRecord>(run, "roster.json")).Rationale.ShouldBe("One file.");
     }
@@ -1087,6 +1098,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
                 "Understand - 2 surveyors reading the code",
                 "Design - d1 is planning the build",
                 "Build - 1 owner building their files",
+                "Gate - building and testing what the owners merged",
             ]);
         setups.ShouldContain(s => s.StartsWith("Creating workspace - taking a snapshot"));
         agentCounts.Max().ShouldBe(4);

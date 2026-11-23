@@ -20,9 +20,10 @@ namespace IdePlusPlus.Shell.Team.Pipeline;
 ///
 /// Stages so far: Setup (snapshot and branch), Roster (the orchestrator), Understand (surveyors), Design
 /// (the designer, whose interface stubs are checked and landed as the contract), Build (the owners, each
-/// in its own worktree, merging its files to the team branch) and Finalize (records and result). The
-/// judge and repair loop is added next; until then a run that gets through the stages it has ends
-/// <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in its own part of this class.
+/// in its own worktree, merging its files to the team branch), Gate (the deterministic build, tests and
+/// conformity check) and Finalize (records and result). The judges and the repair loop are added next;
+/// until then a run whose gate passes ends <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in
+/// its own part of this class.
 ///
 /// Like the team run it always cleans up - worktrees, links, branches that hold nothing - and a user's
 /// cancellation ends the run with <see cref="UltraTeamEndReason.Cancelled"/> and a result, not an exception.
@@ -59,6 +60,18 @@ public sealed partial class UltraPipelineRun : IUltraRun
 
     /// <summary>The orchestrator, once the run is under way: decides an appeal when an owner makes one.</summary>
     private PipelineConductor? _conductor;
+
+    /// <summary>The deterministic gate, once the workspace is open. It also does the check before the run starts.</summary>
+    private PipelineGate? _gate;
+
+    private volatile bool _checkingBuild;
+
+    /// <summary>What the gate is asked instead of the real one - a test's stand-in, so a test about another stage does not wait
+    /// for a build and a format. Null runs the real gate.</summary>
+    internal Func<GateRequest, CancellationToken, Task<GateResult>>? GateRunner { get; init; }
+
+    /// <summary>The <c>dotnet</c> runner the gate's conformity check uses instead of a real process - a test's. Null runs a real one.</summary>
+    internal Func<IReadOnlyList<string>, string, CancellationToken, Task<DotnetRunResult>>? ConformityRunner { get; init; }
 
     private readonly object _lock = new();
     private readonly List<TeamWorkerState> _agents = [];
@@ -179,7 +192,7 @@ public sealed partial class UltraPipelineRun : IUltraRun
 
     public string? SetupStatus => _setupStatus;
 
-    public bool IsCheckingBuild => false;
+    public bool IsCheckingBuild => _checkingBuild;
 
     public bool IsAwaitingContinue => false;
 
@@ -223,6 +236,7 @@ public sealed partial class UltraPipelineRun : IUltraRun
         // working tree or the disk is short.
         await workspace.OpenAsync(startFrom, InitialWorktrees, cancellationToken);
         _phases = new PipelineArtifactStore(workspace.PhasesDirectory);
+        _gate = new PipelineGate(workspace, _buildSlots, _options.Configuration, ConformityRunner);
 
         IReadOnlyList<string> keptBranches = [];
         var endReason = UltraTeamEndReason.Cancelled;
@@ -233,6 +247,15 @@ public sealed partial class UltraPipelineRun : IUltraRun
                 SetSetup("Creating workspace - checking out the read-only copy the agents read");
                 var readOnly = await workspace.AddDetachedWorktreeAsync(
                     RunWorkspace.ReadOnlyFolderName, workspace.Start, linkDependencies: true, cancellationToken);
+
+                // One build before any model is called: the user is given the build's own report, not a team that could not
+                // merge anything. The checkout it builds in is the gate's, and a built one is the real size the disk check
+                // has been guessing at.
+                if (_options.PreflightBuild)
+                {
+                    await PreflightBuildAsync(workspace, cancellationToken);
+                }
+
                 SetSetup(null);
 
                 endReason = await RunStagesAsync(goal, ApprovedPlan(backlog), workspace, readOnly, cancellationToken);
@@ -254,7 +277,7 @@ public sealed partial class UltraPipelineRun : IUltraRun
                 SetSetup(null);
             }
         }
-        catch (UltraTeamDiskSpaceException)
+        catch (Exception ex) when (ex is UltraTeamDiskSpaceException or UltraTeamPreflightException)
         {
             // Nothing was done, so nothing is kept: the team branch only marks where it would have started.
             await workspace.DiscardTeamBranchAsync();
@@ -309,7 +332,15 @@ public sealed partial class UltraPipelineRun : IUltraRun
         }
 
         await BuildStageAsync(goal, approvedPlan, workspace, readOnly, cancellationToken);
-        return Spent() ?? UltraTeamEndReason.AllDone;
+        if (Spent() is { } afterBuild)
+        {
+            return afterBuild;
+        }
+
+        // The gate's word is final for what it checks. Until the repair loop exists nothing can mend a red one, which is a loop
+        // that ended without a pass.
+        var gate = await GateStageAsync(workspace, round: 1, cancellationToken);
+        return gate.Ok ? Spent() ?? UltraTeamEndReason.AllDone : UltraTeamEndReason.LoopCapReached;
     }
 
     /// <summary>Why the run cannot start another stage, or null while it has time and tokens left.</summary>
