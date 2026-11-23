@@ -237,7 +237,7 @@ public sealed class UltraPipelineSettingsTests : IDisposable
         CopilotChatPaneViewModel.ReadUltraPipelineSeverityThreshold(settings).ShouldBe(TeamFindingSeverity.Medium);
         settings.Get(CopilotChatPaneViewModel.UltraPipelineMaxLoopsSettingKey).ShouldBe("8");
         settings.Get(CopilotChatPaneViewModel.UltraStrategySettingKey).ShouldBe("Team");
-        viewModel.StatusMessage.ShouldNotContain("pipeline:"); // the team is what is saved, so it is what is said
+        viewModel.StatusMessage.ShouldNotBeNull().ShouldNotContain("pipeline:"); // the team is what is saved, so it is what is said
     }
 
     [Fact]
@@ -251,7 +251,7 @@ public sealed class UltraPipelineSettingsTests : IDisposable
 
         viewModel.SaveUltraSettingsCommand.Execute(null);
 
-        viewModel.StatusMessage.ShouldContain("Nothing was saved.");
+        viewModel.StatusMessage.ShouldNotBeNull().ShouldContain("Nothing was saved.");
         settings.Get(CopilotChatPaneViewModel.UltraStrategySettingKey).ShouldBeNull();
         settings.Get(CopilotChatPaneViewModel.UltraPipelineMaxLoopsSettingKey).ShouldBeNull();
     }

@@ -89,7 +89,7 @@ public sealed class PipelineRecordsTests : IDisposable
         readSurvey.Submitted.ShouldBeTrue();
         var readMissing = (await store.ReadJsonAsync<SurveyRecord>("survey/u2.json")).Value!;
         readMissing.Report.ShouldBeNull();
-        readMissing.Gap.ShouldContain("survey_submit");
+        readMissing.Gap.ShouldNotBeNull().ShouldContain("survey_submit");
         var readSummary = (await store.ReadJsonAsync<RunSummaryRecord>("summary.json")).Value!;
         readSummary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand"]);
         readSummary.Stages[1].Agents.ShouldHaveSingleItem().End.ShouldBe("Submitted");
@@ -158,7 +158,7 @@ public sealed class PipelineRecordsTests : IDisposable
         var readSilent = (await store.ReadJsonAsync<BuildRecord>("build/b2.json")).Value!;
         readSilent.Submitted.ShouldBeFalse();
         readSilent.Summary.ShouldBeNull();
-        readSilent.Gap.ShouldContain("build_submit");
+        readSilent.Gap.ShouldNotBeNull().ShouldContain("build_submit");
     }
 
     [Fact]
