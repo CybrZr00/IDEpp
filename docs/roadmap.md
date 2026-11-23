@@ -57,7 +57,20 @@ Shell UX). Every item below is grounded in an actual file, not generic IDE advic
       fixes → findings cannot spiral. Builder parallelism is forced from three sides: the plan's
       first-wave width is checked against the builder count, idle builders are nudged to split the
       oldest claim, and TASKs carry a lane tag. Presets Speed (builders only, the default and today's
-      behaviour), Balanced and Hardening. See [ultra-roles-design.md](ultra-roles-design.md).
+      behaviour), Balanced and Hardening. See [ultra-roles-design.md](ultra-roles-design.md). *Status: the role
+      types, settings, review queue and dispatcher scope enforcement exist and are tested, but `UltraTeamRun` does not
+      use them yet - a run of the team is still N equal workers.*
+- [x] Ultra pipeline — a second Ultra strategy, chosen under Settings, Ultra team, Strategy (the team stays the
+      default). It runs in phases instead of on a shared backlog: surveyors read the code, a designer fixes the
+      contract (compilable interface stubs) and gives every file exactly one owner, the owners build in parallel
+      worktrees - asking each other for changes to files they do not own through enforced change requests - and then
+      a bounded loop checks the result: a deterministic gate (build, tests, conformity), four judges (gaps and flaws,
+      maintainability, security and what-ifs, runtime bugs - which may write failing tests as evidence) plus any the lead
+      adds for the goal, and a repair by the owners who wrote the files. A finding has to quote the code it is about,
+      or it is set aside as unverified; a round passes when the gate is green and nothing at or above the severity bar
+      is open; a run that cannot pass stops at its cap or when it is not making progress and **reports what is still
+      open with its evidence and a list of suggested next prompts**, rather than failing silently. Records of every
+      stage are written under the run's `_phases` folder. See [ultra-pipeline-design.md](ultra-pipeline-design.md).
 - [x] Plan Mode (Part 1.2) — `propose_plan` tool gates `propose_edit` behind an approved checklist.
 - [x] Git integration MVP (Part 1.1) — new `IdePlusPlus.SourceControl` project (shells to `git.exe`),
       status/stage/commit/push/pull/fetch/branch-switch, a Git tool pane reusing the existing

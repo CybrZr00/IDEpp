@@ -151,7 +151,7 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
 
     /// <summary>Long enough for a cold build of a large solution, short enough that a wedged one
     /// doesn't hold the conversation open indefinitely.</summary>
-    private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(5);
+    private static TimeSpan BuildTimeout => IdePlusPlus.Shell.Team.TeamBuildTimeout.Current;
 
     /// <summary>Longer than the build timeout: a whole-solution run legitimately takes minutes, and
     /// killing a nearly-finished suite wastes more than it saves.</summary>

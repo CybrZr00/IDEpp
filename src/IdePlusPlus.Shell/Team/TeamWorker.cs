@@ -36,6 +36,7 @@ public sealed class TeamWorkerState(string name, TimeProvider? time = null)
     private volatile string? _currentClaim;
     private volatile string? _lastTool;
     private volatile string? _doneSummary;
+    private volatile string? _blockedOn;
     private volatile string? _lastGoodCommit;
     private volatile int _phase = (int)TeamWorkerPhase.Waiting;
     private int _steps;
@@ -76,6 +77,27 @@ public sealed class TeamWorkerState(string name, TimeProvider? time = null)
 
     public bool IsDone => Phase == TeamWorkerPhase.Done;
 
+    /// <summary>
+    /// What the worker is waiting on - for the pipeline, "CR3 from b2" while it is inside await_change
+    /// - or null when it is not blocked on another agent. A worker is only "stepping" when it starts a
+    /// tool, so one waiting ten minutes for an owner's answer would otherwise look as if it had gone
+    /// quiet (see <see cref="IsActive"/>). Set from the worker's own flow, through <see cref="BlockOn"/>.
+    /// </summary>
+    public string? BlockedOn { get => _blockedOn; private set => _blockedOn = value; }
+
+    /// <summary>Marks the worker blocked on <paramref name="what"/> until the returned scope is
+    /// disposed, so a wait that throws or is cancelled can't leave it looking blocked for good.</summary>
+    public IDisposable BlockOn(string what)
+    {
+        BlockedOn = what;
+        return new BlockedScope(this);
+    }
+
+    private sealed class BlockedScope(TeamWorkerState state) : IDisposable
+    {
+        public void Dispose() => state.BlockedOn = null;
+    }
+
     /// <summary>When the worker last called a tool, or null before its first step.</summary>
     public DateTimeOffset? LastStepAt =>
         Volatile.Read(ref _lastStepTicks) is var ticks and > 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
@@ -86,10 +108,13 @@ public sealed class TeamWorkerState(string name, TimeProvider? time = null)
     /// does not count is one that finished, stopped, or has not been heard from for that long. This, not the
     /// age of its claim, is what says whether it can be taken over from: a claim lapses on a timer
     /// whether or not its worker is still at it, and a worker waiting on a prerequisite let its claim lapse
-    /// while a peer, reading that as "stalled", redid its work.
+    /// while a peer, reading that as "stalled", redid its work. A worker blocked on another agent
+    /// (<see cref="BlockedOn"/>) counts for as long as it is blocked: it is waiting by design, and its
+    /// last step is the one that started the wait.
     /// </summary>
     public bool IsActive(TimeSpan within) =>
-        Phase == TeamWorkerPhase.Working && (LastStepAt is not { } last || _time.GetUtcNow() - last < within);
+        Phase == TeamWorkerPhase.Working
+        && (BlockedOn is not null || LastStepAt is not { } last || _time.GetUtcNow() - last < within);
 
     internal void RecordStep(string tool)
     {

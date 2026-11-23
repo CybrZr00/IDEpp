@@ -8,6 +8,7 @@ using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Anthropic;
 using IdePlusPlus.Copilot.DeepSeek;
 using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.Copilot.Core.Team.Pipeline;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.LmStudio;
@@ -19,6 +20,7 @@ using IdePlusPlus.Infrastructure;
 using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Publish;
 using IdePlusPlus.Roslyn;
+using IdePlusPlus.Shell.Team;
 using IdePlusPlus.Shell.ToolPanes;
 using IdePlusPlus.SourceControl;
 using IdePlusPlus.Templates;
@@ -126,6 +128,63 @@ public sealed class CopilotChatUltraTests : IDisposable
         // Proposed, not applied: the user's file is unchanged until they accept.
         File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
         _http.FirstRequestBody.ShouldContain("You are w1, one of 1 equal workers");
+    });
+
+    [Fact]
+    public void APipelineMessage_RunsThePipelineNotTheTeam_AndTheResultAndTheCardSaySoAndCarryTheReport() => RunOnUiThread(async () =>
+    {
+        // One agent at a time until the judges, who run together and all say the same: so the Nth request can be scripted.
+        string[] script =
+        [
+            ToolCall(PipelineLeadTools.SubmitRosterToolName, new { surveyors = Array.Empty<object>() }),
+            ToolCall(PipelineStageTools.DesignSubmitToolName, new
+            {
+                summary = "Change the value in Class1.",
+                owners = new[] { "b1" },
+                files = new[] { new { path = "Lib/Class1.cs", owner = "b1", purpose = "Holds the value.", acceptance = new[] { "Value is 2." } } },
+            }),
+            ToolCall(TeamTools.EditFileToolName, new
+            {
+                file = "Lib/Class1.cs", mode = "replace_text",
+                old_text = "public int Value => 1;", new_text = "public int Value => 2;",
+            }),
+            ToolCall(TeamTools.CommitToolName, new { message = "Value is 2" }),
+            ToolCall(TeamTools.MergeToolName, new { }),
+            ToolCall(PipelineStageTools.BuildSubmitToolName, new { summary = "Class1.Value returns 2." }),
+        ];
+        _http.Script = n => n <= script.Length
+            ? script[n - 1]
+            : ToolCall(PipelineStageTools.VerdictSubmitToolName, new { verdict = "pass", summary = "Nothing found." });
+        var viewModel = CreateViewModel(
+            workers: 1, configure: settings => settings.Set(CopilotChatPaneViewModel.UltraStrategySettingKey, nameof(UltraStrategy.Pipeline)));
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        viewModel.IsStreaming.ShouldBeFalse();
+        var card = viewModel.Messages.OfType<TeamRunViewModel>().ShouldHaveSingleItem();
+        card.IsRunning.ShouldBeFalse();
+        card.Header.ShouldStartWith("⚡ Ultra pipeline - ");
+        card.OutcomeText.ShouldBe("Finished - the gate and every judge passed.");
+        // The pipeline runs once, through its stages: it is given the run-until-done cap, not the short budget of a team round.
+        var timeLeft = System.Text.RegularExpressions.Regex.Match(card.ProgressText, @"(\d+):\d\d left");
+        timeLeft.Success.ShouldBeTrue(card.ProgressText);
+        int.Parse(timeLeft.Groups[1].Value).ShouldBeGreaterThan(400);
+
+        var summary = viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text;
+        summary.ShouldContain("**Ultra pipeline** - finished: the gate and every judge passed.");
+        summary.ShouldContain("Passed: every judge was satisfied after 1 judge round and 0 repair rounds.");
+        summary.ShouldContain("`report.md` in `");
+        summary.ShouldContain("\nAgents:\n");
+        summary.ShouldNotContain("Workers:");
+
+        // Reviewed, not applied, as for the team: the user's file is unchanged until they accept.
+        var proposal = viewModel.Messages.OfType<EditProposalViewModel>().ShouldHaveSingleItem();
+        proposal.FilePath.Replace('\\', '/').ShouldBe("Lib/Class1.cs");
+        File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
+        _http.FirstRequestBody.ShouldContain(PipelineLeadTools.SubmitRosterToolName);
+        _http.FirstRequestBody.ShouldNotContain("You are w1");
     });
 
     [Fact]
@@ -506,6 +565,28 @@ public sealed class CopilotChatUltraTests : IDisposable
         viewModel.Messages.OfType<TeamRunViewModel>().ShouldBeEmpty();
         _http.FirstRequestBody.ShouldBeEmpty("no model should have been called");
         Directory.Exists(Path.Combine(_repo.Root, "ultra")).ShouldBeFalse();
+    });
+
+    [Fact]
+    public void APipelineThatCannotStart_SaysItWasThePipeline_AndThatNoAgentWasStarted() => RunOnUiThread(async () =>
+    {
+        var viewModel = CreateViewModel(
+            workers: 1,
+            configure: settings =>
+            {
+                settings.Set(CopilotChatPaneViewModel.UltraStrategySettingKey, nameof(UltraStrategy.Pipeline));
+                settings.Set(CopilotChatPaneViewModel.UltraWorkFolderSettingKey, @"relative\scratch");
+            });
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+
+        viewModel.InputText = "Make Class1.Value return 2.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        var text = viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text;
+        text.ShouldContain("**Ultra pipeline** - didn't start");
+        text.ShouldContain("needs to be a full path");
+        viewModel.Messages.OfType<TeamRunViewModel>().ShouldBeEmpty();
+        _http.FirstRequestBody.ShouldBeEmpty("no model should have been called");
     });
 
     private CopilotChatPaneViewModel CreateViewModel(

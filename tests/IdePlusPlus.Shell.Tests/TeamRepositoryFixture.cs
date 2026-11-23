@@ -90,7 +90,8 @@ public sealed class TeamRepositoryFixture : IDisposable
         Func<int, CancellationToken, Task<(bool IsError, string Text)>>? waitForChange = null,
         Func<string, string?>? claimGuard = null,
         TeamRole? role = null,
-        Func<CancellationToken, Task<(bool IsError, string Text)>>? nextReview = null)
+        Func<CancellationToken, Task<(bool IsError, string Text)>>? nextReview = null,
+        TeamPipelineHooks? pipeline = null)
     {
         if (!_teamBranchCreated)
         {
@@ -120,7 +121,7 @@ public sealed class TeamRepositoryFixture : IDisposable
         var state = new TeamWorkerState(name);
         var dispatcher = new TeamToolDispatcher(
             context, state, Board, Bus, ReadOnlyTools, new GitService(), TeamGit, buildSlots ?? BuildSlots, "Debug", runCommand,
-            buildTimeout, waitForChange: waitForChange, claimGuard: claimGuard, role: role)
+            buildTimeout, waitForChange: waitForChange, claimGuard: claimGuard, role: role, pipeline: pipeline)
         {
             NextReview = nextReview,
         };

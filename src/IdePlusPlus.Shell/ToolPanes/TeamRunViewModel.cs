@@ -19,7 +19,7 @@ public sealed partial class TeamWorkerRowViewModel(string name) : ObservableObje
 }
 
 /// <summary>
-/// The status card for one Ultra team run: time against the budget, tokens so far, one row per
+/// The status card for one Ultra run (a team, or a pipeline): time against the budget, tokens so far, one row per
 /// worker, the latest board entries and how many merges have landed.
 ///
 /// Polled once a second rather than driven by UltraTeamRun.Changed: that event fires from worker
@@ -30,7 +30,7 @@ public sealed partial class TeamRunViewModel : ObservableObject
 {
     private const int BoardLines = 8;
 
-    private readonly UltraTeamRun _run;
+    private readonly ITeamRunStatus _run;
     private readonly DispatcherTimer _timer;
     private readonly Func<IReadOnlyList<string>, Task>? _discardBranches;
     private IReadOnlyList<string> _keptBranches = [];
@@ -42,7 +42,7 @@ public sealed partial class TeamRunViewModel : ObservableObject
     /// <param name="runUntilDone">The run goes on until done or a cap, with nobody asked between
     /// rounds - said in the header, since the card is where the user looks while it runs.</param>
     public TeamRunViewModel(
-        UltraTeamRun run,
+        ITeamRunStatus run,
         bool isLocalProvider,
         Func<IReadOnlyList<string>, Task>? discardBranches,
         string? startedFrom = null,
@@ -70,10 +70,11 @@ public sealed partial class TeamRunViewModel : ObservableObject
     [ObservableProperty]
     private string header;
 
-    private string ComposeHeader() =>
-        $"⚡ Ultra team - {Workers.Count} worker{(Workers.Count == 1 ? "" : "s")}"
-        + (_run.IsAutoScaling ? $" (auto mode, up to {_run.MaxWorkers})" : "")
-        + _headerSuffix;
+    private string ComposeHeader() => _run.IsPipeline
+        ? $"⚡ Ultra pipeline - {Workers.Count} agent{(Workers.Count == 1 ? "" : "s")} so far" + _headerSuffix
+        : $"⚡ Ultra team - {Workers.Count} worker{(Workers.Count == 1 ? "" : "s")}"
+          + (_run.IsAutoScaling ? $" (auto mode, up to {_run.MaxWorkers})" : "")
+          + _headerSuffix;
 
     public string? LocalProviderWarning { get; }
 
@@ -152,11 +153,14 @@ public sealed partial class TeamRunViewModel : ObservableObject
         IsRunning = false;
         OutcomeText = result.EndReason switch
         {
-            UltraTeamEndReason.AllDone => "Finished - every worker reported done.",
+            UltraTeamEndReason.AllDone => _run.IsPipeline ? "Finished - the gate and every judge passed." : "Finished - every worker reported done.",
             UltraTeamEndReason.TimeUp => "Stopped - the time budget ran out.",
             UltraTeamEndReason.Cancelled => "Stopped.",
             UltraTeamEndReason.Stalled => "Paused and finished - the team had stalled: nothing could merge.",
             UltraTeamEndReason.BudgetSpent => "Stopped - the token budget was spent.",
+            UltraTeamEndReason.LoopCapReached => "Stopped - the judges still had open findings after the last repair round.",
+            UltraTeamEndReason.NoProgress => "Stopped - repairs were no longer reducing the open findings.",
+            UltraTeamEndReason.WorkersStopped when _run.IsPipeline => "Stopped - an agent stopped without handing in what the next stage needed.",
             _ => "Stopped - no worker was still making progress.",
         };
         _keptBranches = [.. result.TeamBranchKept ? [result.TeamBranch] : Array.Empty<string>(), .. result.KeptWorkerBranches];
@@ -201,6 +205,7 @@ public sealed partial class TeamRunViewModel : ObservableObject
             ? $"{Clock(_run.Elapsed)} elapsed, waiting for you"
             : $"{Clock(_run.Elapsed)} elapsed, {Clock(_run.TimeLeft < TimeSpan.Zero ? TimeSpan.Zero : _run.TimeLeft)} left";
         ProgressText = (_run.Round > 1 ? $"Round {_run.Round}  ·  " : "")
+                       + (_run.StageText is { } stage ? $"{stage}  ·  " : "")
                        + $"{time}  ·  "
                        + (_run.IsWrappingUp ? "every planned task merged, wrapping up  ·  " : "")
                        + $"{merges} merge{(merges == 1 ? "" : "s")}  ·  "
@@ -227,11 +232,12 @@ public sealed partial class TeamRunViewModel : ObservableObject
             Workers[i].Status = state.Phase switch
             {
                 TeamWorkerPhase.Waiting => "waiting to start",
-                TeamWorkerPhase.Done => $"done - {state.DoneSummary}",
+                TeamWorkerPhase.Done => string.IsNullOrWhiteSpace(state.DoneSummary) ? "done" : $"done - {state.DoneSummary}",
                 TeamWorkerPhase.Stopped => state.LastTool is { } last && last.StartsWith("error:", StringComparison.Ordinal)
                     ? $"stopped ({last})"
                     : "stopped",
-                _ => $"cycle {state.Cycles}, {state.Steps} steps" + (state.LastTool is { } tool ? $", last: {tool}" : ""),
+                _ => (_run.IsPipeline ? $"{state.Steps} steps" : $"cycle {state.Cycles}, {state.Steps} steps")
+                     + (state.LastTool is { } tool ? $", last: {tool}" : ""),
             };
             Workers[i].Claim = state.CurrentClaim;
         }
