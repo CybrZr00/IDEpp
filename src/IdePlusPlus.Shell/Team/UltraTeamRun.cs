@@ -420,6 +420,10 @@ public sealed class UltraTeamRun : IUltraRun
     /// <summary>The team has no stages.</summary>
     public string? StageText => null;
 
+    public bool IsPipeline => false;
+
+    public string? RecordsDirectory => null;
+
     /// <summary>True while the run's preflight build is going, before any worker starts.</summary>
     public bool IsCheckingBuild { get; private set; }
 

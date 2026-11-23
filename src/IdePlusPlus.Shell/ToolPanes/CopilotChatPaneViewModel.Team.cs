@@ -7,6 +7,7 @@ using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Diff;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Shell.Team;
+using IdePlusPlus.Shell.Team.Pipeline;
 using IdePlusPlus.SourceControl;
 using Serilog;
 
@@ -481,7 +482,9 @@ public sealed partial class CopilotChatPaneViewModel
         IReadOnlyList<string>? backlog = null)
     {
         string? fallbackReason = null;
-        var turn = BeginTurn("Starting the Ultra team...");
+        var pipelineChosen = ReadUltraStrategy(_appSettingsStore) == UltraStrategy.Pipeline;
+        var strategyName = pipelineChosen ? "Ultra pipeline" : "Ultra team";
+        var turn = BeginTurn(pipelineChosen ? "Starting the Ultra pipeline..." : "Starting the Ultra team...");
         TeamRunViewModel? card = null;
         try
         {
@@ -511,7 +514,7 @@ public sealed partial class CopilotChatPaneViewModel
                 if (chosenWorkFolder is not null
                     && ValidateUltraWorkFolder(chosenWorkFolder, repositoryRoot) is { } workFolderProblem)
                 {
-                    assistantMessage.Text = $"**Ultra team** - didn't start. {workFolderProblem} Change it under Settings, "
+                    assistantMessage.Text = $"**{strategyName}** - didn't start. {workFolderProblem} Change it under Settings, "
                                             + "Ultra team, or clear it to use the default. Nothing was started or spent.";
                     return;
                 }
@@ -532,7 +535,7 @@ public sealed partial class CopilotChatPaneViewModel
                             UltraStartFrom = later.Branch;
                             break;
                         case UltraStartChoice.Cancel:
-                            assistantMessage.Text = $"**Ultra team** - not started. `{later.Branch}` already carries on from "
+                            assistantMessage.Text = $"**{strategyName}** - not started. `{later.Branch}` already carries on from "
                                                     + $"`{startFrom}`. Choose under Start from, then send again.";
                             return;
                     }
@@ -541,17 +544,19 @@ public sealed partial class CopilotChatPaneViewModel
                 // Until done, the caps are the only limits: one round as long as the time cap, and
                 // nobody asked to continue - a stall or a spent budget ends the run instead.
                 var runUntilDone = IsUltraRunUntilDone;
+                // The pipeline runs once, through its stages, and nobody is asked at the end of a round: the caps are its only limits too.
+                var capped = runUntilDone || pipelineChosen;
                 var worker = ResolveRole(ReadSubAgentProvider(_appSettingsStore), ReadSubAgentModel(_appSettingsStore));
                 var lead = ResolveRole(ReadUltraOrchestratorProvider(_appSettingsStore), ReadUltraOrchestratorModel(_appSettingsStore));
                 var options = new UltraTeamOptions(
                     ReadUltraWorkerCount(_appSettingsStore),
-                    TimeSpan.FromMinutes(runUntilDone ? ReadUltraMaxRunMinutes(_appSettingsStore) : ReadUltraTimeBudgetMinutes(_appSettingsStore)),
+                    TimeSpan.FromMinutes(capped ? ReadUltraMaxRunMinutes(_appSettingsStore) : ReadUltraTimeBudgetMinutes(_appSettingsStore)),
                     AreShellCommandsEnabled,
                     _currentConfiguration?.Invoke() ?? "Debug",
                     ChatEffort.Ultra)
                 {
                     MaxConcurrentModelRequests = ReadUltraConcurrentRequests(_appSettingsStore),
-                    MaxTokens = runUntilDone ? ReadUltraMaxTokensMillions(_appSettingsStore) * 1_000_000L : 0,
+                    MaxTokens = capped ? ReadUltraMaxTokensMillions(_appSettingsStore) * 1_000_000L : 0,
                     AutoScale = ReadUltraAutoScale(_appSettingsStore),
                     InitialWorkerCount = ReadUltraStartWorkers(_appSettingsStore),
                     Orchestrated = ReadUltraOrchestrated(_appSettingsStore),
@@ -561,11 +566,20 @@ public sealed partial class CopilotChatPaneViewModel
                     OrchestratorClient = lead.Client,
                     OrchestratorModel = lead.Model,
                     OrchestratorEffort = ReadUltraOrchestratorEffort(_appSettingsStore),
+                    PipelineMaxLoops = ReadUltraPipelineMaxLoops(_appSettingsStore),
+                    PipelineSeverityThreshold = ReadUltraPipelineSeverityThreshold(_appSettingsStore),
+                    PipelineMaxUnderstand = ReadUltraPipelineMaxUnderstand(_appSettingsStore),
+                    PipelineMaxOwners = ReadUltraPipelineMaxOwners(_appSettingsStore),
+                    PipelineMaxCustomJudges = ReadUltraPipelineMaxCustomJudges(_appSettingsStore),
                 };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();
                 TeamRunViewModel? runCard = null;
-                var run = new UltraTeamRun(
+                IUltraRun run = pipelineChosen
+                    ? new UltraPipelineRun(
+                        client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit, TimeProvider.System, workFolder,
+                        (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct))
+                    : new UltraTeamRun(
                     client, SelectedModel, options, _readOnlyToolDispatcher, _gitService, _teamGit,
                     TimeProvider.System, workFolder,
                     (command, reason, directory, ct) => RunTeamShellCommandAsync(command, reason, directory, teamApprovals, ct),
@@ -583,12 +597,16 @@ public sealed partial class CopilotChatPaneViewModel
                     }).Task.Unwrap());
 
                 card = new TeamRunViewModel(
-                    run, worker.Provider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom, runUntilDone);
+                    run, worker.Provider == ProviderLmStudio, branches => DeleteRunBranchesAsync(repositoryRoot, branches), startFrom, capped);
                 runCard = card;
                 teamApprovals.AllowAllGranted = () => runCard.ShellNote = "Shell: every command allowed for this run.";
                 Messages.Insert(Messages.IndexOf(assistantMessage), card);
-                CurrentActivity = $"Ultra team starting - creating its workspace first, then {(options.AutoScale ? $"{run.Workers.Count} workers, growing to {run.MaxWorkers} if they ask" : $"{options.WorkerCount} workers")} "
-                                  + $"for up to {options.TimeBudget.TotalMinutes:0} min (progress is on the team card)...";
+                CurrentActivity = pipelineChosen
+                    ? $"Ultra pipeline starting - creating its workspace first, then up to {options.PipelineMaxUnderstand} surveyors, a designer, "
+                      + $"up to {options.PipelineMaxOwners} owners and its judges, for up to {options.TimeBudget.TotalMinutes:0} min "
+                      + "(progress is on the card)..."
+                    : $"Ultra team starting - creating its workspace first, then {(options.AutoScale ? $"{run.Workers.Count} workers, growing to {run.MaxWorkers} if they ask" : $"{options.WorkerCount} workers")} "
+                      + $"for up to {options.TimeBudget.TotalMinutes:0} min (progress is on the team card)...";
 
                 var solutionPath = _solutionPath;
                 var testProjects = _testProjectPaths;
@@ -648,13 +666,13 @@ public sealed partial class CopilotChatPaneViewModel
         catch (UltraTeamPreflightException ex)
         {
             card?.Abandon("Didn't start - the solution doesn't build.");
-            assistantMessage.Text = $"**Ultra team** - didn't start. {ex.Message} No workers were started and "
+            assistantMessage.Text = $"**{strategyName}** - didn't start. {ex.Message} No {(pipelineChosen ? "agents" : "workers")} were started and "
                                     + $"nothing was spent on them.{DescribeWhyTheCopyMayNotBuild(ex)}\n\n```\n{ex.Report}\n```";
         }
         catch (UltraTeamDiskSpaceException ex)
         {
             card?.Abandon("Didn't start - not enough disk space.");
-            assistantMessage.Text = $"**Ultra team** - didn't start. {ex.Message} No workers were started and nothing "
+            assistantMessage.Text = $"**{strategyName}** - didn't start. {ex.Message} No {(pipelineChosen ? "agents" : "workers")} were started and nothing "
                                     + "was spent on them.";
         }
         catch (Exception ex)
@@ -826,19 +844,20 @@ public sealed partial class CopilotChatPaneViewModel
         TeamLandResult? landing = null,
         string? notLandedNote = null)
     {
-        var text = new StringBuilder("**Ultra team** - ");
+        var text = new StringBuilder(run.IsPipeline ? "**Ultra pipeline** - " : "**Ultra team** - ");
         text.Append(result.EndReason switch
         {
-            UltraTeamEndReason.AllDone => "finished: every worker reported done.",
+            UltraTeamEndReason.AllDone => run.IsPipeline ? "finished: the gate and every judge passed." : "finished: every worker reported done.",
             UltraTeamEndReason.TimeUp => "stopped: the time budget ran out.",
             UltraTeamEndReason.Cancelled => "stopped.",
             UltraTeamEndReason.Stalled => "stopped: the team had stalled - nothing could merge, and merge builds kept failing.",
             UltraTeamEndReason.BudgetSpent => $"stopped: the token budget ({run.MaxTokens:N0}) was spent.",
             UltraTeamEndReason.LoopCapReached => "stopped: the judges still had open findings after the last repair round.",
             UltraTeamEndReason.NoProgress => "stopped: repairs were no longer reducing the open findings.",
+            UltraTeamEndReason.WorkersStopped when run.IsPipeline => "stopped: an agent stopped without handing in what the next stage needed.",
             _ => "stopped: no worker was still making progress.",
         });
-        text.Append($" {result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min"
+        text.Append($" {result.Workers.Count} {(run.IsPipeline ? (result.Workers.Count == 1 ? "agent" : "agents") : "workers")}, {(int)run.Elapsed.TotalMinutes} min"
                     + (run.Round > 1 ? $" over {run.Round} rounds" : "")
                     + $", {result.PromptTokens + result.CompletionTokens:N0} tokens"
                     + (run.CachedPromptTokens > 0 && result.PromptTokens > 0
@@ -880,6 +899,16 @@ public sealed partial class CopilotChatPaneViewModel
             text.Append($"Everything the team merged is on branch `{result.TeamBranch}` until you delete it.\n");
         }
 
+        if (result.Pipeline is { } report)
+        {
+            // What the judges found and what is still open - with the evidence, since the user will act on it - and what to ask for next.
+            text.Append('\n').Append(report.ToSummary()).Append("\n\n");
+            if (run.RecordsDirectory is { } records)
+            {
+                text.Append($"The full report, with every finding's evidence, is `report.md` in `{records}`.\n");
+            }
+        }
+
         var summaries = result.Board.Where(e => e.Type == TeamBoardEntryType.PatchSummary).ToList();
         if (summaries.Count > 0)
         {
@@ -917,12 +946,16 @@ public sealed partial class CopilotChatPaneViewModel
                         + "next Ultra message.\n");
         }
 
-        text.Append("\nWorkers:\n");
+        text.Append(run.IsPipeline ? "\nAgents:\n" : "\nWorkers:\n");
         foreach (var worker in result.Workers)
         {
-            text.Append(worker.IsDone
-                ? $"- {worker.Name}: done - {worker.DoneSummary}\n"
-                : $"- {worker.Name}: stopped after {worker.Steps} steps\n");
+            text.Append(run.IsPipeline
+                ? worker.Phase == TeamWorkerPhase.Done
+                    ? $"- {worker.Name}: handed in its work after {worker.Steps} steps\n"
+                    : $"- {worker.Name}: stopped after {worker.Steps} steps\n"
+                : worker.IsDone
+                    ? $"- {worker.Name}: done - {worker.DoneSummary}\n"
+                    : $"- {worker.Name}: stopped after {worker.Steps} steps\n");
         }
 
         return text.ToString().TrimEnd();
@@ -938,9 +971,14 @@ public sealed partial class CopilotChatPaneViewModel
             request = request[..57].TrimEnd() + "...";
         }
 
-        var message = new StringBuilder($"Merge Ultra run {result.RunId}: {request}\n\n");
-        message.Append($"{result.Workers.Count} workers, {(int)run.Elapsed.TotalMinutes} min, "
+        var message = new StringBuilder($"Merge Ultra {(run.IsPipeline ? "pipeline " : "")}run {result.RunId}: {request}\n\n");
+        message.Append($"{result.Workers.Count} {(run.IsPipeline ? (result.Workers.Count == 1 ? "agent" : "agents") : "workers")}, {(int)run.Elapsed.TotalMinutes} min, "
                        + $"{result.PromptTokens + result.CompletionTokens:N0} tokens; ended: {result.EndReason}.\n");
+        if (result.Pipeline is { } report)
+        {
+            message.Append($"{report.Headline}\n");
+        }
+
         message.Append($"Team branch: {result.TeamBranch}\n");
         var summaries = result.Board.Where(e => e.Type == TeamBoardEntryType.PatchSummary).Take(50).ToList();
         if (summaries.Count > 0)

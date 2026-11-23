@@ -51,6 +51,12 @@ public interface ITeamRunStatus
     /// has no stages (the team) or has not reached its first.</summary>
     string? StageText { get; }
 
+    /// <summary>True for the staged pipeline: its card and its words say "pipeline" and "agents", not "team" and "workers".</summary>
+    bool IsPipeline { get; }
+
+    /// <summary>Where the run keeps its records (the pipeline's phases folder, with the report in it), or null for a run that keeps none.</summary>
+    string? RecordsDirectory { get; }
+
     /// <summary>The token budget the run ends at, or 0 for none.</summary>
     long MaxTokens { get; }
 

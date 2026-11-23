@@ -1,5 +1,7 @@
 using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.Copilot.Core.Team.Pipeline;
 using IdePlusPlus.Shell.Team;
+using IdePlusPlus.Shell.Team.Pipeline;
 using IdePlusPlus.Shell.ToolPanes;
 using Shouldly;
 using Xunit;
@@ -15,6 +17,10 @@ public sealed class RunStatusTests
 {
     private sealed class FakeRun : ITeamRunStatus
     {
+        public bool IsPipeline { get; init; }
+
+        public string? RecordsDirectory { get; init; }
+
         public string RunId => "20260101-000000-abcd";
 
         public TeamBoard Board { get; } = new(TimeProvider.System, TimeSpan.FromMinutes(10));
@@ -101,6 +107,150 @@ public sealed class RunStatusTests
 
         staged.ProgressText.ShouldStartWith("Judge, loop 2 of 3  ·  ");
         team.ProgressText.ShouldStartWith("7:00 elapsed");
+    }
+
+    private static PipelineReport OpenReport() => new(
+        Passed: false,
+        EndReason: "LoopCapReached",
+        JudgeRounds: 2,
+        RepairRounds: 1,
+        Threshold: TeamFindingSeverity.Medium,
+        Open:
+        [
+            new ReportFinding(
+                "F1.1", "j1", TeamFindingSeverity.High, "correctness", "Value is wrong", ["Lib/Class1.cs"], "Read the file.", "public int Value => 1;",
+                "Make Value return 2.", FindingStatus.Escalated, 2, null),
+        ],
+        Lower: [],
+        Fixed: 0,
+        Dismissed: 0,
+        Unverified: 0,
+        NextPrompts: ["In Lib/Class1.cs: Value is wrong. Make Value return 2."],
+        Gaps: []);
+
+    // ---- The words for a pipeline run ----
+
+    [Theory]
+    [InlineData(UltraTeamEndReason.AllDone, "finished: the gate and every judge passed.")]
+    [InlineData(UltraTeamEndReason.WorkersStopped, "stopped: an agent stopped without handing in what the next stage needed.")]
+    [InlineData(UltraTeamEndReason.LoopCapReached, "stopped: the judges still had open findings after the last repair round.")]
+    public void ThePipelinesResult_SaysPipeline_AndEndsInItsOwnWords(UltraTeamEndReason reason, string expected)
+    {
+        var text = CopilotChatPaneViewModel.DescribeTeamResult(new FakeRun { IsPipeline = true }, Result(reason), 0, []);
+
+        text.ShouldStartWith($"**Ultra pipeline** - {expected} 1 agent, 7 min");
+        text.ShouldContain("\nAgents:\n");
+        text.ShouldNotContain("Workers:");
+        text.ShouldNotContain("**Ultra team**");
+    }
+
+    [Fact]
+    public void TheTeamsResult_IsUnchanged_SoARunOfTheTeamReadsAsItAlwaysDid()
+    {
+        var text = CopilotChatPaneViewModel.DescribeTeamResult(new FakeRun(), Result(UltraTeamEndReason.AllDone), 0, []);
+
+        text.ShouldStartWith("**Ultra team** - finished: every worker reported done. 1 workers, 7 min");
+        text.ShouldContain("\nWorkers:\n");
+        text.ShouldNotContain("The full report");
+    }
+
+    [Fact]
+    public void ThePipelinesResult_CarriesTheReport_AndSaysWhereTheFullOneIs()
+    {
+        var run = new FakeRun { IsPipeline = true, RecordsDirectory = "C:\\runs\\r1\\_phases" };
+        var result = Result(UltraTeamEndReason.LoopCapReached) with { Pipeline = OpenReport() };
+
+        var text = CopilotChatPaneViewModel.DescribeTeamResult(run, result, 0, []);
+
+        text.ShouldContain("Stopped at its limit of 1 repair round with 1 finding still open.");
+        text.ShouldContain("- [high] Value is wrong (Lib/Class1.cs) - Read the file.");
+        text.ShouldContain("1. In Lib/Class1.cs: Value is wrong. Make Value return 2.");
+        text.ShouldContain("The full report, with every finding's evidence, is `report.md` in `C:\\runs\\r1\\_phases`.");
+    }
+
+    [Fact]
+    public void ARunThatLeftNoReport_SaysNothingOfOne()
+    {
+        var text = CopilotChatPaneViewModel.DescribeTeamResult(new FakeRun { IsPipeline = true }, Result(UltraTeamEndReason.WorkersStopped), 0, []);
+
+        text.ShouldNotContain("report.md");
+        text.ShouldNotContain("Suggested next prompts");
+    }
+
+    [Fact]
+    public void ThePipelinesAgents_AreListedAsHavingHandedInTheirWork_OrAsStopped()
+    {
+        var done = new TeamWorkerState("b1");
+        done.Phase = TeamWorkerPhase.Done;
+        var stopped = new TeamWorkerState("b2");
+        stopped.Phase = TeamWorkerPhase.Stopped;
+        var result = Result(UltraTeamEndReason.WorkersStopped) with { Workers = [done, stopped] };
+
+        var text = CopilotChatPaneViewModel.DescribeTeamResult(new FakeRun { IsPipeline = true, Workers = [done, stopped] }, result, 0, []);
+
+        text.ShouldContain("- b1: handed in its work after 0 steps");
+        text.ShouldContain("- b2: stopped after 0 steps");
+    }
+
+    [Fact]
+    public void ThePipelinesCard_SaysPipeline_AndFinishesInItsOwnWords()
+    {
+        var pipeline = new TeamRunViewModel(new FakeRun { IsPipeline = true }, isLocalProvider: false, discardBranches: null);
+        var team = new TeamRunViewModel(new FakeRun(), isLocalProvider: false, discardBranches: null);
+
+        pipeline.Header.ShouldBe("⚡ Ultra pipeline - 1 agent so far");
+        team.Header.ShouldBe("⚡ Ultra team - 1 worker");
+
+        pipeline.Finish(Result(UltraTeamEndReason.AllDone));
+        pipeline.OutcomeText.ShouldBe("Finished - the gate and every judge passed.");
+        var stopped = new TeamRunViewModel(new FakeRun { IsPipeline = true }, isLocalProvider: false, discardBranches: null);
+        stopped.Finish(Result(UltraTeamEndReason.WorkersStopped));
+        stopped.OutcomeText.ShouldBe("Stopped - an agent stopped without handing in what the next stage needed.");
+    }
+
+    [Fact]
+    public void AnAgentWithNothingToSay_IsShownAsDone_NotAsDoneDash()
+    {
+        var agent = new TeamWorkerState("u1");
+        agent.Phase = TeamWorkerPhase.Done;
+        var card = new TeamRunViewModel(new FakeRun { IsPipeline = true, Workers = [agent] }, isLocalProvider: false, discardBranches: null);
+
+        card.Workers.Single().Status.ShouldBe("done");
+    }
+
+    [Fact]
+    public void TheMessageThatLandsAPipelinesWork_SaysSo_AndHowTheRunEnded()
+    {
+        var run = new FakeRun { IsPipeline = true };
+        var result = Result(UltraTeamEndReason.LoopCapReached) with { Pipeline = OpenReport() };
+
+        var message = CopilotChatPaneViewModel.LandingCommitMessage("Make Class1.Value return 2.", run, result);
+
+        message.ShouldStartWith("Merge Ultra pipeline run 20260101-000000-abcd: Make Class1.Value return 2.");
+        message.ShouldContain("1 agent, 7 min,");
+        message.ShouldContain("Stopped at its limit of 1 repair round with 1 finding still open.");
+        CopilotChatPaneViewModel.LandingCommitMessage("Make Class1.Value return 2.", new FakeRun(), Result(UltraTeamEndReason.AllDone))
+            .ShouldStartWith("Merge Ultra run 20260101-000000-abcd: Make Class1.Value return 2.");
+    }
+
+    [Fact]
+    public void ThePipelineRun_IsAPipeline_AndKeepsItsRecordsInItsPhasesFolder_WhereTheTeamKeepsNone()
+    {
+        ((ITeamRunStatus)NewTeamRun()).IsPipeline.ShouldBeFalse();
+        ((ITeamRunStatus)NewTeamRun()).RecordsDirectory.ShouldBeNull();
+
+        var root = Path.Combine(Path.GetTempPath(), $"ideplusplus-status-{Guid.NewGuid():N}");
+        var pipeline = new UltraPipelineRun(
+            new ScriptedTeamChatClient(), "chat-model",
+            new UltraTeamOptions(1, TimeSpan.FromMinutes(1), ShellCommandsEnabled: false, "Debug", IdePlusPlus.Copilot.Core.ChatEffort.Ultra),
+            readOnlyTools: null!, gitService: null!, teamGit: new IdePlusPlus.SourceControl.TeamGitWorkspace(), TimeProvider.System, root, runCommand: null);
+
+        ((ITeamRunStatus)pipeline).IsPipeline.ShouldBeTrue();
+        ((ITeamRunStatus)pipeline).RecordsDirectory.ShouldBe(Path.Combine(root, pipeline.RunId, "_phases"));
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

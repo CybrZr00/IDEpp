@@ -203,6 +203,10 @@ public sealed partial class UltraPipelineRun : IUltraRun
 
     public string? StageText => _stageText;
 
+    public bool IsPipeline => true;
+
+    public string? RecordsDirectory => PhasesDirectory;
+
     public long MaxTokens => _options.MaxTokens;
 
     public int PromptTokens => Volatile.Read(ref _promptTokens);
