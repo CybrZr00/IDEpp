@@ -88,6 +88,28 @@ public sealed record VerdictRecord(
 /// has failed to fall.</summary>
 public sealed record FindingsRecord(int Round, bool Passed, int Score, int Stalled, IReadOnlyList<LedgerFinding> Findings);
 
+/// <summary>What was decided about the findings that blocked a round (loop-N/triage.json): each assigned to an owner - by rule, or by
+/// the orchestrator when it was asked - dismissed, or deferred to the user with a request to run later.</summary>
+/// <param name="AskedTheLead">Some findings needed judgement and the orchestrator was asked.</param>
+/// <param name="LeadDecided">It answered; false means its part is empty and those findings were left as they were.</param>
+public sealed record TriageRecord(
+    int Round, IReadOnlyList<TriageDecision> Decisions, bool AskedTheLead, bool LeadDecided, string? Notes);
+
+/// <summary>One owner's part of a repair round: the findings it was given, what it reported, and how much of it reached the team
+/// branch.</summary>
+public sealed record RepairOwnerRecord(
+    string Owner,
+    IReadOnlyList<string> Findings,
+    bool Submitted,
+    string? Summary,
+    IReadOnlyList<string> Unmet,
+    int Merges,
+    int Steps,
+    string? Gap);
+
+/// <summary>A repair round (loop-N/repairs.json): which owners were given findings, and whether the team branch moved.</summary>
+public sealed record RepairRecord(int Round, bool Changed, IReadOnlyList<RepairOwnerRecord> Owners);
+
 /// <summary>How one agent's run in a stage ended.</summary>
 public sealed record AgentRecord(
     string Name,

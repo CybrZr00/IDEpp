@@ -30,6 +30,15 @@ public sealed partial class UltraPipelineRun
 
         public CancellationToken Token { get; } = token;
 
+        /// <summary>In a repair round: what each owner that was given findings is to repair. Null in the build.</summary>
+        public IReadOnlyDictionary<string, IReadOnlyList<RepairTask>>? Repairs { get; init; }
+
+        /// <summary>Which repair round, from 1; 0 in the build.</summary>
+        public int Round { get; init; }
+
+        public IReadOnlyList<RepairTask>? RepairsFor(string owner) =>
+            Repairs is not null && Repairs.TryGetValue(owner, out var tasks) ? tasks : null;
+
         /// <summary>The conversations started to call an owner back. Only ever added to, under <c>_wakeLock</c>.</summary>
         public List<Task<PipelineAgentOutcome>> CalledBack { get; } = [];
     }

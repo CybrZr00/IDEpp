@@ -249,6 +249,52 @@ public sealed class PipelineRecordsTests : IDisposable
         first.Files.ShouldBe(["Lib/A.cs"]);
     }
 
+    [Fact]
+    public async Task TheTriageOfARound_SurvivesBeingWrittenAndReadBack_WithEachKindOfDecision()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var record = new TriageRecord(
+            2,
+            [
+                new TriageDecision("F2.1", TriageAction.Assign, "One owner owns it.", "b1", "Guard the null."),
+                new TriageDecision("F2.2", TriageAction.Dismiss, "Not a real problem."),
+                new TriageDecision("F2.3", TriageAction.Defer, "Out of scope.", NextPrompt: "Cache the parse."),
+            ],
+            AskedTheLead: true, LeadDecided: false, Notes: "No triage was decided (it never submitted).");
+
+        await store.WriteJsonAsync("loop-2/triage.json", record);
+
+        var read = (await store.ReadJsonAsync<TriageRecord>("loop-2/triage.json")).Value!;
+        (read.Round, read.AskedTheLead, read.LeadDecided, read.Notes).ShouldBe((2, true, false, "No triage was decided (it never submitted)."));
+        read.Decisions.Select(d => (d.FindingId, d.Action, d.Owner, d.Instruction, d.Reason, d.NextPrompt)).ShouldBe(
+            [
+                ("F2.1", TriageAction.Assign, "b1", "Guard the null.", "One owner owns it.", null),
+                ("F2.2", TriageAction.Dismiss, null, null, "Not a real problem.", null),
+                ("F2.3", TriageAction.Defer, null, null, "Out of scope.", "Cache the parse."),
+            ]);
+    }
+
+    [Fact]
+    public async Task ARepairRound_SurvivesBeingWrittenAndReadBack_WithWhatEachOwnerDid()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var record = new RepairRecord(
+            1, true,
+            [
+                new RepairOwnerRecord("b1", ["F1.1", "F1.3"], true, "Fixed both.", [], 2, 14, null),
+                new RepairOwnerRecord("b2", ["F1.2"], false, null, ["F1.2: needs a redesign"], 0, 3, "b2: it never called build_submit."),
+            ]);
+
+        await store.WriteJsonAsync("loop-1/repairs.json", record);
+
+        var read = (await store.ReadJsonAsync<RepairRecord>("loop-1/repairs.json")).Value!;
+        (read.Round, read.Changed).ShouldBe((1, true));
+        read.Owners.Select(o => (o.Owner, o.Submitted, o.Summary, o.Merges, o.Steps, o.Gap)).ShouldBe(
+            [("b1", true, "Fixed both.", 2, 14, null), ("b2", false, null, 0, 3, "b2: it never called build_submit.")]);
+        read.Owners[0].Findings.ShouldBe(["F1.1", "F1.3"]);
+        read.Owners[1].Unmet.ShouldBe(["F1.2: needs a redesign"]);
+    }
+
     /// <summary>Records hold lists, and a record's own equality compares lists by reference.</summary>
     private sealed class RecordComparer : IEqualityComparer<RosterRecord>
     {

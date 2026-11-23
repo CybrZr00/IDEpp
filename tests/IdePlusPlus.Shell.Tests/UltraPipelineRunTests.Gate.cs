@@ -81,7 +81,7 @@ public sealed partial class UltraPipelineRunTests
     {
         GateOverride = (request, _) => Task.FromResult(FailingGate(request.Commit));
         _client.Script("lead", NoSurveyors());
-        var run = CreateRun();
+        var run = CreateRun(o => o with { PipelineMaxLoops = 0 });
 
         var result = await RunAsync(run);
 

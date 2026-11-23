@@ -33,7 +33,7 @@ public sealed partial class UltraPipelineRunTests
             .Script("lead", NoSurveyors())
             .Script("j1", Verdict("fail", "Value is never checked.", [Finding("medium", "Value is not validated")]))
             .Script("j2", Verdict("pass", "Readable enough.", [Finding("low", "The name could be clearer", quote: "")]));
-        var run = CreateRun();
+        var run = CreateRun(o => o with { PipelineMaxLoops = 0 });
 
         var result = await RunAsync(run);
 
@@ -76,7 +76,7 @@ public sealed partial class UltraPipelineRunTests
             .Script("b1", EditFile("Lib/Class1.cs", Class1Returning2), Commit("Class1 returns 2"), MergeToTheTeam(), Report("Class1 returns 2."))
             .Script("j1", Verdict("fail", "Now 2.", [Finding("medium", "Value is 2", quote: "public int Value => 2;")]))
             .Script("j2", Verdict("fail", "Stale.", [Finding("medium", "Value is 1", quote: ValueLine)]));
-        var run = CreateRun();
+        var run = CreateRun(o => o with { PipelineMaxLoops = 0 });
 
         var result = await RunAsync(run);
 
@@ -133,7 +133,7 @@ public sealed partial class UltraPipelineRunTests
         _client
             .Script("lead", NoSurveyors())
             .Script("j1", _client.Call(SubmitVerdict, new { summary = "I looked." }), Verdict("fail", "Wrong.", [Finding("medium", "Value is wrong")]));
-        var run = CreateRun();
+        var run = CreateRun(o => o with { PipelineMaxLoops = 0 });
 
         var result = await RunAsync(run);
 
@@ -295,7 +295,7 @@ public sealed partial class UltraPipelineRunTests
                 EditFile("Tests/JudgeTests.cs", "public class JudgeTests { }\r\n"),
                 Commit("A failing test for Value"),
                 Verdict("fail", "Value is wrong.", [Finding("high", "Value is wrong", evidence: "A failing test on branch:abc1234.")]));
-        var run = CreateRun();
+        var run = CreateRun(o => o with { PipelineMaxLoops = 0 });
 
         var result = await RunWithATestProjectAsync(run, testProject);
 

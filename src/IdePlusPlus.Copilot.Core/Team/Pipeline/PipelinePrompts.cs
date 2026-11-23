@@ -144,18 +144,104 @@ public static class PipelinePrompts
         + "tests that cover your files. Then team_commit.\n"
         + "3. Merge small and early: team_merge puts your commit on the shared team branch once it builds, and your "
         + "peers build against that branch. If the team branch has moved on, team_sync, build again, then team_merge.\n"
-        + "4. A file you do not own is not yours to edit. If your work needs one changed, request_change asks its owner - say "
+        + ChangeRequestSteps
+        + $"6. When every file you own meets its acceptance criteria, everything is merged and no request involving you is "
+        + $"still open, call {PipelineStageTools.BuildSubmitToolName} once. Work that is not merged is lost when the run ends.\n"
+        + $"The user is not available - never ask them anything. Nothing you write in the conversation is recorded - only "
+        + $"{PipelineStageTools.BuildSubmitToolName} is.";
+
+    /// <summary>Steps 4 and 5 of an owner's prompt, in the build and in the repair alike: how to ask for a change to a file that is
+    /// not yours, and how to answer one asked of you.</summary>
+    private const string ChangeRequestSteps =
+        "4. A file you do not own is not yours to edit. If your work needs one changed, request_change asks its owner - say "
         + "what and why; it returns at once with an id - and await_change waits for the answer when you need it. If it is "
         + "accepted and done, team_sync brings the change in. A rejection with reasons can be appealed once, to the lead, "
         + "whose decision is final. A file nobody owns that does not exist yet can be claimed with claim_new_file. Never "
         + "bend an interface contract on your own: a contract that is wrong is a request.\n"
         + "5. When a colleague asks you for a change you are told, and you must answer before you edit, commit or merge "
         + "anything: respond_change accepts it (then make the change, build, team_commit, team_merge, and call change_done) "
-        + "or rejects it with reasons. Rejecting is a legitimate answer.\n"
-        + $"6. When every file you own meets its acceptance criteria, everything is merged and no request involving you is "
-        + $"still open, call {PipelineStageTools.BuildSubmitToolName} once. Work that is not merged is lost when the run ends.\n"
+        + "or rejects it with reasons. Rejecting is a legitimate answer.\n";
+
+    /// <summary>
+    /// The system prompt of an owner that is back to repair what the gate and the judges found in its files. It is the same agent
+    /// in the same checkout - brought up to the team branch - with a new conversation: what it needs of its own work is in the files.
+    /// </summary>
+    public static string OwnerRepair(string name, TeamRole role, IReadOnlyList<string> files) =>
+        $"You are {name}, an owner in an Ultra Pipeline run in IDE++. {role.Charter}\n\n"
+        + $"You built these files earlier in this run: {string.Join(", ", files)}. You still own exactly these, nobody else may edit "
+        + "them, and you may edit no others. Your checkout has what you built, and the team branch has moved on since. The gate "
+        + "and the judges have reviewed the whole result, and some of what they found is about your files. Work in this order.\n"
+        + "1. team_sync to bring the team branch into your checkout. Then read the findings you were given and the code each is "
+        + "about. A finding is a judge's claim, with the code it quotes: check it against the code before you change anything for it.\n"
+        + "2. Fix each in your own files, as its instruction says. Run build_solution until it passes, and run_tests for the tests "
+        + "that cover your files. Then team_commit.\n"
+        + "3. team_merge puts your commit on the shared team branch once it builds. If the team branch has moved on, team_sync, "
+        + "build again, then team_merge.\n"
+        + ChangeRequestSteps
+        + $"6. When you have fixed what you were given, everything is merged and no request involving you is still open, call "
+        + $"{PipelineStageTools.BuildSubmitToolName} once: say what you changed, and under 'unmet' list each finding you could not "
+        + "fix or believe is wrong, with why. Work that is not merged is lost when the run ends.\n"
         + $"The user is not available - never ask them anything. Nothing you write in the conversation is recorded - only "
         + $"{PipelineStageTools.BuildSubmitToolName} is.";
+
+    /// <summary>
+    /// A repairing owner's first message: the goal and the design, then the findings it is to repair - fenced, since they are a
+    /// judge's words and the lead's instruction - each with what to do about it.
+    /// </summary>
+    public static string OwnerRepairOpening(
+        string goal, string? approvedPlan, DesignPlan design, string name, IReadOnlyList<string> files, IReadOnlyList<RepairTask> tasks, int round)
+    {
+        var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
+        if (!string.IsNullOrWhiteSpace(approvedPlan))
+        {
+            text.Append($"Approved plan (the user approved these steps):\n{approvedPlan.Trim()}\n\n");
+        }
+
+        text.AppendLine(DataFence.Instruction);
+        text.AppendLine();
+        text.AppendLine(DataFence.Wrap("design", design.Render()));
+        text.AppendLine();
+        text.AppendLine($"You are {name} and you own exactly these files: {string.Join(", ", files)}.");
+        text.AppendLine($"This is repair round {round}. These findings are yours to repair:");
+        text.AppendLine();
+        text.AppendLine(DataFence.Wrap("findings", RenderRepairTasks(tasks), MaxRepairTasksChars));
+        text.AppendLine();
+        text.Append($"Repair them in your files, merge, then call {PipelineStageTools.BuildSubmitToolName}.");
+        return text.ToString();
+    }
+
+    private const int MaxRepairTasksChars = 12_000;
+
+    private static string RenderRepairTasks(IReadOnlyList<RepairTask> tasks)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (var task in tasks)
+        {
+            var entry = task.Finding;
+            var finding = entry.Finding;
+            text.AppendLine($"{entry.Id} [{finding.Severity.ToString().ToLowerInvariant()}] {finding.Title}");
+            text.AppendLine($"  found by: {entry.Judge}; files: {(finding.Files.Count == 0 ? "(none)" : string.Join(", ", finding.Files))}");
+            if (!string.IsNullOrWhiteSpace(finding.Evidence))
+            {
+                text.AppendLine($"  evidence: {finding.Evidence.Trim()}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(finding.Quote))
+            {
+                text.AppendLine($"  quote: {finding.Quote.Trim()}");
+            }
+
+            if (entry.SeenCount > 1)
+            {
+                text.AppendLine($"  seen in {entry.SeenCount} rounds: it was repaired before and came back.");
+            }
+
+            text.AppendLine($"  instruction: {task.Instruction.Trim()}");
+            text.AppendLine();
+        }
+
+        return text.ToString().TrimEnd();
+    }
 
     /// <summary>
     /// An owner's first message: the goal and the whole design (fenced - the designer's words, from which an owner

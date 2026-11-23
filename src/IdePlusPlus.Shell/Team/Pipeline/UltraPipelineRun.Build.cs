@@ -52,6 +52,19 @@ public sealed partial class UltraPipelineRun
         /// <summary>How many times it has been called back to answer or carry out a request since the counter was last reset.</summary>
         public int Wakes { get; set; }
 
+        /// <summary>A new stage begins: the owner has not reported in it, has no unmerged work to answer for, and may be called back
+        /// again as often as a stage allows.</summary>
+        public void BeginStage()
+        {
+            Submitted = false;
+            Report = null;
+            WarnedAboutUnmerged = false;
+            LeftUnmerged = null;
+            IsRunning = false;
+            WakeScheduled = false;
+            Wakes = 0;
+        }
+
         /// <summary>True the first time <paramref name="what"/> is said to this owner, false after - so a request is told once
         /// and not at the end of every tool call.</summary>
         public bool Tell(string what)
@@ -215,10 +228,14 @@ public sealed partial class UltraPipelineRun
     private PipelineAgentAssignment OwnerAssignment(OwnerAgent owner, WorkContext work, IReadOnlyList<ChangeRequest>? calledBackFor) => new()
     {
         Name = owner.Name,
-        SystemPrompt = PipelinePrompts.Owner(owner.Name, owner.Agent.Role, owner.Files),
-        Opening = calledBackFor is null
-            ? PipelinePrompts.OwnerOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files)
-            : PipelinePrompts.OwnerWakeOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files, calledBackFor),
+        SystemPrompt = work.Repairs is null
+            ? PipelinePrompts.Owner(owner.Name, owner.Agent.Role, owner.Files)
+            : PipelinePrompts.OwnerRepair(owner.Name, owner.Agent.Role, owner.Files),
+        Opening = calledBackFor is not null
+            ? PipelinePrompts.OwnerWakeOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files, calledBackFor)
+            : work.RepairsFor(owner.Name) is { } repair
+                ? PipelinePrompts.OwnerRepairOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files, repair, work.Round)
+                : PipelinePrompts.OwnerOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files),
         Tools =
         [
             .. owner.Dispatcher.Tools.Where(t => PipelineStageTools.OwnerToolNames.Contains(t.Name)),
@@ -228,7 +245,7 @@ public sealed partial class UltraPipelineRun
         SubmitToolName = PipelineStageTools.BuildSubmitToolName,
         IsComplete = () => owner.Submitted,
         Effort = _options.WorkerEffort ?? owner.Agent.Role.DefaultEffort,
-        MaxIterations = calledBackFor is null ? OwnerIterations : CalledBackIterations,
+        MaxIterations = calledBackFor is not null ? CalledBackIterations : work.Repairs is null ? OwnerIterations : RepairIterations,
         State = owner.State,
         DrainNotices = () => OwnerNotices(owner),
         ExecuteTool = async (tool, arguments, ct) =>

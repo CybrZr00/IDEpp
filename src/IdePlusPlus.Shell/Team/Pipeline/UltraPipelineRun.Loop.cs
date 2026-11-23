@@ -17,8 +17,8 @@ public sealed partial class UltraPipelineRun
 
     /// <summary>
     /// What a repair round is, for tests that are about the loop and not about the repair: given the round and the findings the
-    /// owners can still be asked to fix, it changes the team branch (or not) and says so. When it is not set the run has no repair
-    /// stage yet, and a round that does not pass is the end of the loop.
+    /// owners can still be asked to fix, it changes the team branch (or not) and says so. When it is not set the round is the real
+    /// thing - triage, then the owners - which is <see cref="RepairStageAsync"/>.
     /// </summary>
     internal Func<int, IReadOnlyList<LedgerFinding>, CancellationToken, Task<RepairOutcome>>? RepairRunner { get; init; }
 
@@ -89,29 +89,21 @@ public sealed partial class UltraPipelineRun
                 return outOfBudget;
             }
 
-            var repair = await RepairStageAsync(round, cancellationToken);
-            if (repair is null)
-            {
-                return UltraTeamEndReason.LoopCapReached; // No repair stage: this is as far as the run goes.
-            }
-
+            var repair = await RepairStageAsync(round, goal, approvedPlan, workspace, cancellationToken);
             if (!repair.Changed)
             {
+                // Triage may have cleared everything that was open - dismissed it, or deferred it to the user - and then there is
+                // nothing to judge again: the code is as the judges saw it, and what they said stands, less what was cleared.
+                if (gate.Ok && _ledger.Blocking(threshold).Count == 0)
+                {
+                    await RecordAsync($"loop-{round}/findings.json", new FindingsRecord(round, true, 0, stalled, _ledger.Findings), cancellationToken);
+                    return UltraTeamEndReason.AllDone;
+                }
+
                 Gap($"The loop stopped after round {round}: the repair changed nothing{(repair.Note is { Length: > 0 } note ? $" ({note})" : "")}, "
                     + "so judging the same code again would find the same things.");
                 return UltraTeamEndReason.NoProgress;
             }
         }
-    }
-
-    /// <summary>One repair round, or null when this run has no repair stage.</summary>
-    private async Task<RepairOutcome?> RepairStageAsync(int round, CancellationToken cancellationToken)
-    {
-        if (RepairRunner is not { } runner)
-        {
-            return null;
-        }
-
-        return await runner(round, _ledger.Repairable(_options.PipelineSeverityThreshold), cancellationToken);
     }
 }
