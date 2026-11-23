@@ -1,5 +1,11 @@
 # Ultra roles: a fixed roster instead of N identical workers
 
+> **Status.** The role types, the settings (presets and per-lane counts), `TeamReviewQueue` and the dispatcher's
+> scope enforcement described below exist and are unit-tested, but `UltraTeamRun` does not use them yet: it does not
+> pass a role to its workers, builds no review queue, names every worker `w<N>`, and nothing reports a quality summary.
+> A run of the Ultra team today is N equal workers whatever the preset. Wiring the roster into the run is a separate piece
+> of work. The [Ultra pipeline](ultra-pipeline-design.md) is a different strategy and does not depend on any of this.
+
 Ultra effort used to start N identical workers ("w1", "w2", ...): one model, one prompt, one
 backlog, no division of labour. In practice that produced linear work — a worker claimed the whole
 goal, did it, merged it, and the rest idled — because nothing in the prompt, the board or the

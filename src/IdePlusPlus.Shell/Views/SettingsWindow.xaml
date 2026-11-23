@@ -697,7 +697,7 @@
                               Visibility="{Binding IsChecked, ElementName=NavUltra, Converter={StaticResource SettingsBoolToVisibility}}">
                     <StackPanel Margin="32,26,32,24" MaxWidth="720" HorizontalAlignment="Stretch">
                         <TextBlock Text="Ultra team" Style="{StaticResource PageTitleStyle}" />
-                        <TextBlock Text="Effort 'Ultra' sends a message to a team of copilot workers, each in its own git worktree, coordinating through a shared board. More workers and more time mean more tokens - roughly one conversation's worth per worker, for as long as the run lasts."
+                        <TextBlock Text="Effort 'Ultra' sends a message to a team of copilot agents, each in its own git worktree - workers coordinating through a shared board, or, with the Pipeline strategy, surveyors, a designer, owners and judges working in stages. More agents and more time mean more tokens - roughly one conversation's worth per agent, for as long as the run lasts."
                                    Style="{StaticResource PageSubtitleStyle}" />
 
                         <!-- Strategy: how an Ultra message is carried out. Team, the default, is the team described on the cards below; Pipeline works in
