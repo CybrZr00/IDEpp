@@ -11,6 +11,7 @@ using IdePlusPlus.Copilot.Embeddings;
 using IdePlusPlus.Copilot.Mcp;
 using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Infrastructure;
+using IdePlusPlus.Shell.Team;
 using IdePlusPlus.Shell.ToolPanes;
 
 namespace IdePlusPlus.Shell;
@@ -81,6 +82,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         ultraLeadReviewMode = CopilotChatPaneViewModel.ReadUltraLeadReviewMode(_appSettingsStore).ToString();
         ultraSpecialistEffort = CopilotChatPaneViewModel.ReadUltraSpecialistEffort(_appSettingsStore)?.ToString() ?? DefaultEffortChoice;
         ultraOrchestrated = CopilotChatPaneViewModel.ReadUltraOrchestrated(_appSettingsStore);
+        ultraRunStrategy = CopilotChatPaneViewModel.ReadUltraStrategy(_appSettingsStore).ToString();
+        ultraPipelineMaxLoops = CopilotChatPaneViewModel.ReadUltraPipelineMaxLoops(_appSettingsStore);
+        ultraPipelineSeverityThreshold = CopilotChatPaneViewModel.ReadUltraPipelineSeverityThreshold(_appSettingsStore).ToString();
+        ultraPipelineMaxUnderstand = CopilotChatPaneViewModel.ReadUltraPipelineMaxUnderstand(_appSettingsStore);
+        ultraPipelineMaxOwners = CopilotChatPaneViewModel.ReadUltraPipelineMaxOwners(_appSettingsStore);
+        ultraPipelineMaxCustomJudges = CopilotChatPaneViewModel.ReadUltraPipelineMaxCustomJudges(_appSettingsStore);
         ultraWorkFolder = CopilotChatPaneViewModel.ReadUltraWorkFolder(_appSettingsStore) ?? "";
         ultraOrchestratorProvider = CopilotChatPaneViewModel.ReadUltraOrchestratorProvider(_appSettingsStore) ?? SameAsChatChoice;
         ultraOrchestratorModel = CopilotChatPaneViewModel.ReadUltraOrchestratorModel(_appSettingsStore) ?? "";
@@ -239,6 +246,34 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// verdict follows as a FINDING).</summary>
     [ObservableProperty]
     private string ultraLeadReviewMode;
+
+    /// <summary>How an Ultra message is carried out: Team (the team above, the default) or Pipeline. The pipeline settings below apply
+    /// only to Pipeline.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsUltraPipeline))]
+    private string ultraRunStrategy;
+
+    [ObservableProperty]
+    private int ultraPipelineMaxLoops;
+
+    [ObservableProperty]
+    private string ultraPipelineSeverityThreshold;
+
+    [ObservableProperty]
+    private int ultraPipelineMaxUnderstand;
+
+    [ObservableProperty]
+    private int ultraPipelineMaxOwners;
+
+    [ObservableProperty]
+    private int ultraPipelineMaxCustomJudges;
+
+    public bool IsUltraPipeline => string.Equals(UltraRunStrategy, nameof(UltraStrategy.Pipeline), StringComparison.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> UltraStrategyChoices { get; } = [nameof(UltraStrategy.Team), nameof(UltraStrategy.Pipeline)];
+
+    public IReadOnlyList<string> SeverityThresholdChoices { get; } =
+        [nameof(TeamFindingSeverity.Low), nameof(TeamFindingSeverity.Medium), nameof(TeamFindingSeverity.High)];
 
     /// <summary>What effort specialists run at; <see cref="DefaultEffortChoice"/> uses each role's own
     /// default - Low for the conformity and follow-up lanes, High for the adversary.</summary>
@@ -564,6 +599,24 @@ public sealed partial class SettingsViewModel : ObservableObject
         var leadReviewMode = Enum.TryParse<LeadReviewMode>(UltraLeadReviewMode, ignoreCase: true, out var parsedMode)
             ? parsedMode
             : LeadReviewMode.Blocking;
+        var strategy = Enum.TryParse<UltraStrategy>(UltraRunStrategy, ignoreCase: true, out var parsedStrategy) && Enum.IsDefined(parsedStrategy)
+            ? parsedStrategy
+            : UltraStrategy.Team;
+        var severity = Enum.TryParse<TeamFindingSeverity>(UltraPipelineSeverityThreshold, ignoreCase: true, out var parsedSeverity) && Enum.IsDefined(parsedSeverity)
+            ? parsedSeverity
+            : TeamFindingSeverity.Medium;
+        UltraPipelineMaxLoops = Math.Clamp(
+            UltraPipelineMaxLoops, CopilotChatPaneViewModel.MinUltraPipelineMaxLoops, CopilotChatPaneViewModel.MaxUltraPipelineMaxLoops);
+        UltraPipelineMaxUnderstand = Math.Clamp(UltraPipelineMaxUnderstand, 0, CopilotChatPaneViewModel.MaxUltraPipelineMaxUnderstand);
+        UltraPipelineMaxOwners = Math.Clamp(
+            UltraPipelineMaxOwners, CopilotChatPaneViewModel.MinUltraPipelineMaxOwners, CopilotChatPaneViewModel.MaxUltraPipelineMaxOwners);
+        UltraPipelineMaxCustomJudges = Math.Clamp(UltraPipelineMaxCustomJudges, 0, CopilotChatPaneViewModel.MaxUltraPipelineMaxCustomJudges);
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraStrategySettingKey, strategy.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraPipelineMaxLoopsSettingKey, UltraPipelineMaxLoops.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraPipelineSeverityThresholdSettingKey, severity.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraPipelineMaxUnderstandSettingKey, UltraPipelineMaxUnderstand.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraPipelineMaxOwnersSettingKey, UltraPipelineMaxOwners.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraPipelineMaxCustomJudgesSettingKey, UltraPipelineMaxCustomJudges.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraAutoScaleSettingKey, UltraAutoScale.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraStartWorkersSettingKey, UltraStartWorkers.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkerCountSettingKey, UltraWorkerCount.ToString());
@@ -586,6 +639,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorModelSettingKey, UltraOrchestratorModel.Trim());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorEffortSettingKey, StoredEffort(UltraOrchestratorEffort));
         StatusMessage = $"Ultra settings saved - "
+                        + (strategy == UltraStrategy.Pipeline
+                            ? $"pipeline: up to {UltraPipelineMaxLoops} repair round{(UltraPipelineMaxLoops == 1 ? "" : "s")}, "
+                              + $"findings of {severity.ToString().ToLowerInvariant()} severity or above keep a round from passing, "
+                              + $"up to {UltraPipelineMaxUnderstand} surveyor{(UltraPipelineMaxUnderstand == 1 ? "" : "s")}, "
+                              + $"{UltraPipelineMaxOwners} owner{(UltraPipelineMaxOwners == 1 ? "" : "s")} and "
+                              + $"{UltraPipelineMaxCustomJudges} extra judge{(UltraPipelineMaxCustomJudges == 1 ? "" : "s")}; "
+                            : "")
                         + (UltraAutoScale
                             ? $"auto mode, {UltraStartWorkers} workers growing to {Composition.Total}"
                             : $"{Composition.Total} workers ({UltraWorkerCount} builders"

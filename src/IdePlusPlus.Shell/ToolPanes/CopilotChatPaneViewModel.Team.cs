@@ -33,6 +33,29 @@ public sealed partial class CopilotChatPaneViewModel
     public const string UltraOrchestratorModelSettingKey = "UltraOrchestratorModel";
     public const string UltraOrchestratorEffortSettingKey = "UltraOrchestratorEffort";
 
+    /// <summary>Team (the Ultra team, the default) or Pipeline. Anything else reads as Team.</summary>
+    public const string UltraStrategySettingKey = "UltraStrategy";
+
+    /// <summary>The pipeline's limits: how many repair rounds follow the first round of judging (the last round is judged and not
+    /// repaired, so there is one more round of judging than of repair), the severity a finding must reach to keep a round from
+    /// passing, and how many surveyors, owners and extra judges the lead may choose.</summary>
+    public const string UltraPipelineMaxLoopsSettingKey = "UltraPipelineMaxLoops";
+    public const string UltraPipelineSeverityThresholdSettingKey = "UltraPipelineSeverityThreshold";
+    public const string UltraPipelineMaxUnderstandSettingKey = "UltraPipelineMaxUnderstand";
+    public const string UltraPipelineMaxOwnersSettingKey = "UltraPipelineMaxOwners";
+    public const string UltraPipelineMaxCustomJudgesSettingKey = "UltraPipelineMaxCustomJudges";
+
+    public const int DefaultUltraPipelineMaxLoops = 3;
+    public const int MinUltraPipelineMaxLoops = 1;
+    public const int MaxUltraPipelineMaxLoops = 8;
+    public const int DefaultUltraPipelineMaxUnderstand = 3;
+    public const int MaxUltraPipelineMaxUnderstand = 5;
+    public const int DefaultUltraPipelineMaxOwners = 6;
+    public const int MinUltraPipelineMaxOwners = 1;
+    public const int MaxUltraPipelineMaxOwners = 16;
+    public const int DefaultUltraPipelineMaxCustomJudges = 2;
+    public const int MaxUltraPipelineMaxCustomJudges = 3;
+
     /// <summary>Where a run's worktrees and build output go. Blank means <see cref="DefaultUltraWorkFolder"/>.
     /// Every worker has a full checkout plus its own build output, so a big team on a big solution needs
     /// room: this is how to put it on a drive that has some.</summary>
@@ -299,6 +322,35 @@ public sealed partial class CopilotChatPaneViewModel
         && mode is LeadReviewMode.Blocking or LeadReviewMode.Advisory
             ? mode
             : LeadReviewMode.Blocking;
+
+    /// <summary>How an Ultra message is carried out. The Ultra team unless the pipeline was chosen - and a value that is not one of the
+    /// two, a number included, is not a choice.</summary>
+    public static UltraStrategy ReadUltraStrategy(AppSettingsStore settings) =>
+        Enum.TryParse<UltraStrategy>(settings.Get(UltraStrategySettingKey), ignoreCase: true, out var strategy) && Enum.IsDefined(strategy)
+            ? strategy
+            : UltraStrategy.Team;
+
+    public static int ReadUltraPipelineMaxLoops(AppSettingsStore settings) =>
+        ReadClamped(settings, UltraPipelineMaxLoopsSettingKey, DefaultUltraPipelineMaxLoops, MinUltraPipelineMaxLoops, MaxUltraPipelineMaxLoops);
+
+    public static int ReadUltraPipelineMaxUnderstand(AppSettingsStore settings) =>
+        ReadClamped(settings, UltraPipelineMaxUnderstandSettingKey, DefaultUltraPipelineMaxUnderstand, 0, MaxUltraPipelineMaxUnderstand);
+
+    public static int ReadUltraPipelineMaxOwners(AppSettingsStore settings) =>
+        ReadClamped(settings, UltraPipelineMaxOwnersSettingKey, DefaultUltraPipelineMaxOwners, MinUltraPipelineMaxOwners, MaxUltraPipelineMaxOwners);
+
+    public static int ReadUltraPipelineMaxCustomJudges(AppSettingsStore settings) =>
+        ReadClamped(settings, UltraPipelineMaxCustomJudgesSettingKey, DefaultUltraPipelineMaxCustomJudges, 0, MaxUltraPipelineMaxCustomJudges);
+
+    /// <summary>The lowest severity that keeps a pipeline round from passing: medium unless chosen otherwise.</summary>
+    public static TeamFindingSeverity ReadUltraPipelineSeverityThreshold(AppSettingsStore settings) =>
+        Enum.TryParse<TeamFindingSeverity>(settings.Get(UltraPipelineSeverityThresholdSettingKey), ignoreCase: true, out var severity)
+        && Enum.IsDefined(severity)
+            ? severity
+            : TeamFindingSeverity.Medium;
+
+    private static int ReadClamped(AppSettingsStore settings, string key, int fallback, int min, int max) =>
+        int.TryParse(settings.Get(key), out var value) ? Math.Clamp(value, min, max) : fallback;
 
     /// <summary>The specialists' effort, or null when they run at each role's own default.</summary>
     public static ChatEffort? ReadUltraSpecialistEffort(AppSettingsStore settings) =>

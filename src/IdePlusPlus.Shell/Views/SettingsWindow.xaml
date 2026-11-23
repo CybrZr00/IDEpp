@@ -700,6 +700,102 @@
                         <TextBlock Text="Effort 'Ultra' sends a message to a team of copilot workers, each in its own git worktree, coordinating through a shared board. More workers and more time mean more tokens - roughly one conversation's worth per worker, for as long as the run lasts."
                                    Style="{StaticResource PageSubtitleStyle}" />
 
+                        <!-- Strategy: how an Ultra message is carried out. Team, the default, is the team described on the cards below; Pipeline works in
+                             phases and judges its own result. The pipeline's limits are only read when Pipeline is chosen. -->
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Strategy" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="Team is the Ultra team on the cards below: workers sharing a backlog. Pipeline works in phases: surveyors read the code, a designer fixes the contract and who owns which file, those owners build it, then judges check the result and the owners repair what they find, until the judges are satisfied or the repair limit is reached. It costs more, and reports what it could not fix instead of stopping silently."
+                                           Style="{StaticResource HintStyle}" Margin="0,0,0,12" />
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Strategy" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="What an Ultra message runs."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding UltraStrategyChoices}" SelectedItem="{Binding UltraRunStrategy}"
+                                              HorizontalAlignment="Left" MinWidth="140" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                </Grid>
+
+                                <StackPanel IsEnabled="{Binding IsUltraPipeline}">
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Repair rounds" Style="{StaticResource RowLabelStyle}" />
+                                            <TextBlock Text="1 to 8. How many times the owners are sent back to repair what the judges found. The last round is judged and not repaired, so what lands was always judged."
+                                                       Style="{StaticResource HintStyle}" />
+                                        </StackPanel>
+                                        <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                 Text="{Binding UltraPipelineMaxLoops, UpdateSourceTrigger=PropertyChanged}" />
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Severity bar" Style="{StaticResource RowLabelStyle}" />
+                                            <TextBlock Text="A finding at this severity or above keeps a round from passing. Lower ones are reported, not repaired."
+                                                       Style="{StaticResource HintStyle}" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1" ItemsSource="{Binding SeverityThresholdChoices}" SelectedItem="{Binding UltraPipelineSeverityThreshold}"
+                                                  HorizontalAlignment="Left" MinWidth="140" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Surveyors" Style="{StaticResource RowLabelStyle}" />
+                                            <TextBlock Text="0 to 5. The most agents the lead may start to read the code before the design. With 0 the designer surveys it itself."
+                                                       Style="{StaticResource HintStyle}" />
+                                        </StackPanel>
+                                        <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                 Text="{Binding UltraPipelineMaxUnderstand, UpdateSourceTrigger=PropertyChanged}" />
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Owners" Style="{StaticResource RowLabelStyle}" />
+                                            <TextBlock Text="1 to 16. The most agents the design may split the files between. Each owns its files outright: nobody else may edit them. Each has a checkout of its own, so more owners need more disk."
+                                                       Style="{StaticResource HintStyle}" />
+                                        </StackPanel>
+                                        <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                 Text="{Binding UltraPipelineMaxOwners, UpdateSourceTrigger=PropertyChanged}" />
+                                    </Grid>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Extra judges" Style="{StaticResource RowLabelStyle}" />
+                                            <TextBlock Text="0 to 3. Judges the lead may add to the four standard ones, with a brief of its own for the goal - an accessibility judge for a UI change, say."
+                                                       Style="{StaticResource HintStyle}" />
+                                        </StackPanel>
+                                        <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                 Text="{Binding UltraPipelineMaxCustomJudges, UpdateSourceTrigger=PropertyChanged}" />
+                                    </Grid>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
                                 <TextBlock Text="Team time and requests" Style="{StaticResource CardTitleStyle}" Margin="0,0,0,12" />
