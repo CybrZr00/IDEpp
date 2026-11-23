@@ -194,4 +194,44 @@ public sealed class PipelinePromptsTests
         opening.Split(DataFence.OpenMarker).Length.ShouldBe(3);
         opening.ShouldContain("[fence marker removed]");
     }
+
+    [Fact]
+    public void AnOwnersPrompt_ExplainsHowToAskForAChange_AndToAnswerFirst()
+    {
+        var prompt = PipelinePrompts.Owner("b1", PipelineRoles.Owner, ["Lib/A.cs"]);
+
+        prompt.ShouldContain("request_change");
+        prompt.ShouldContain("await_change");
+        prompt.ShouldContain("appeal");
+        prompt.ShouldContain("claim_new_file");
+        prompt.ShouldContain("respond_change");
+        prompt.ShouldContain("change_done");
+        prompt.ShouldContain("you must answer before you edit, commit or merge");
+        prompt.ShouldContain("no request involving you is still open");
+    }
+
+    [Fact]
+    public void ACalledBackOwnersOpening_HasTheDesignAndEveryRequestAsItsNeed()
+    {
+        var waiting = new ChangeRequest(
+            "CR1", "b2", "b1", "Lib/Class1.cs", "Return 2.", "The test expects it.", ChangeRequestState.Pending, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        var ruled = new ChangeRequest(
+            "CR2", "b3", "b1", "Lib/Class1.cs", "Add a setter.", "The caller needs it.", ChangeRequestState.Accepted, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch)
+        {
+            Binding = true,
+            Arbitration = "Add the setter.",
+        };
+
+        var opening = PipelinePrompts.OwnerWakeOpening("Goal.", null, TwoOwnerDesign(), "b1", ["Lib/Class1.cs"], [waiting, ruled]);
+
+        opening.ShouldStartWith("The goal of the whole run:\nGoal.");
+        opening.ShouldContain("<<<DATA design");
+        opening.ShouldContain("You are b1 and you own exactly these files: Lib/Class1.cs.");
+        opening.ShouldContain("You had finished building them");
+        opening.ShouldContain("<<<DATA request CR1");
+        opening.ShouldContain("The lead has ruled that you must make the change CR2 asks for");
+        opening.ShouldContain("A request waiting for your answer needs respond_change first");
+        opening.ShouldContain("Where the lead has ruled that you must make a change, make it");
+        opening.ShouldEndWith("call build_submit again.");
+    }
 }

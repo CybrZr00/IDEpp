@@ -21,7 +21,7 @@ namespace IdePlusPlus.Shell.Tests;
 /// owner with none reports at once that it has nothing to change, so a test about another stage need not
 /// script either.
 /// </summary>
-public sealed class UltraPipelineRunTests : IDisposable
+public sealed partial class UltraPipelineRunTests : IDisposable
 {
     private const string SubmitRoster = PipelineLeadTools.SubmitRosterToolName;
     private const string SubmitSurvey = PipelineStageTools.SurveySubmitToolName;

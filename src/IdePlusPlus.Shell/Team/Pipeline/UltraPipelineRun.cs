@@ -54,6 +54,12 @@ public sealed partial class UltraPipelineRun : IUltraRun
 
     private readonly Func<string, string, string, CancellationToken, Task<(bool IsError, string Text)>>? _runCommand;
 
+    /// <summary>Every request an agent has made to change a file that is not its own, and where it stands.</summary>
+    private readonly ChangeRequestRegistry _changes;
+
+    /// <summary>The orchestrator, once the run is under way: decides an appeal when an owner makes one.</summary>
+    private PipelineConductor? _conductor;
+
     private readonly object _lock = new();
     private readonly List<TeamWorkerState> _agents = [];
     private readonly List<StageRecord> _stages = [];
@@ -114,6 +120,8 @@ public sealed partial class UltraPipelineRun : IUltraRun
         _ultraRootDirectory = ultraRootDirectory;
         _buildSlots = new SemaphoreSlim(Math.Max(1, options.MaxConcurrentBuilds));
         _runCommand = options.ShellCommandsEnabled ? runCommand : null;
+        _changes = new ChangeRequestRegistry(time, options.PipelineChangeRequestTimeout, options.PipelineChangeRequestTimeout * 2);
+        _changes.Changed += OnChangeRequest;
 
         RunId = $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..4]}";
         Board = new TeamBoard(time, options.ClaimLifetime);
@@ -137,6 +145,9 @@ public sealed partial class UltraPipelineRun : IUltraRun
 
     /// <summary>The run's folder, where the worktrees and the records are.</summary>
     internal string RunDirectory => Path.Combine(_ultraRootDirectory, RunId);
+
+    /// <summary>Every change request so far, for tests and the report.</summary>
+    internal IReadOnlyList<ChangeRequest> ChangeRequests => _changes.All;
 
     /// <summary>The records the runner writes - the roster, the surveys, each stage - once the run has begun.</summary>
     internal string PhasesDirectory => Path.Combine(RunDirectory, RunWorkspace.PhasesFolderName);
@@ -272,7 +283,7 @@ public sealed partial class UltraPipelineRun : IUltraRun
         string goal, string? approvedPlan, RunWorkspace workspace, WorkspaceWorktree readOnly, CancellationToken cancellationToken)
     {
         var readDirectory = Path.GetFullPath(Path.Combine(readOnly.Path, workspace.SolutionRelativeDirectory));
-        var conductor = new PipelineConductor(
+        var conductor = _conductor = new PipelineConductor(
             _leadHost, _readOnlyTools, readDirectory, model: null, _options.OrchestratorEffort);
 
         await RosterStageAsync(conductor, goal, approvedPlan, cancellationToken);

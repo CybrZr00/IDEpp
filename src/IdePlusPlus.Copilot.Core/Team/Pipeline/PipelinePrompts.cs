@@ -144,8 +144,16 @@ public static class PipelinePrompts
         + "tests that cover your files. Then team_commit.\n"
         + "3. Merge small and early: team_merge puts your commit on the shared team branch once it builds, and your "
         + "peers build against that branch. If the team branch has moved on, team_sync, build again, then team_merge.\n"
-        + $"4. When every file you own meets its acceptance criteria and everything is merged, call "
-        + $"{PipelineStageTools.BuildSubmitToolName} once. Work that is not merged is lost when the run ends.\n"
+        + "4. A file you do not own is not yours to edit. If your work needs one changed, request_change asks its owner - say "
+        + "what and why; it returns at once with an id - and await_change waits for the answer when you need it. If it is "
+        + "accepted and done, team_sync brings the change in. A rejection with reasons can be appealed once, to the lead, "
+        + "whose decision is final. A file nobody owns that does not exist yet can be claimed with claim_new_file. Never "
+        + "bend an interface contract on your own: a contract that is wrong is a request.\n"
+        + "5. When a colleague asks you for a change you are told, and you must answer before you edit, commit or merge "
+        + "anything: respond_change accepts it (then make the change, build, team_commit, team_merge, and call change_done) "
+        + "or rejects it with reasons. Rejecting is a legitimate answer.\n"
+        + $"6. When every file you own meets its acceptance criteria, everything is merged and no request involving you is "
+        + $"still open, call {PipelineStageTools.BuildSubmitToolName} once. Work that is not merged is lost when the run ends.\n"
         + $"The user is not available - never ask them anything. Nothing you write in the conversation is recorded - only "
         + $"{PipelineStageTools.BuildSubmitToolName} is.";
 
@@ -167,6 +175,42 @@ public static class PipelinePrompts
         text.AppendLine();
         text.AppendLine($"You are {name} and you own exactly these files: {string.Join(", ", files)}.");
         text.Append($"Build your files, merge them, then call {PipelineStageTools.BuildSubmitToolName}.");
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// The first message of an owner that had finished and is called back because a colleague needs something from it.
+    /// It is a new conversation - what it knows of its own work is in its checkout - so it gets the design again, and
+    /// the request, in full, with what to do about it.
+    /// </summary>
+    /// <param name="requests">What waits for it: requests to answer, and any the lead ruled it must carry out.</param>
+    public static string OwnerWakeOpening(
+        string goal, string? approvedPlan, DesignPlan design, string name, IReadOnlyList<string> files, IReadOnlyList<ChangeRequest> requests)
+    {
+        var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
+        if (!string.IsNullOrWhiteSpace(approvedPlan))
+        {
+            text.Append($"Approved plan (the user approved these steps):\n{approvedPlan.Trim()}\n\n");
+        }
+
+        text.AppendLine(DataFence.Instruction);
+        text.AppendLine();
+        text.AppendLine(DataFence.Wrap("design", design.Render()));
+        text.AppendLine();
+        text.AppendLine($"You are {name} and you own exactly these files: {string.Join(", ", files)}.");
+        text.AppendLine("You had finished building them, and your checkout has what you built. A colleague now needs something from "
+                        + "you, and the run waits for it:");
+        text.AppendLine();
+        foreach (var request in requests)
+        {
+            text.AppendLine(request.Binding ? ChangeRequestMessages.BindingNotice(request) : ChangeRequestMessages.Incoming(request));
+            text.AppendLine();
+        }
+
+        text.Append("A request waiting for your answer needs respond_change first - accepting means you will make the change; "
+                    + "rejecting needs reasons. Where the lead has ruled that you must make a change, make it. For each change "
+                    + "you make: edit your own files, build, team_commit, team_sync if the team branch has moved, team_merge, "
+                    + $"then change_done. When every request is dealt with, call {PipelineStageTools.BuildSubmitToolName} again.");
         return text.ToString();
     }
 

@@ -142,6 +142,14 @@ public sealed record UltraTeamOptions(
 
     /// <summary>The most owners the designer may name. Each owns a cluster of files, builds them and repairs them.</summary>
     public int PipelineMaxOwners { get; init; } = 6;
+
+    /// <summary>How long a request to change someone else's file may go unanswered before it times out; one that was
+    /// accepted may go twice as long unreported. An owner that has finished is woken to answer, so this is the longest
+    /// anyone waits on an owner that cannot be.</summary>
+    public TimeSpan PipelineChangeRequestTimeout { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>What "one minute" is to await_change, which takes its wait in minutes. A minute; shorter only in a test.</summary>
+    public TimeSpan PipelineChangeWaitUnit { get; init; } = TimeSpan.FromMinutes(1);
 }
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could

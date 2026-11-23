@@ -62,6 +62,10 @@ public sealed record BuildRecord(
     int Steps,
     string? Gap);
 
+/// <summary>Every change request of a stage (build/change-requests.json): who asked whom for what, the owner's reasons
+/// when it answered, an appeal and the lead's ruling, and where each ended.</summary>
+public sealed record ChangeRequestsRecord(IReadOnlyList<ChangeRequest> Requests);
+
 /// <summary>How one agent's run in a stage ended.</summary>
 public sealed record AgentRecord(
     string Name,

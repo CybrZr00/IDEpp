@@ -161,6 +161,29 @@ public sealed class PipelineRecordsTests : IDisposable
         readSilent.Gap.ShouldContain("build_submit");
     }
 
+    [Fact]
+    public async Task TheChangeRequests_SurviveBeingWrittenAndReadBack_WithTheirReasoningAndRuling()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var request = new ChangeRequest(
+            "CR1", "b2", "b1", "Lib/A.cs", "Add an overload.", "The caller holds a span.", ChangeRequestState.Rejected,
+            DateTimeOffset.Parse("2026-01-01T10:00:00Z"), DateTimeOffset.Parse("2026-01-01T10:05:00Z"))
+        {
+            Reasoning = "That signature is public API.",
+            AppealUsed = true,
+            AppealArgument = "Three callers already copy the span.",
+            Arbitration = "The owner is right.",
+        };
+
+        await store.WriteJsonAsync("build/change-requests.json", new ChangeRequestsRecord([request]));
+
+        var read = (await store.ReadJsonAsync<ChangeRequestsRecord>("build/change-requests.json")).Value!.Requests.ShouldHaveSingleItem();
+        (read.Id, read.From, read.To, read.File, read.State).ShouldBe(("CR1", "b2", "b1", "Lib/A.cs", ChangeRequestState.Rejected));
+        (read.Reasoning, read.AppealUsed, read.AppealArgument, read.Arbitration).ShouldBe(
+            ("That signature is public API.", true, "Three callers already copy the span.", "The owner is right."));
+        read.CreatedAt.ShouldBe(DateTimeOffset.Parse("2026-01-01T10:00:00Z"));
+    }
+
     /// <summary>Records hold lists, and a record's own equality compares lists by reference.</summary>
     private sealed class RecordComparer : IEqualityComparer<RosterRecord>
     {
