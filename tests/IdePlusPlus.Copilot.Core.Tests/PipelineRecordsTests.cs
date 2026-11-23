@@ -222,6 +222,33 @@ public sealed class PipelineRecordsTests : IDisposable
         read.Findings.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task TheFindingsOfARound_SurviveBeingWrittenAndReadBack_WithTheirHistory()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var finding = new JudgeFinding(
+            "A race", TeamFindingSeverity.High, "correctness", ["Lib/A.cs"], "A failing test.", "lock (_gate) { }", "Take the lock.", FindingFixBy.Design);
+        var record = new FindingsRecord(
+            2, false, 4, 1,
+            [
+                new LedgerFinding("F1.1", "abc123abc123", "j4", finding, 1, 2, 2, FindingStatus.Escalated, "reported again after a repair (seen in 2 loops)"),
+                new LedgerFinding("F1.2", "def456def456", "J0", finding with { Title = "CS1002: ; expected" }, 1, 1, 1, FindingStatus.Fixed, "not reported again in loop 2"),
+            ]);
+
+        await store.WriteJsonAsync("loop-2/findings.json", record);
+
+        var read = (await store.ReadJsonAsync<FindingsRecord>("loop-2/findings.json")).Value!;
+        (read.Round, read.Passed, read.Score, read.Stalled).ShouldBe((2, false, 4, 1));
+        read.Findings.Select(f => (f.Id, f.Judge, f.Status, f.SeenCount, f.FirstSeenLoop, f.LastSeenLoop, f.Note)).ShouldBe(
+            [
+                ("F1.1", "j4", FindingStatus.Escalated, 2, 1, 2, "reported again after a repair (seen in 2 loops)"),
+                ("F1.2", "J0", FindingStatus.Fixed, 1, 1, 1, "not reported again in loop 2"),
+            ]);
+        var first = read.Findings[0].Finding;
+        (first.Title, first.Severity, first.FixBy, first.Quote).ShouldBe(("A race", TeamFindingSeverity.High, FindingFixBy.Design, "lock (_gate) { }"));
+        first.Files.ShouldBe(["Lib/A.cs"]);
+    }
+
     /// <summary>Records hold lists, and a record's own equality compares lists by reference.</summary>
     private sealed class RecordComparer : IEqualityComparer<RosterRecord>
     {

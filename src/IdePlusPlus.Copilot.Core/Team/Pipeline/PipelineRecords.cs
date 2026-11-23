@@ -82,6 +82,12 @@ public sealed record VerdictRecord(
     string? EvidenceBranch,
     string? EvidenceCommit);
 
+/// <summary>Where the loop stood at the end of a round (loop-N/findings.json): every finding of the run so far, with its status,
+/// how many rounds it has been seen in, and whether the round passed. <paramref name="Score"/> is what the convergence check
+/// watches - 3 for each open high finding, 1 for each open medium - and <paramref name="Stalled"/> how many rounds in a row it
+/// has failed to fall.</summary>
+public sealed record FindingsRecord(int Round, bool Passed, int Score, int Stalled, IReadOnlyList<LedgerFinding> Findings);
+
 /// <summary>How one agent's run in a stage ended.</summary>
 public sealed record AgentRecord(
     string Name,

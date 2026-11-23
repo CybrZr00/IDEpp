@@ -258,6 +258,9 @@ public static class PipelinePrompts
     /// </summary>
     /// <param name="gateSummary">The gate's one-line description of the commit being judged.</param>
     /// <param name="diff">What changed since the run began, or since the last round.</param>
+    /// <param name="round">From 2, the judge is told the owners have repaired the code and that the changes are the repair's.</param>
+    /// <param name="earlier">This judge's own findings from the last round that were still open - its own only: judges never see
+    /// each other's. It is asked to check each against the code as it is now and report again the ones that stand.</param>
     public static string JudgeOpening(
         string goal,
         string? approvedPlan,
@@ -265,7 +268,9 @@ public static class PipelinePrompts
         string gateSummary,
         string diff,
         IReadOnlyList<string> focusFiles,
-        IReadOnlyList<string> misuseIds)
+        IReadOnlyList<string> misuseIds,
+        int round = 1,
+        IReadOnlyList<LedgerFinding>? earlier = null)
     {
         var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
         if (!string.IsNullOrWhiteSpace(approvedPlan))
@@ -279,6 +284,22 @@ public static class PipelinePrompts
         text.AppendLine();
         text.AppendLine($"The gate: {gateSummary}.");
         text.AppendLine();
+        if (round > 1)
+        {
+            text.AppendLine($"This is round {round}. The owners have repaired the code since the last round, and the changes below are "
+                            + "what they changed since then: judge those first, and what they touch. The rest of the code you can read as before.");
+            text.AppendLine();
+            if (earlier is { Count: > 0 })
+            {
+                text.AppendLine("These findings of yours from the last round were still open. Check each against the code as it is now. "
+                                + "Report again any that still stands - under the same title and category, so it is recognised as the same "
+                                + "finding - and leave out any that is fixed:");
+                text.AppendLine();
+                text.AppendLine(DataFence.Wrap("earlier findings", RenderEarlierFindings(earlier), MaxEarlierFindingsChars));
+                text.AppendLine();
+            }
+        }
+
         text.AppendLine(DataFence.Wrap("changes", string.IsNullOrWhiteSpace(diff) ? "(no changes)" : diff, MaxJudgeDiffChars));
         text.AppendLine();
         if (focusFiles.Count > 0)
@@ -295,6 +316,25 @@ public static class PipelinePrompts
 
         text.Append($"Judge the work, then call {PipelineStageTools.VerdictSubmitToolName}.");
         return text.ToString();
+    }
+
+    private const int MaxEarlierFindingsChars = 6_000;
+
+    private static string RenderEarlierFindings(IReadOnlyList<LedgerFinding> findings)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (var entry in findings)
+        {
+            var finding = entry.Finding;
+            text.AppendLine($"- {entry.Id} [{finding.Severity.ToString().ToLowerInvariant()}] {finding.Title}");
+            text.AppendLine($"  category: {finding.Category}; files: {(finding.Files.Count == 0 ? "(none)" : string.Join(", ", finding.Files))}");
+            if (!string.IsNullOrWhiteSpace(finding.Quote))
+            {
+                text.AppendLine($"  quote: {finding.Quote.Trim()}");
+            }
+        }
+
+        return text.ToString().TrimEnd();
     }
 
     private static string Because(WrapUpReason reason) => reason switch

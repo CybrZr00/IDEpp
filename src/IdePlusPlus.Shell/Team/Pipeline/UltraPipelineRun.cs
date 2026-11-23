@@ -338,21 +338,7 @@ public sealed partial class UltraPipelineRun : IUltraRun
             return afterBuild;
         }
 
-        // The gate's word is final for what it checks, and a build that fails is not worth the judges' time: until the repair loop
-        // exists nothing can mend a red gate, which is a loop that ended without a pass.
-        var gate = await GateStageAsync(workspace, round: 1, cancellationToken);
-        if (!gate.Ok)
-        {
-            return UltraTeamEndReason.LoopCapReached;
-        }
-
-        if (Spent() is { } afterGate)
-        {
-            return afterGate;
-        }
-
-        var judged = await JudgeStageAsync(goal, approvedPlan, workspace, readOnly, gate, workspace.Snapshot, round: 1, cancellationToken);
-        return judged.Passed(_options.PipelineSeverityThreshold) ? Spent() ?? UltraTeamEndReason.AllDone : UltraTeamEndReason.LoopCapReached;
+        return await JudgeLoopAsync(goal, approvedPlan, workspace, readOnly, cancellationToken);
     }
 
     /// <summary>Why the run cannot start another stage, or null while it has time and tokens left.</summary>

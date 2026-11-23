@@ -67,6 +67,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
             TimeProvider.System, UltraRoot, runCommand)
         {
             GateRunner = _realGate ? null : GateOverride ?? ((request, _) => Task.FromResult(PassingGate(request.Commit))),
+            RepairRunner = RepairOverride,
         };
     }
 

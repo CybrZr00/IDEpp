@@ -15,8 +15,8 @@ internal sealed record JudgeReport(
     public string Title => Agent.Role.DisplayName;
 }
 
-/// <summary>What the judges said in one round.</summary>
-internal sealed record JudgeRound(int Round, IReadOnlyList<JudgeReport> Reports)
+/// <summary>What the judges said in one round, about the team branch at <paramref name="Commit"/>.</summary>
+internal sealed record JudgeRound(int Round, string Commit, IReadOnlyList<JudgeReport> Reports)
 {
     /// <summary>
     /// Every judge that gave a verdict has nothing at or above <paramref name="threshold"/> that still counts. A judge that gave none
@@ -150,7 +150,7 @@ public sealed partial class UltraPipelineRun
                 cancellationToken);
         }
 
-        var result = new JudgeRound(round, reports);
+        var result = new JudgeRound(round, head, reports);
         var failed = reports.Count(r => r.Verdict is { } v && v.BlocksPass(threshold));
         LogStage(
             clock, UltraStage.Judge, round, [.. outcomes],
@@ -233,6 +233,10 @@ public sealed partial class UltraPipelineRun
         int round)
     {
         var hasTestProject = _testProjectPaths.Count > 0;
+
+        // A judge that is back for another round is shown its own findings that were still open - its own only - so it can say which
+        // were fixed. Which it reports again, under the same title, is how the ledger knows they are the same.
+        var earlier = round > 1 ? _ledger.Findings.Where(f => f.Judge == judge.Name && f.IsBlocking(threshold)).ToList() : [];
         var misuse = judge.Name == "j3" ? design.MisuseCases.Select(m => m.Id).ToHashSet(StringComparer.Ordinal) : [];
         var role = judge.Agent.Role;
         return new PipelineAgentAssignment
@@ -240,7 +244,7 @@ public sealed partial class UltraPipelineRun
             Name = judge.Name,
             SystemPrompt = PipelinePrompts.Judge(judge.Name, role, threshold, judge.WritesTests, hasTestProject),
             Opening = PipelinePrompts.JudgeOpening(
-                goal, approvedPlan, design, gate.Describe(), diff, judge.FocusFiles, [.. misuse.Order(StringComparer.Ordinal)]),
+                goal, approvedPlan, design, gate.Describe(), diff, judge.FocusFiles, [.. misuse.Order(StringComparer.Ordinal)], round, earlier),
             Tools = judge.Dispatcher is { } dispatcher
                 ? [.. dispatcher.Tools.Where(t => PipelineStageTools.TestWritingJudgeToolNames.Contains(t.Name)), PipelineStageTools.VerdictSubmit]
                 : PipelineStageTools.ForReadingJudge,
