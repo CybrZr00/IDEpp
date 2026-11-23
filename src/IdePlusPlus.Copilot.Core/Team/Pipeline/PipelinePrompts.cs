@@ -189,7 +189,14 @@ public static class PipelinePrompts
     /// judge's words and the lead's instruction - each with what to do about it.
     /// </summary>
     public static string OwnerRepairOpening(
-        string goal, string? approvedPlan, DesignPlan design, string name, IReadOnlyList<string> files, IReadOnlyList<RepairTask> tasks, int round)
+        string goal,
+        string? approvedPlan,
+        DesignPlan design,
+        string name,
+        IReadOnlyList<string> files,
+        IReadOnlyList<RepairTask> tasks,
+        int round,
+        string? history = null)
     {
         var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
         if (!string.IsNullOrWhiteSpace(approvedPlan))
@@ -202,6 +209,15 @@ public static class PipelinePrompts
         text.AppendLine(DataFence.Wrap("design", design.Render()));
         text.AppendLine();
         text.AppendLine($"You are {name} and you own exactly these files: {string.Join(", ", files)}.");
+        if (!string.IsNullOrWhiteSpace(history))
+        {
+            text.AppendLine("The earlier rounds, as the runner recorded them. What was tried before is here: do not repeat what did "
+                            + "not work.");
+            text.AppendLine();
+            text.AppendLine(DataFence.Wrap("history", history, PipelineDigest.MaxChars));
+            text.AppendLine();
+        }
+
         text.AppendLine($"This is repair round {round}. These findings are yours to repair:");
         text.AppendLine();
         text.AppendLine(DataFence.Wrap("findings", RenderRepairTasks(tasks), MaxRepairTasksChars));
@@ -347,6 +363,8 @@ public static class PipelinePrompts
     /// <param name="round">From 2, the judge is told the owners have repaired the code and that the changes are the repair's.</param>
     /// <param name="earlier">This judge's own findings from the last round that were still open - its own only: judges never see
     /// each other's. It is asked to check each against the code as it is now and report again the ones that stand.</param>
+    /// <param name="history">How the rounds so far went (the digest), shown from round 2: what was repaired, and what the lead
+    /// dismissed or left to the user, which is not to be reported again.</param>
     public static string JudgeOpening(
         string goal,
         string? approvedPlan,
@@ -356,7 +374,8 @@ public static class PipelinePrompts
         IReadOnlyList<string> focusFiles,
         IReadOnlyList<string> misuseIds,
         int round = 1,
-        IReadOnlyList<LedgerFinding>? earlier = null)
+        IReadOnlyList<LedgerFinding>? earlier = null,
+        string? history = null)
     {
         var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
         if (!string.IsNullOrWhiteSpace(approvedPlan))
@@ -375,6 +394,15 @@ public static class PipelinePrompts
             text.AppendLine($"This is round {round}. The owners have repaired the code since the last round, and the changes below are "
                             + "what they changed since then: judge those first, and what they touch. The rest of the code you can read as before.");
             text.AppendLine();
+            if (!string.IsNullOrWhiteSpace(history))
+            {
+                text.AppendLine("How the rounds so far went, as the runner recorded them. Do not report again what the lead dismissed "
+                                + "or left to the user:");
+                text.AppendLine();
+                text.AppendLine(DataFence.Wrap("history", history, PipelineDigest.MaxChars));
+                text.AppendLine();
+            }
+
             if (earlier is { Count: > 0 })
             {
                 text.AppendLine("These findings of yours from the last round were still open. Check each against the code as it is now. "

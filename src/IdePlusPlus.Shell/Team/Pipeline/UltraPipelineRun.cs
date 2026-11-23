@@ -285,11 +285,20 @@ public sealed partial class UltraPipelineRun : IUltraRun
             throw;
         }
 
+        var report = BuildReport(endReason);
+        if (report is not null)
+        {
+            await RecordTextAsync("report.md", report.ToMarkdown(), CancellationToken.None);
+        }
+
         await WriteSummaryAsync(endReason);
         var outcome = await workspace.FinishAsync(CancellationToken.None);
         return new UltraTeamResult(
             RunId, repositoryRoot, workspace.Snapshot, workspace.TeamBranch, outcome.TeamBranchKept, outcome.Changes, endReason,
-            Workers, Board.Snapshot(), PromptTokens, CompletionTokens, keptBranches);
+            Workers, Board.Snapshot(), PromptTokens, CompletionTokens, keptBranches)
+        {
+            Pipeline = report,
+        };
     }
 
     /// <summary>The steps the user approved in Plan Mode as one numbered list, or null if there were none.</summary>
@@ -523,6 +532,19 @@ public sealed partial class UltraPipelineRun : IUltraRun
         try
         {
             await _phases!.WriteJsonAsync(relativePath, value, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Gap($"could not write {relativePath}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Writes a text record (the digest, the report), with the same leniency as <see cref="RecordAsync{T}"/>.</summary>
+    private async Task RecordTextAsync(string relativePath, string text, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _phases!.WriteTextAsync(relativePath, text, cancellationToken);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

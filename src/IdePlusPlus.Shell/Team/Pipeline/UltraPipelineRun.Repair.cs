@@ -13,6 +13,14 @@ public sealed partial class UltraPipelineRun
     /// could run later to do it. The report lists them.</summary>
     private readonly List<TriageDecision> _deferred = [];
 
+    // What this round's repair did, for the history of the loop: what each owner reported, and what the lead dismissed or left to the
+    // user. Set afresh by each repair round.
+    private IReadOnlyList<RepairNote> _repairNotes = [];
+    private List<string> _roundDismissed = [];
+    private List<string> _roundDeferred = [];
+
+    private string TitleOf(string findingId) => _ledger.Find(findingId)?.Finding.Title ?? findingId;
+
     /// <summary>
     /// One repair round: triage decides what each owner is to repair, and each owner that was given something does it, in
     /// parallel, in its own worktree. Whether the round did anything is whether the team branch moved: a repair that merged
@@ -21,6 +29,9 @@ public sealed partial class UltraPipelineRun
     private async Task<RepairOutcome> RepairStageAsync(
         int round, string goal, string? approvedPlan, RunWorkspace workspace, CancellationToken cancellationToken)
     {
+        _repairNotes = [];
+        _roundDismissed = [];
+        _roundDeferred = [];
         var threshold = _options.PipelineSeverityThreshold;
         if (RepairRunner is { } stand)
         {
@@ -103,6 +114,7 @@ public sealed partial class UltraPipelineRun
                 outcomes[i].Gap));
         }
 
+        _repairNotes = [.. records.Select(r => new RepairNote(r.Owner, r.Findings, r.Summary, r.Unmet))];
         var changed = await workspace.TeamHeadAsync(cancellationToken) != teamHead;
         await RecordAsync($"loop-{round}/repairs.json", new RepairRecord(round, changed, records), cancellationToken);
         await RecordAsync($"loop-{round}/change-requests.json", new ChangeRequestsRecord([.. _changes.All.Skip(requestsBefore)]), cancellationToken);
@@ -149,12 +161,14 @@ public sealed partial class UltraPipelineRun
         foreach (var dismissed in plan.Dismissed)
         {
             _ledger.SetStatus(dismissed.FindingId, FindingStatus.Dismissed, $"dismissed: {dismissed.Reason}");
+            _roundDismissed.Add($"{TitleOf(dismissed.FindingId)} ({dismissed.Reason})");
         }
 
         foreach (var deferred in plan.Deferred)
         {
             _ledger.SetStatus(deferred.FindingId, FindingStatus.Dismissed, $"for the user: {deferred.Reason}");
             _deferred.Add(deferred);
+            _roundDeferred.Add(TitleOf(deferred.FindingId));
         }
 
         await RecordAsync($"loop-{round}/triage.json", new TriageRecord(round, plan.Decisions, asked, decided, notes), cancellationToken);

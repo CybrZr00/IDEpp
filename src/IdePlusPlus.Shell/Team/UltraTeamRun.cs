@@ -1,6 +1,7 @@
 using System.IO;
 using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
+using IdePlusPlus.Copilot.Core.Team.Pipeline;
 using IdePlusPlus.SourceControl;
 
 namespace IdePlusPlus.Shell.Team;
@@ -216,7 +217,12 @@ public sealed record UltraTeamResult(
     IReadOnlyList<TeamBoardEntry> Board,
     int PromptTokens,
     int CompletionTokens,
-    IReadOnlyList<string> KeptWorkerBranches);
+    IReadOnlyList<string> KeptWorkerBranches)
+{
+    /// <summary>What an Ultra Pipeline run found and did - null for the Ultra team, and for a pipeline that never got to its first
+    /// round of judging.</summary>
+    public PipelineReport? Pipeline { get; init; }
+}
 
 /// <summary>
 /// Runs one Ultra team: snapshots the user's working tree, gives each worker its own worktree and

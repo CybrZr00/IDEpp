@@ -15,6 +15,16 @@ public sealed partial class UltraPipelineRun
 
     private readonly ConvergenceTracker _convergence = new();
 
+    /// <summary>How each round went, in order: what the next round's prompts are told.</summary>
+    private readonly List<LoopHistoryEntry> _history = [];
+
+    /// <summary>The history so far as text (digest.md): what the prompts of the next round carry. Empty until a round has been judged.</summary>
+    private string _digest = "";
+
+    private int _judgeRounds;
+
+    private int _repairRounds;
+
     /// <summary>
     /// What a repair round is, for tests that are about the loop and not about the repair: given the round and the findings the
     /// owners can still be asked to fix, it changes the team branch (or not) and says so. When it is not set the round is the real
@@ -43,6 +53,7 @@ public sealed partial class UltraPipelineRun
             _ledger.RecordRound(round, GateFindings.Judge, GateFindings.From(gate));
             _ledger.CompleteRound(round, [GateFindings.Judge]);
 
+            JudgeRound? judged = null;
             if (gate.Ok)
             {
                 if (Spent() is { } spent)
@@ -50,7 +61,8 @@ public sealed partial class UltraPipelineRun
                     return spent;
                 }
 
-                var judged = await JudgeStageAsync(goal, approvedPlan, workspace, readOnly, gate, judgedFrom, round, cancellationToken);
+                judged = await JudgeStageAsync(goal, approvedPlan, workspace, readOnly, gate, judgedFrom, round, cancellationToken);
+                _judgeRounds++;
                 judgedFrom = judged.Commit;
                 var answered = judged.Reports.Where(r => r.Verdict is not null).ToList();
                 foreach (var report in answered)
@@ -66,6 +78,8 @@ public sealed partial class UltraPipelineRun
             var score = ConvergenceTracker.Score(blocking);
             var stalled = _convergence.Observe(score);
             await RecordAsync($"loop-{round}/findings.json", new FindingsRecord(round, passed, score, stalled, _ledger.Findings), cancellationToken);
+            _history.Add(HistoryOf(round, gate, judged, threshold, blocking.Count, score));
+            await RecordDigestAsync(round, cancellationToken);
 
             if (passed)
             {
@@ -89,7 +103,10 @@ public sealed partial class UltraPipelineRun
                 return outOfBudget;
             }
 
+            _repairRounds++;
             var repair = await RepairStageAsync(round, goal, approvedPlan, workspace, cancellationToken);
+            _history[^1] = _history[^1] with { Repairs = _repairNotes, Dismissed = _roundDismissed, Deferred = _roundDeferred };
+            await RecordDigestAsync(round, cancellationToken);
             if (!repair.Changed)
             {
                 // Triage may have cleared everything that was open - dismissed it, or deferred it to the user - and then there is
@@ -105,5 +122,44 @@ public sealed partial class UltraPipelineRun
                 return UltraTeamEndReason.NoProgress;
             }
         }
+    }
+
+    /// <summary>The round as the next one is told of it. Its repairs are added when the repair has been made.</summary>
+    private static LoopHistoryEntry HistoryOf(int round, GateResult gate, JudgeRound? judged, TeamFindingSeverity threshold, int open, int score)
+    {
+        if (judged is null)
+        {
+            return LoopHistoryEntry.Begin(round, gate.Describe(), judgesRan: false, 0, 0, 0, open, score);
+        }
+
+        var failed = judged.Reports.Count(r => r.Verdict is { } v && v.BlocksPass(threshold));
+        var answered = judged.Reports.Count(r => r.Verdict is not null);
+        return LoopHistoryEntry.Begin(round, gate.Describe(), judgesRan: true, answered - failed, failed, judged.Unavailable.Count, open, score);
+    }
+
+    /// <summary>Writes the history as it stands (<c>loop-N/digest.md</c>) and keeps it for the prompts of the next round.</summary>
+    private async Task RecordDigestAsync(int round, CancellationToken cancellationToken)
+    {
+        _digest = PipelineDigest.Render(_history);
+        await RecordTextAsync($"loop-{round}/digest.md", _digest + "\n", cancellationToken);
+    }
+
+    /// <summary>The report of how the run went: null when no round was ever started, so there is nothing to report.</summary>
+    private PipelineReport? BuildReport(UltraTeamEndReason endReason)
+    {
+        if (_history.Count == 0)
+        {
+            return null;
+        }
+
+        List<string> gaps;
+        lock (_lock)
+        {
+            gaps = [.. _gaps];
+        }
+
+        return PipelineReportBuilder.Build(
+            _ledger, _deferred, _options.PipelineSeverityThreshold, endReason == UltraTeamEndReason.AllDone, endReason.ToString(),
+            _judgeRounds, _repairRounds, gaps);
     }
 }

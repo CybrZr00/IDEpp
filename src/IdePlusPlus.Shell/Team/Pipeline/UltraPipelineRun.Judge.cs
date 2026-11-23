@@ -244,7 +244,7 @@ public sealed partial class UltraPipelineRun
             Name = judge.Name,
             SystemPrompt = PipelinePrompts.Judge(judge.Name, role, threshold, judge.WritesTests, hasTestProject),
             Opening = PipelinePrompts.JudgeOpening(
-                goal, approvedPlan, design, gate.Describe(), diff, judge.FocusFiles, [.. misuse.Order(StringComparer.Ordinal)], round, earlier),
+                goal, approvedPlan, design, gate.Describe(), diff, judge.FocusFiles, [.. misuse.Order(StringComparer.Ordinal)], round, earlier, _digest),
             Tools = judge.Dispatcher is { } dispatcher
                 ? [.. dispatcher.Tools.Where(t => PipelineStageTools.TestWritingJudgeToolNames.Contains(t.Name)), PipelineStageTools.VerdictSubmit]
                 : PipelineStageTools.ForReadingJudge,

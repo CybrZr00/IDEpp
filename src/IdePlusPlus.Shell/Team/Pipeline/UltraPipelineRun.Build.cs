@@ -234,7 +234,7 @@ public sealed partial class UltraPipelineRun
         Opening = calledBackFor is not null
             ? PipelinePrompts.OwnerWakeOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files, calledBackFor)
             : work.RepairsFor(owner.Name) is { } repair
-                ? PipelinePrompts.OwnerRepairOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files, repair, work.Round)
+                ? PipelinePrompts.OwnerRepairOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files, repair, work.Round, _digest)
                 : PipelinePrompts.OwnerOpening(work.Goal, work.ApprovedPlan, work.Design, owner.Name, owner.Files),
         Tools =
         [
