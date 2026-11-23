@@ -819,6 +819,20 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel>
+                                        <TextBlock Text="Build timeout" Style="{StaticResource RowLabelStyle}" />
+                                        <TextBlock Text="Minutes, 1 to 240. How long one build may run before it is stopped - the check before a run, each merge, the pipeline's gate. A cold build of a large solution needs far more than a small one."
+                                                   Style="{StaticResource HintStyle}" />
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                                             Text="{Binding UltraBuildTimeoutMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
                                         <TextBlock Text="Model requests at a time" Style="{StaticResource RowLabelStyle}" />
                                         <TextBlock Text="1 to 64. The whole team's limit on simultaneous requests; workers beyond it wait their turn. A local model server usually wants 1-2."
                                                    Style="{StaticResource HintStyle}" />

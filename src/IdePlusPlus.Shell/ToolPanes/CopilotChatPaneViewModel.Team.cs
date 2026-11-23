@@ -37,6 +37,16 @@ public sealed partial class CopilotChatPaneViewModel
     /// <summary>Team (the Ultra team, the default) or Pipeline. Anything else reads as Team.</summary>
     public const string UltraStrategySettingKey = "UltraStrategy";
 
+    /// <summary>Minutes one build of a run may take (the check before it, each merge, the gate). Large solutions need far more than 5.</summary>
+    public const string UltraBuildTimeoutMinutesSettingKey = "UltraBuildTimeoutMinutes";
+    public const int DefaultUltraBuildTimeoutMinutes = 20;
+    public const int MaxUltraBuildTimeoutMinutes = 240;
+
+    public static int ReadUltraBuildTimeoutMinutes(AppSettingsStore settings) =>
+        int.TryParse(settings.Get(UltraBuildTimeoutMinutesSettingKey), out var minutes)
+            ? Math.Clamp(minutes, 1, MaxUltraBuildTimeoutMinutes)
+            : DefaultUltraBuildTimeoutMinutes;
+
     /// <summary>The pipeline's limits: how many repair rounds follow the first round of judging (the last round is judged and not
     /// repaired, so there is one more round of judging than of repair), the severity a finding must reach to keep a round from
     /// passing, and how many surveyors, owners and extra judges the lead may choose.</summary>
@@ -482,6 +492,7 @@ public sealed partial class CopilotChatPaneViewModel
         IReadOnlyList<string>? backlog = null)
     {
         string? fallbackReason = null;
+        TeamBuildTimeout.Current = TimeSpan.FromMinutes(ReadUltraBuildTimeoutMinutes(_appSettingsStore));
         var pipelineChosen = ReadUltraStrategy(_appSettingsStore) == UltraStrategy.Pipeline;
         var strategyName = pipelineChosen ? "Ultra pipeline" : "Ultra team";
         var turn = BeginTurn(pipelineChosen ? "Starting the Ultra pipeline..." : "Starting the Ultra team...");

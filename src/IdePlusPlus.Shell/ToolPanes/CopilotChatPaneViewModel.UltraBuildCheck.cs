@@ -41,6 +41,7 @@ public sealed partial class CopilotChatPaneViewModel
     /// </summary>
     private async Task<bool> EnsureBuildsBeforeUltraAsync(string userText)
     {
+        IdePlusPlus.Shell.Team.TeamBuildTimeout.Current = TimeSpan.FromMinutes(ReadUltraBuildTimeoutMinutes(_appSettingsStore));
         if (UltraBuildFailedPrompt is not { } ask || _solutionPath is null)
         {
             return true;

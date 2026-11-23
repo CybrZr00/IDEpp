@@ -31,7 +31,6 @@ namespace IdePlusPlus.Shell.Team;
 /// </summary>
 public sealed class TeamToolDispatcher
 {
-    private static readonly TimeSpan DefaultBuildTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(10);
 
     /// <summary>Waits this long or more for a free build slot are mentioned in the build report, so
@@ -183,7 +182,7 @@ public sealed class TeamToolDispatcher
                 canWait: waitForChange is not null,
                 role: _role).Select(tool => tool.Name),
             StringComparer.Ordinal);
-        _buildTimeout = buildTimeout ?? DefaultBuildTimeout;
+        _buildTimeout = buildTimeout ?? TeamBuildTimeout.Current;
         _context = context;
         _state = state;
         _board = board;

@@ -71,6 +71,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         ultraConcurrentRequests = CopilotChatPaneViewModel.ReadUltraConcurrentRequests(_appSettingsStore);
         ultraMaxRunMinutes = CopilotChatPaneViewModel.ReadUltraMaxRunMinutes(_appSettingsStore);
         ultraMaxTokensMillions = CopilotChatPaneViewModel.ReadUltraMaxTokensMillions(_appSettingsStore);
+        ultraBuildTimeoutMinutes = CopilotChatPaneViewModel.ReadUltraBuildTimeoutMinutes(_appSettingsStore);
         ultraAutoScale = CopilotChatPaneViewModel.ReadUltraAutoScale(_appSettingsStore);
         ultraStartWorkers = CopilotChatPaneViewModel.ReadUltraStartWorkers(_appSettingsStore);
         ultraCompositionPreset = CopilotChatPaneViewModel.ReadUltraCompositionPreset(_appSettingsStore).ToString();
@@ -201,6 +202,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int ultraMaxTokensMillions;
+
+    /// <summary>How long one build of a run may take, in minutes: the check before it, each merge and the gate.</summary>
+    [ObservableProperty]
+    private int ultraBuildTimeoutMinutes;
 
     /// <summary>Auto mode: start with UltraStartWorkers and let the workers ask for more, up to
     /// UltraWorkerCount.</summary>
@@ -578,6 +583,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         UltraMaxRunMinutes = Math.Clamp(
             UltraMaxRunMinutes, CopilotChatPaneViewModel.MinUltraTimeBudgetMinutes, CopilotChatPaneViewModel.MaxUltraMaxRunMinutes);
         UltraMaxTokensMillions = Math.Clamp(UltraMaxTokensMillions, 0, CopilotChatPaneViewModel.MaxUltraMaxTokensMillions);
+        UltraBuildTimeoutMinutes = Math.Clamp(UltraBuildTimeoutMinutes, 1, CopilotChatPaneViewModel.MaxUltraBuildTimeoutMinutes);
         UltraStartWorkers = Math.Clamp(UltraStartWorkers, 1, UltraWorkerCount);
         UltraMutationTesters = Math.Clamp(UltraMutationTesters, 0, TeamComposition.MaxSpecialistsPerKind);
         UltraAdversaries = Math.Clamp(UltraAdversaries, 0, TeamComposition.MaxSpecialistsPerKind);
@@ -633,6 +639,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConcurrentRequestsSettingKey, UltraConcurrentRequests.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxRunMinutesSettingKey, UltraMaxRunMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraMaxTokensMillionsSettingKey, UltraMaxTokensMillions.ToString());
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraBuildTimeoutMinutesSettingKey, UltraBuildTimeoutMinutes.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratedSettingKey, UltraOrchestrated.ToString());
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraWorkFolderSettingKey, workFolder);
         _appSettingsStore.Set(CopilotChatPaneViewModel.UltraOrchestratorProviderSettingKey, StoredProvider(UltraOrchestratorProvider));

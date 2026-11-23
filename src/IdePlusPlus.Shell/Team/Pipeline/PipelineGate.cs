@@ -33,7 +33,6 @@ internal sealed class PipelineGate(
     TimeSpan? buildTimeout = null,
     TimeSpan? testTimeout = null)
 {
-    private static readonly TimeSpan DefaultBuildTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan DefaultTestTimeout = TimeSpan.FromMinutes(10);
 
     private readonly SemaphoreSlim _oneAtATime = new(1, 1);
@@ -107,7 +106,7 @@ internal sealed class PipelineGate(
     private async Task<GateBuild> BuildCoreAsync(WorkspaceWorktree worktree, CancellationToken cancellationToken)
     {
         var context = workspace.ContextFor(worktree, []);
-        var timeout = buildTimeout ?? DefaultBuildTimeout;
+        var timeout = buildTimeout ?? TeamBuildTimeout.Current;
         var lines = new List<string>();
         int exitCode;
 
