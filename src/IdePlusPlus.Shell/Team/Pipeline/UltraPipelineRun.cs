@@ -21,8 +21,9 @@ namespace IdePlusPlus.Shell.Team.Pipeline;
 /// Stages so far: Setup (snapshot and branch), Roster (the orchestrator), Understand (surveyors), Design
 /// (the designer, whose interface stubs are checked and landed as the contract), Build (the owners, each
 /// in its own worktree, merging its files to the team branch), Gate (the deterministic build, tests and
-/// conformity check) and Finalize (records and result). The judges and the repair loop are added next;
-/// until then a run whose gate passes ends <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in
+/// conformity check), Judge (the standard four judges and any the orchestrator added) and Finalize (records
+/// and result). The repair loop is added next; until then a run whose gate passes and whose judges find
+/// nothing ends <see cref="UltraTeamEndReason.AllDone"/>. Each stage lives in
 /// its own part of this class.
 ///
 /// Like the team run it always cleans up - worktrees, links, branches that hold nothing - and a user's
@@ -337,10 +338,21 @@ public sealed partial class UltraPipelineRun : IUltraRun
             return afterBuild;
         }
 
-        // The gate's word is final for what it checks. Until the repair loop exists nothing can mend a red one, which is a loop
-        // that ended without a pass.
+        // The gate's word is final for what it checks, and a build that fails is not worth the judges' time: until the repair loop
+        // exists nothing can mend a red gate, which is a loop that ended without a pass.
         var gate = await GateStageAsync(workspace, round: 1, cancellationToken);
-        return gate.Ok ? Spent() ?? UltraTeamEndReason.AllDone : UltraTeamEndReason.LoopCapReached;
+        if (!gate.Ok)
+        {
+            return UltraTeamEndReason.LoopCapReached;
+        }
+
+        if (Spent() is { } afterGate)
+        {
+            return afterGate;
+        }
+
+        var judged = await JudgeStageAsync(goal, approvedPlan, workspace, readOnly, gate, workspace.Snapshot, round: 1, cancellationToken);
+        return judged.Passed(_options.PipelineSeverityThreshold) ? Spent() ?? UltraTeamEndReason.AllDone : UltraTeamEndReason.LoopCapReached;
     }
 
     /// <summary>Why the run cannot start another stage, or null while it has time and tokens left.</summary>

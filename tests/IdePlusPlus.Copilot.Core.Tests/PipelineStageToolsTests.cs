@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Core.Team.Pipeline;
 using Shouldly;
 using Xunit;
@@ -148,6 +149,72 @@ public sealed class PipelineStageToolsTests
         names.ShouldNotContain("board_write");
         names.ShouldNotContain("board_read");
         names.ShouldNotContain("team_done");
+    }
+
+    [Fact]
+    public void TheVerdictTool_RequiresAVerdictAndASummary_AndTakesFindingsAndCoverage()
+    {
+        var schema = PipelineStageTools.VerdictSubmit.ParametersSchema;
+
+        PipelineStageTools.VerdictSubmitToolName.ShouldBe("verdict_submit");
+        schema["required"]!.AsArray().Select(n => n!.GetValue<string>()).ShouldBe(["verdict", "summary"]);
+        schema["properties"]!["verdict"]!["enum"]!.AsArray().Select(n => n!.GetValue<string>()).ShouldBe(["pass", "fail"]);
+        Required(schema, "findings").ShouldBe(["title", "severity", "category"]);
+        Required(schema, "coverage").ShouldBe(["id", "result"]);
+        schema["properties"]!["findings"]!["items"]!["properties"]!["severity"]!["enum"]!.AsArray().Select(n => n!.GetValue<string>())
+            .ShouldBe(["low", "medium", "high"]);
+    }
+
+    [Fact]
+    public void AVerdictAsItsToolTakesIt_IsReadAndChecksOut()
+    {
+        var arguments = JsonNode.Parse("""
+            {
+              "verdict": "fail",
+              "summary": "Value is never validated.",
+              "findings": [
+                { "title": "No validation", "severity": "medium", "category": "correctness", "files": ["Lib/Class1.cs"],
+                  "evidence": "Read it.", "quote": "public int Value => 1;", "fix": "Validate it.", "fixBy": "owner" }
+              ],
+              "coverage": [ { "id": "m1", "result": "covered", "evidence": "No input." } ]
+            }
+            """);
+
+        var parsed = PipelineToolArguments.Parse<JudgeVerdict>(arguments, PipelineStageTools.VerdictSubmitToolName);
+
+        parsed.IsValid.ShouldBeTrue(parsed.Feedback);
+        parsed.Value!.Verdict.ShouldBe(JudgeVerdictKind.Fail);
+        parsed.Value.Findings!.ShouldHaveSingleItem().Severity.ShouldBe(TeamFindingSeverity.Medium);
+        parsed.Value.Coverage!.ShouldHaveSingleItem().Id.ShouldBe("m1");
+    }
+
+    [Fact]
+    public void AReadingJudge_HasTheReadingTools_AndItsVerdictTool_AndNothingThatWrites()
+    {
+        var names = PipelineStageTools.ForReadingJudge.Select(t => t.Name).ToList();
+
+        names.ShouldBe([.. SubAgentTools.AllowedTools.Select(t => t.Name), PipelineStageTools.VerdictSubmitToolName]);
+        names.ShouldNotContain("edit_file");
+        names.ShouldNotContain("run_command");
+        names.ShouldNotContain("team_commit");
+    }
+
+    [Fact]
+    public void ATestWritingJudge_MayReadWriteATestBuildRunAndCommit_ButNeverMergeRunACommandOrTalkToTheTeam()
+    {
+        var names = PipelineStageTools.TestWritingJudgeToolNames;
+
+        names.ShouldBe(
+            [
+                "read_file", "list_files", "search_codebase", "find_symbol", "find_references", "get_diagnostics", "edit_file",
+                "git_status", "git_diff", "build_solution", "run_tests", "team_commit",
+            ],
+            ignoreOrder: true);
+        names.ShouldNotContain("team_merge"); // what it commits is evidence and is never merged
+        names.ShouldNotContain("team_sync");
+        names.ShouldNotContain("run_command");
+        names.ShouldNotContain("team_post");
+        names.ShouldNotContain("board_write");
     }
 
     private static string[] Required(JsonNode schema, string list) =>

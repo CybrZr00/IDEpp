@@ -140,6 +140,10 @@ public sealed record UltraTeamOptions(
     /// <summary>The most judges of its own the orchestrator may add to the standard four.</summary>
     public int PipelineMaxCustomJudges { get; init; } = 2;
 
+    /// <summary>The lowest severity that keeps a pipeline run from passing: a judge's finding at or above it, once verified, must be
+    /// repaired. Medium unless the user says otherwise.</summary>
+    public IdePlusPlus.Copilot.Core.Team.TeamFindingSeverity PipelineSeverityThreshold { get; init; } = IdePlusPlus.Copilot.Core.Team.TeamFindingSeverity.Medium;
+
     /// <summary>The most owners the designer may name. Each owns a cluster of files, builds them and repairs them.</summary>
     public int PipelineMaxOwners { get; init; } = 6;
 

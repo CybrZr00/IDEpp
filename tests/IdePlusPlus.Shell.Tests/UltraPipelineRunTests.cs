@@ -18,8 +18,8 @@ namespace IdePlusPlus.Shell.Tests;
 /// "lead" in the script; the surveyors are u1, u2 and the designer is d1.
 ///
 /// A designer with no script of its own hands in the plainest design (one owner, one file, no stubs) and an
-/// owner with none reports at once that it has nothing to change, so a test about another stage need not
-/// script either. The gate is a stand-in that passes at once - a real one builds and formats - unless a test is about it.
+/// owner with none reports at once that it has nothing to change, and a judge with none finds nothing, so a
+/// test about another stage need not script any of them. The gate is a stand-in that passes at once - a real one builds and formats - unless a test is about it.
 /// </summary>
 public sealed partial class UltraPipelineRunTests : IDisposable
 {
@@ -27,6 +27,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
     private const string SubmitSurvey = PipelineStageTools.SurveySubmitToolName;
     private const string SubmitDesign = PipelineStageTools.DesignSubmitToolName;
     private const string SubmitBuild = PipelineStageTools.BuildSubmitToolName;
+    private const string SubmitVerdict = PipelineStageTools.VerdictSubmitToolName;
 
     private const string GoodStub = "public interface IGreeter\r\n{\r\n    string Greet(string name);\r\n}\r\n";
     private const string StubMissingASemicolon = "public interface IGreeter\r\n{\r\n    string Greet(string name)\r\n}\r\n";
@@ -40,6 +41,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         {
             "d1" => PlainDesign(),
             _ when worker.StartsWith('b') => _client.Call(SubmitBuild, new { summary = "Nothing to change." }),
+            _ when worker.StartsWith('j') => _client.Call(SubmitVerdict, new { verdict = "pass", summary = "Nothing found." }),
             _ => [new TextDelta("Nothing more to do.")],
         };
     }
@@ -171,13 +173,15 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         result.Changes.ShouldBeEmpty();
         result.TeamBranchKept.ShouldBeFalse();
         result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe(
-            [("u1", TeamWorkerPhase.Done), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done)]);
-        result.Workers.Select(w => (w.Name, w.Steps)).ShouldBe([("u1", 2), ("u2", 2), ("d1", 1), ("b1", 1)]);
+            [("u1", TeamWorkerPhase.Done), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done), ("j1", TeamWorkerPhase.Done), ("j2", TeamWorkerPhase.Done), ("j3", TeamWorkerPhase.Done), ("j4", TeamWorkerPhase.Done)
+            ]);
+        result.Workers.Select(w => (w.Name, w.Steps)).ShouldBe(
+            [("u1", 2), ("u2", 2), ("d1", 1), ("b1", 1), ("j1", 1), ("j2", 1), ("j3", 1), ("j4", 1)]);
 
-        // One request for the lead, two for each surveyor, one for the designer and one for the owner - none spent on
-        // a reply to a submission.
-        _client.Requests.Count.ShouldBe(7);
-        (result.PromptTokens, result.CompletionTokens).ShouldBe((700, 70));
+        // One request for the lead, two for each surveyor, one for the designer, one for the owner and one for each of
+        // the four judges - none spent on a reply to a submission.
+        _client.Requests.Count.ShouldBe(11);
+        (result.PromptTokens, result.CompletionTokens).ShouldBe((1100, 110));
 
         var roster = await ReadAsync<RosterRecord>(run, "roster.json");
         roster.Decided.ShouldBeTrue();
@@ -193,9 +197,9 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         var summary = await ReadAsync<RunSummaryRecord>(run, "summary.json");
         summary.EndReason.ShouldBe("AllDone");
         summary.Gaps.ShouldBeEmpty();
-        summary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design", "Build", "Gate"]);
+        summary.Stages.Select(s => s.Stage).ShouldBe(["Roster", "Understand", "Design", "Build", "Gate", "Judge"]);
         summary.Stages[1].Agents.Select(a => (a.Name, a.End)).ShouldBe([("u1", "Submitted"), ("u2", "Submitted")]);
-        summary.PromptTokens.ShouldBe(700);
+        summary.PromptTokens.ShouldBe(1100);
 
         var build = await ReadAsync<BuildRecord>(run, "build/b1.json");
         (build.Owner, build.Submitted, build.Summary, build.Merges).ShouldBe(("b1", true, "Nothing to change.", 0));
@@ -265,8 +269,9 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        result.Workers.Select(w => w.Name).ShouldBe(["d1", "b1"]);
-        _client.Requests.Select(r => r.Worker).ShouldBe(["lead", "d1", "b1"]);
+        result.Workers.Select(w => w.Name).ShouldBe(["d1", "b1", "j1", "j2", "j3", "j4"]);
+        _client.Requests.Select(r => r.Worker).Take(3).ShouldBe(["lead", "d1", "b1"]);
+        _client.Requests.Select(r => r.Worker).Skip(3).Order().ShouldBe(["j1", "j2", "j3", "j4"]); // together, so in no fixed order
         var summary = await ReadAsync<RunSummaryRecord>(run, "summary.json");
         summary.Stages.Select(s => (s.Stage, s.Note)).ShouldBe(
             [
@@ -275,6 +280,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
                 ("Design", "no stubs, so no contract commit; 1 owner(s)"),
                 ("Build", "0 merge(s) from 1 owner(s)"),
                 ("Gate", "builds; tests not run (no tests in this stand-in); conformity not run"),
+                ("Judge", "4 judge(s): 4 pass, 0 fail, 0 unavailable"),
             ]);
         (await ReadAsync<RosterRecord>(run, "roster.json")).Rationale.ShouldBe("One file.");
     }
@@ -287,7 +293,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        _client.Requests.ShouldAllBe(r => r.Worker == "d1" || r.Worker == "b1");
+        _client.Requests.ShouldAllBe(r => r.Worker == "d1" || r.Worker == "b1" || r.Worker.StartsWith('j'));
         (await ReadAsync<RosterRecord>(run, "roster.json")).Surveyors.ShouldBeEmpty();
     }
 
@@ -314,13 +320,14 @@ public sealed partial class UltraPipelineRunTests : IDisposable
 
         await RunAsync(run);
 
-        _client.Models.Select(m => (m.Worker, m.Model, m.Effort)).ShouldBe(
+        _client.Models.Where(m => !m.Worker.StartsWith('j')).Select(m => (m.Worker, m.Model, m.Effort)).ShouldBe(
             [
                 ("lead", "smart-model", ChatEffort.High),
                 ("u1", "cheap-model", ChatEffort.Medium),
                 ("d1", "cheap-model", ChatEffort.High),
                 ("b1", "cheap-model", ChatEffort.Medium),
             ]);
+        _client.Models.Where(m => m.Worker.StartsWith('j')).ShouldAllBe(m => m.Model == "cheap-model" && m.Effort == ChatEffort.High);
     }
 
     [Fact]
@@ -333,7 +340,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
 
         await RunAsync(run);
 
-        _client.Models.Where(m => m.Worker is "u1" or "d1" or "b1").ShouldAllBe(m => m.Effort == ChatEffort.Low);
+        _client.Models.Where(m => m.Worker is "u1" or "d1" or "b1" or "j1" or "j4").ShouldAllBe(m => m.Effort == ChatEffort.Low);
     }
 
     // ---- When an agent gives nothing ----
@@ -347,7 +354,7 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         var result = await RunAsync(run);
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
-        result.Workers.Select(w => w.Name).ShouldBe(["d1", "b1"]);
+        result.Workers.Select(w => w.Name).ShouldBe(["d1", "b1", "j1", "j2", "j3", "j4"]);
         var roster = await ReadAsync<RosterRecord>(run, "roster.json");
         roster.Decided.ShouldBeFalse();
         roster.Note.ShouldNotBeNull().ShouldContain(SubmitRoster);
@@ -367,7 +374,8 @@ public sealed partial class UltraPipelineRunTests : IDisposable
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
         result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe(
-            [("u1", TeamWorkerPhase.Stopped), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done)]);
+            [("u1", TeamWorkerPhase.Stopped), ("u2", TeamWorkerPhase.Done), ("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done), ("j1", TeamWorkerPhase.Done), ("j2", TeamWorkerPhase.Done), ("j3", TeamWorkerPhase.Done), ("j4", TeamWorkerPhase.Done)
+            ]);
         var missing = await ReadAsync<SurveyRecord>(run, "survey/u1.json");
         missing.Submitted.ShouldBeFalse();
         missing.Report.ShouldBeNull();
@@ -436,7 +444,8 @@ public sealed partial class UltraPipelineRunTests : IDisposable
 
         result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
         result.Workers.Select(w => (w.Name, w.Phase)).ShouldBe(
-            [("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done), ("b2", TeamWorkerPhase.Done)]);
+            [("d1", TeamWorkerPhase.Done), ("b1", TeamWorkerPhase.Done), ("b2", TeamWorkerPhase.Done), ("j1", TeamWorkerPhase.Done), ("j2", TeamWorkerPhase.Done), ("j3", TeamWorkerPhase.Done), ("j4", TeamWorkerPhase.Done)
+            ]);
 
         // The contract is on the team branch, and is the only thing the run has changed so far.
         result.TeamBranchKept.ShouldBeTrue();
@@ -1099,14 +1108,15 @@ public sealed partial class UltraPipelineRunTests : IDisposable
                 "Design - d1 is planning the build",
                 "Build - 1 owner building their files",
                 "Gate - building and testing what the owners merged",
+                "Judge - 4 judges reviewing",
             ]);
         setups.ShouldContain(s => s.StartsWith("Creating workspace - taking a snapshot"));
-        agentCounts.Max().ShouldBe(4);
-        run.MaxWorkers.ShouldBe(4);
+        agentCounts.Max().ShouldBe(8);
+        run.MaxWorkers.ShouldBe(8);
         run.IsAutoScaling.ShouldBeFalse();
         run.Round.ShouldBe(1);
         run.TimeBudget.ShouldBe(TimeSpan.FromMinutes(10));
         run.Elapsed.ShouldBeGreaterThan(TimeSpan.Zero);
-        run.PromptTokens.ShouldBe(500); // the lead's one request, each surveyor's, the designer's and the owner's
+        run.PromptTokens.ShouldBe(900); // the lead's one request, each surveyor's, the designer's, the owner's and the four judges' 
     }
 }

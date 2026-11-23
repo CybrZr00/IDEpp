@@ -12,6 +12,7 @@ public static class PipelineStageTools
     public const string SurveySubmitToolName = "survey_submit";
     public const string DesignSubmitToolName = "design_submit";
     public const string BuildSubmitToolName = "build_submit";
+    public const string VerdictSubmitToolName = "verdict_submit";
 
     public static readonly ToolDefinition SurveySubmit = new(
         Name: SurveySubmitToolName,
@@ -136,6 +137,77 @@ public static class PipelineStageTools
               "required": ["summary"]
             }
             """)!);
+
+    public static readonly ToolDefinition VerdictSubmit = new(
+        Name: VerdictSubmitToolName,
+        Description: "Give your verdict. Call this once, when you have judged the work. pass: nothing at or above the run's severity " +
+                     "threshold is wrong. fail: something is, and you list it. Every medium or high finding names the files it is " +
+                     "about, gives evidence (how you know), and quotes the code it is about exactly as it is in the file - a finding " +
+                     "whose quote is not found there is set aside as unverified and does not count. If you were given misuse cases, " +
+                     "answer each one in 'coverage'.",
+        ParametersSchema: JsonNode.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "verdict": { "type": "string", "enum": ["pass", "fail"] },
+                "summary": { "type": "string", "description": "One or two sentences: what you checked and what you concluded." },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "title": { "type": "string", "description": "What is wrong, in a line." },
+                      "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+                      "category": { "type": "string", "description": "security, correctness, maintainability, gap, ..." },
+                      "files": { "type": "array", "items": { "type": "string" }, "description": "The files it is about, relative to the solution folder; the first is the main one." },
+                      "evidence": { "type": "string", "description": "How you know. For a high finding from a test-writing judge: the failing test on your branch, as branch:<sha>." },
+                      "quote": { "type": "string", "description": "A line or two of the code it is about, copied exactly." },
+                      "fix": { "type": "string", "description": "What would put it right." },
+                      "fixBy": { "type": "string", "enum": ["owner", "design", "user"], "description": "owner: the owner of the file fixes it. design: a contract is wrong. user: outside this goal." }
+                    },
+                    "required": ["title", "severity", "category"]
+                  }
+                },
+                "coverage": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "description": "A misuse case's id, e.g. M1." },
+                      "result": { "type": "string", "enum": ["covered", "partial", "uncovered"] },
+                      "evidence": { "type": "string", "description": "Where the code handles it, or fails to." }
+                    },
+                    "required": ["id", "result"]
+                  }
+                }
+              },
+              "required": ["verdict", "summary"]
+            }
+            """)!);
+
+    /// <summary>What a judge that only reads has: the read-only tools every sub-agent has, and its verdict tool.</summary>
+    public static IReadOnlyList<ToolDefinition> ForReadingJudge { get; } = [.. SubAgentTools.AllowedTools, VerdictSubmit];
+
+    /// <summary>
+    /// The tools of a test-writing judge's worktree dispatcher that it is given, by name: read, write a test (the dispatcher
+    /// refuses anything but a test), build, run tests, look at its branch, and commit to it. Not team_merge - what it commits
+    /// is evidence that travels with a finding and is never merged - not a shell, and not the team's chatter.
+    /// </summary>
+    public static IReadOnlySet<string> TestWritingJudgeToolNames { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        WorkspaceTools.ReadFileToolName,
+        WorkspaceTools.ListFilesToolName,
+        WorkspaceTools.SearchCodebaseToolName,
+        SymbolTools.FindSymbolToolName,
+        SymbolTools.FindReferencesToolName,
+        DiagnosticTools.GetDiagnosticsToolName,
+        TeamTools.EditFileToolName,
+        GitTools.StatusToolName,
+        GitTools.DiffToolName,
+        BuildTools.BuildToolName,
+        TestTools.RunTestsToolName,
+        TeamTools.CommitToolName,
+    };
 
     /// <summary>What a surveyor has: the read-only tools every sub-agent has, and its submit tool. Nothing
     /// that writes, and no commands.</summary>

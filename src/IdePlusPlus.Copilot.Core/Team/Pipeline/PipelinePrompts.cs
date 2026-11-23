@@ -214,6 +214,89 @@ public static class PipelinePrompts
         return text.ToString();
     }
 
+    /// <summary>The most characters of diff a judge is shown; a change bigger than this is judged on what fits, and the judge reads
+    /// the rest of the code through its tools.</summary>
+    public const int MaxJudgeDiffChars = 30_000;
+
+    /// <summary>
+    /// A judge's system prompt: who it is, its charter, what it can do, what a verdict is and what makes a finding count. A judge
+    /// that cannot show a finding is told not to report it - the validator sets aside an unverifiable one anyway, but an
+    /// owner is never sent to repair something that was only suspected.
+    /// </summary>
+    /// <param name="writesTests">The judge may write tests, on its own branch, which are evidence and are never merged.</param>
+    /// <param name="hasTestProject">The solution has a test project to write them in.</param>
+    public static string Judge(string name, TeamRole role, TeamFindingSeverity threshold, bool writesTests, bool hasTestProject)
+    {
+        var level = threshold.ToString().ToLowerInvariant();
+        var abilities = !writesTests
+            ? "You change nothing: you read and report."
+            : hasTestProject
+                ? "You may write tests, and only tests, in the solution's test project, on your own branch: build_solution, run_tests and "
+                  + "team_commit work there. What you commit is evidence that travels with a finding and is never merged. You have no "
+                  + "shell and cannot edit production code."
+                : "This solution has no test project, so you cannot write a test to prove a finding; a bug you cannot demonstrate is at most "
+                  + "medium. You change nothing: you read and report.";
+        return $"You are {name}, a judge in an Ultra Pipeline run in IDE++. {role.Charter}\n\n"
+               + "The owners have built the design and merged it to the team branch, and the gate has checked that it builds and its tests "
+               + "pass. Your job is to judge the result, as your charter says, and give one verdict. "
+               + $"{abilities} Read the code with read_file, list_files and search_codebase: they read the team branch as it is now. "
+               + "find_symbol, find_references and get_diagnostics use the IDE's index from the start of the run, so they may not show "
+               + "the latest changes - trust the files over them.\n"
+               + $"Call {PipelineStageTools.VerdictSubmitToolName} once. The verdict is \"pass\" when nothing at {level} severity or above "
+               + "is wrong and \"fail\" when something is; a pass cannot carry a finding at that level and a fail needs one. Every medium or "
+               + "high finding names its files, gives evidence, and quotes the code it is about exactly as it is in the file: a finding "
+               + "whose quote is not found there is set aside as unverified and counts for nothing. Do not report what you cannot show, "
+               + "and style a formatter would fix is low. You judge alone - other judges are looking at other things and you cannot see "
+               + "their findings. The user is not available - never ask them anything. Nothing you write in the conversation is "
+               + $"recorded - only {PipelineStageTools.VerdictSubmitToolName} is.";
+    }
+
+    /// <summary>
+    /// A judge's first message: the goal, the design, what the gate found, what changed (fenced - the designer's, the owners' and
+    /// git's words about a repository), where to look first if the orchestrator said, and - for the judge that answers them - the
+    /// misuse cases by id.
+    /// </summary>
+    /// <param name="gateSummary">The gate's one-line description of the commit being judged.</param>
+    /// <param name="diff">What changed since the run began, or since the last round.</param>
+    public static string JudgeOpening(
+        string goal,
+        string? approvedPlan,
+        DesignPlan design,
+        string gateSummary,
+        string diff,
+        IReadOnlyList<string> focusFiles,
+        IReadOnlyList<string> misuseIds)
+    {
+        var text = new System.Text.StringBuilder($"The goal of the whole run:\n{goal.Trim()}\n\n");
+        if (!string.IsNullOrWhiteSpace(approvedPlan))
+        {
+            text.Append($"Approved plan (the user approved these steps):\n{approvedPlan.Trim()}\n\n");
+        }
+
+        text.AppendLine(DataFence.Instruction);
+        text.AppendLine();
+        text.AppendLine(DataFence.Wrap("design", design.Render()));
+        text.AppendLine();
+        text.AppendLine($"The gate: {gateSummary}.");
+        text.AppendLine();
+        text.AppendLine(DataFence.Wrap("changes", string.IsNullOrWhiteSpace(diff) ? "(no changes)" : diff, MaxJudgeDiffChars));
+        text.AppendLine();
+        if (focusFiles.Count > 0)
+        {
+            text.AppendLine($"Look at these files first: {string.Join(", ", focusFiles)}.");
+            text.AppendLine();
+        }
+
+        if (misuseIds.Count > 0)
+        {
+            text.AppendLine($"Answer every misuse case in 'coverage', one entry each: {string.Join(", ", misuseIds)}.");
+            text.AppendLine();
+        }
+
+        text.Append($"Judge the work, then call {PipelineStageTools.VerdictSubmitToolName}.");
+        return text.ToString();
+    }
+
     private static string Because(WrapUpReason reason) => reason switch
     {
         WrapUpReason.Time => "Your stage has run out of time.",

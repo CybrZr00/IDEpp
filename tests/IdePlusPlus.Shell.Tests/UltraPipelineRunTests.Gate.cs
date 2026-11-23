@@ -67,7 +67,7 @@ public sealed partial class UltraPipelineRunTests
         gate.Result.Ok.ShouldBeTrue();
         gate.Result.TestNote.ShouldBe("this solution has no test projects");
         gate.Findings.ShouldBeEmpty();
-        var stage = (await ReadAsync<RunSummaryRecord>(run, "summary.json")).Stages.Last();
+        var stage = (await ReadAsync<RunSummaryRecord>(run, "summary.json")).Stages.Single(s => s.Stage == "Gate");
         (stage.Stage, stage.Round).ShouldBe(("Gate", 1));
         stage.Note.ShouldBe("builds; tests not run (this solution has no test projects); conformity not run");
         Directory.Exists(Path.Combine(run.RunDirectory, "_gate")).ShouldBeFalse();

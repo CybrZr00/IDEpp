@@ -184,6 +184,44 @@ public sealed class PipelineRecordsTests : IDisposable
         read.CreatedAt.ShouldBe(DateTimeOffset.Parse("2026-01-01T10:00:00Z"));
     }
 
+    [Fact]
+    public async Task AVerdict_SurvivesBeingWrittenAndReadBack_WithItsFindingsCoverageAndEvidenceBranch()
+    {
+        var store = new PipelineArtifactStore(_root);
+        var finding = new JudgeFinding(
+            "A race", TeamFindingSeverity.High, "correctness", ["Lib/A.cs"], "A failing test.", "lock (_gate) { }", "Take the lock.", FindingFixBy.Design);
+        var record = new VerdictRecord(
+            "j4", "Runtime bugs judge", true, null, JudgeVerdictKind.Fail, "A race.",
+            [new ValidatedFinding(finding, FindingStatus.Open), new ValidatedFinding(finding with { Title = "Another" }, FindingStatus.Unverified, "The quoted code was not found.")],
+            [new CoverageEntry("M1", "covered", "Handled in A.")], "ideplusplus/ultra/r1/j4", "abc1234");
+
+        await store.WriteJsonAsync("loop-1/verdicts/j4.json", record);
+
+        var read = (await store.ReadJsonAsync<VerdictRecord>("loop-1/verdicts/j4.json")).Value!;
+        (read.Judge, read.Title, read.Available, read.Unavailable, read.Verdict, read.Summary).ShouldBe(
+            ("j4", "Runtime bugs judge", true, null, JudgeVerdictKind.Fail, "A race."));
+        (read.EvidenceBranch, read.EvidenceCommit).ShouldBe(("ideplusplus/ultra/r1/j4", "abc1234"));
+        read.Findings.Select(f => (f.Finding.Title, f.Status, f.Note)).ShouldBe(
+            [("A race", FindingStatus.Open, null), ("Another", FindingStatus.Unverified, "The quoted code was not found.")]);
+        var first = read.Findings[0].Finding;
+        (first.Severity, first.Category, first.Evidence, first.Quote, first.Fix, first.FixBy).ShouldBe(
+            (TeamFindingSeverity.High, "correctness", "A failing test.", "lock (_gate) { }", "Take the lock.", FindingFixBy.Design));
+        first.Files.ShouldBe(["Lib/A.cs"]);
+        read.Coverage.ShouldHaveSingleItem().ShouldBe(new CoverageEntry("M1", "covered", "Handled in A."));
+    }
+
+    [Fact]
+    public async Task AJudgeThatGaveNoVerdict_IsRecordedAsUnavailable_WithWhy()
+    {
+        var store = new PipelineArtifactStore(_root);
+
+        await store.WriteJsonAsync("loop-1/verdicts/j3.json", new VerdictRecord("j3", "Security judge", false, "It never called verdict_submit.", null, null, [], [], null, null));
+
+        var read = (await store.ReadJsonAsync<VerdictRecord>("loop-1/verdicts/j3.json")).Value!;
+        (read.Available, read.Verdict, read.Unavailable).ShouldBe((false, null, "It never called verdict_submit."));
+        read.Findings.ShouldBeEmpty();
+    }
+
     /// <summary>Records hold lists, and a record's own equality compares lists by reference.</summary>
     private sealed class RecordComparer : IEqualityComparer<RosterRecord>
     {

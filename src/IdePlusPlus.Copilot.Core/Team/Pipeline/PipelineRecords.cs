@@ -66,6 +66,22 @@ public sealed record BuildRecord(
 /// when it answered, an appeal and the lead's ruling, and where each ended.</summary>
 public sealed record ChangeRequestsRecord(IReadOnlyList<ChangeRequest> Requests);
 
+/// <summary>One judge's answer for one round (loop-N/verdicts/jK.json): the validated verdict, or why there is none. A judge
+/// that gave no verdict is "unavailable": the round goes on without it, flagged, rather than looping on it.</summary>
+/// <param name="EvidenceBranch">For a judge that writes tests: its branch, when it committed anything - the failing tests its
+/// findings point to travel on it and are never merged.</param>
+public sealed record VerdictRecord(
+    string Judge,
+    string Title,
+    bool Available,
+    string? Unavailable,
+    JudgeVerdictKind? Verdict,
+    string? Summary,
+    IReadOnlyList<ValidatedFinding> Findings,
+    IReadOnlyList<CoverageEntry> Coverage,
+    string? EvidenceBranch,
+    string? EvidenceCommit);
+
 /// <summary>How one agent's run in a stage ended.</summary>
 public sealed record AgentRecord(
     string Name,
