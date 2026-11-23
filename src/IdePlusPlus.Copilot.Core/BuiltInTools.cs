@@ -24,6 +24,7 @@ public static class BuiltInTools
         .. DiagnosticTools.All,
         .. SymbolTools.All,
         .. SkillTools.All,
+        .. TranscriptTools.All,
         .. SubAgentTools.All,
     ];
 

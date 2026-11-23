@@ -56,6 +56,12 @@ never really a notepad to begin with.
   rather it just get on with it
 - **Automated skill creation** — the agent can save a reusable procedure to disk and reload it in a
   later session instead of re-explaining it every time
+- **Conversation transcripts as a secondary memory** - every message and every thought is appended
+  to `.ideplusplus/copilot/transcripts/` as it is written, so New Chat and Save Memory no longer cost
+  you detail or the reasoning behind a decision. Sub-agents, scheduled runs and the Ultra team's lead
+  and workers are recorded too, each under its own label. The agent searches them with `search_transcripts`,
+  by meaning once the built-in embedding model is installed (Index Codebase downloads it) and by
+  keyword before that
 - **Adversarial review** — a one-click, independently-prompted second opinion on a diff, from a
   model with no memory of having written it
 - **Parallel sub-agents** — fans out several independent, read-only investigations at once instead

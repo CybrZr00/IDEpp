@@ -39,17 +39,24 @@ public sealed class HeadlessAgentLoop
     private readonly IReadOnlyList<ToolDefinition> _tools;
     private readonly Func<string, JsonNode?, CancellationToken, Task<(bool IsError, string Text)>> _executeTool;
     private readonly Func<string?>? _drainNotices;
+    private readonly Action<string?, string>? _onModelTurn;
 
     /// <param name="drainNotices">Optional: called after every tool call, and whatever it returns is
     /// appended to that call's result. This is how an Ultra worker receives a direct message or a
     /// peer's board entry mid-step - see Team.TeamNotices.</param>
+    /// <param name="onModelTurn">Optional: called once per model request with the reasoning (null if
+    /// the model sent none) and the text it streamed, exactly as streamed - the notes this loop adds
+    /// to a reply for its caller are not included. Called even when the request is cut short by
+    /// cancellation or an error, with whatever had arrived, and never with both empty. An exception
+    /// from it is swallowed: whoever is listening must not be able to stop the agent.</param>
     public HeadlessAgentLoop(
         IChatClient client,
         string model,
         ChatEffort effort,
         IReadOnlyList<ToolDefinition> tools,
         Func<string, JsonNode?, CancellationToken, Task<(bool IsError, string Text)>> executeTool,
-        Func<string?>? drainNotices = null)
+        Func<string?>? drainNotices = null,
+        Action<string?, string>? onModelTurn = null)
     {
         _client = client;
         _model = model;
@@ -57,6 +64,7 @@ public sealed class HeadlessAgentLoop
         _tools = tools;
         _executeTool = executeTool;
         _drainNotices = drainNotices;
+        _onModelTurn = onModelTurn;
     }
 
     public Task<HeadlessRunResult> RunAsync(
@@ -144,60 +152,69 @@ public sealed class HeadlessAgentLoop
     {
         var text = new StringBuilder();
         var reasoning = new StringBuilder();
+        var streamedText = new StringBuilder();
         var callsByIndex = new Dictionary<int, PendingCall>();
         var promptTokens = 0;
         var completionTokens = 0;
 
-        await foreach (var streamEvent in _client.StreamChatAsync(history, _model, _tools, _effort, cancellationToken)
-            .ConfigureAwait(false))
+        try
         {
-            switch (streamEvent)
+            await foreach (var streamEvent in _client.StreamChatAsync(history, _model, _tools, _effort, cancellationToken)
+                .ConfigureAwait(false))
             {
-                case TextDelta delta:
-                    text.Append(delta.Text);
-                    break;
+                switch (streamEvent)
+                {
+                    case TextDelta delta:
+                        text.Append(delta.Text);
+                        streamedText.Append(delta.Text);
+                        break;
 
-                case ReasoningDelta reasoningDelta:
-                    reasoning.Append(reasoningDelta.Text);
-                    break;
+                    case ReasoningDelta reasoningDelta:
+                        reasoning.Append(reasoningDelta.Text);
+                        break;
 
-                case ToolCallDelta toolCallDelta:
-                    if (!callsByIndex.TryGetValue(toolCallDelta.Index, out var call))
-                    {
-                        call = new PendingCall(toolCallDelta.Index);
-                        callsByIndex[toolCallDelta.Index] = call;
-                    }
+                    case ToolCallDelta toolCallDelta:
+                        if (!callsByIndex.TryGetValue(toolCallDelta.Index, out var call))
+                        {
+                            call = new PendingCall(toolCallDelta.Index);
+                            callsByIndex[toolCallDelta.Index] = call;
+                        }
 
-                    if (toolCallDelta.Id is not null)
-                    {
-                        call.Id = toolCallDelta.Id;
-                    }
+                        if (toolCallDelta.Id is not null)
+                        {
+                            call.Id = toolCallDelta.Id;
+                        }
 
-                    if (toolCallDelta.FunctionName is not null)
-                    {
-                        call.Name = toolCallDelta.FunctionName;
-                    }
+                        if (toolCallDelta.FunctionName is not null)
+                        {
+                            call.Name = toolCallDelta.FunctionName;
+                        }
 
-                    if (toolCallDelta.ArgumentsFragment is not null)
-                    {
-                        call.Arguments.Append(toolCallDelta.ArgumentsFragment);
-                    }
+                        if (toolCallDelta.ArgumentsFragment is not null)
+                        {
+                            call.Arguments.Append(toolCallDelta.ArgumentsFragment);
+                        }
 
-                    break;
+                        break;
 
-                case StreamError error:
-                    text.Append($"\n\n[error: {error.Message}]");
-                    break;
+                    case StreamError error:
+                        text.Append($"\n\n[error: {error.Message}]");
+                        break;
 
-                case FinishReasonReceived { Reason: "length" }:
-                    text.Append("\n\n[response was cut off - it hit the model's output length limit before finishing]");
-                    break;
+                    case FinishReasonReceived { Reason: "length" }:
+                        text.Append("\n\n[response was cut off - it hit the model's output length limit before finishing]");
+                        break;
 
-                case UsageReceived usage:
-                    promptTokens += usage.PromptTokens;
-                    completionTokens += usage.CompletionTokens;
-                    break;
+                    case UsageReceived usage:
+                        promptTokens += usage.PromptTokens;
+                        completionTokens += usage.CompletionTokens;
+                        break;
+                }
             }
+        }
+        finally
+        {
+            ReportModelTurn(reasoning, streamedText);
         }
 
         var calls = callsByIndex.Values
@@ -207,6 +224,23 @@ public sealed class HeadlessAgentLoop
 
         return new TurnResult(
             text.ToString(), reasoning.Length == 0 ? null : reasoning.ToString(), calls, promptTokens, completionTokens);
+    }
+
+    private void ReportModelTurn(StringBuilder reasoning, StringBuilder streamedText)
+    {
+        if (_onModelTurn is null || (reasoning.Length == 0 && streamedText.Length == 0))
+        {
+            return;
+        }
+
+        try
+        {
+            _onModelTurn(reasoning.Length == 0 ? null : reasoning.ToString(), streamedText.ToString());
+        }
+        catch (Exception)
+        {
+            // Whoever is listening must not be able to stop the agent.
+        }
     }
 
     private sealed record TurnResult(
