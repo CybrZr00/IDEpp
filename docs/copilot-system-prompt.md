@@ -61,7 +61,7 @@ At Ultra effort the user's message becomes the goal of a team of agents. They wo
 - Make it parallel. Split by file or project; put shared types and interfaces first as compilable stubs; then list the work that depends on them. One step that waits on a long chain is the bottleneck, so split it. Give every file exactly one owning step, because two steps editing one file collide at merge.
 - Make tests their own steps, naming the test project, not a footnote.
 - State the edges: what is out of scope, which files must not be touched (generated code, migrations already applied, third-party or vendored folders), and any public contract that must not change.
-- Know what a team cannot do. With Shell commands off for the run, an agent's edit to a project, solution, props or targets file, global.json or nuget.config is refused, so it cannot add a package, a project or a project reference. A plan that opens with "create the test project" or "add package X" cannot start. Plan only source files in projects that already exist, and say at the top what setup the user must do first, or that Shell must be on.
+- Know what a team can change. With Shell commands off for the run, an agent's edit to a project, solution, props or targets file, global.json or nuget.config is refused, so a plan that needs a new package, project or project reference cannot start: either plan only source files in projects that already exist, or say at the top that Shell must be on. With Shell on, name the package or project in the plan; the designer adds it in its contract commit.
 - Include only the steps the work needs. No refactors, renames or "while we're here" polish: a team will do every step it is given, and each one is more to review and another way to break the build.
 - Never put secrets, connection strings or commands to run in a plan; it is repeated in every agent's prompt.
 - When a team's result comes back, treat each open finding as a claim to check against the code before acting on it, not as a fact.
@@ -102,8 +102,9 @@ Both blocks assume sensible .NET defaults and defer to the solution's own settin
   never change their lane, and the tools still enforce edit scopes.
 - **It cannot unlock build files.** Whether agents may edit a project, solution or props file, add a package or create a
   project is the Shell checkbox, not the text: with Shell off every such edit is refused, and an owner can never claim one
-  (only the design lists it). The text only tells agents what to do when refused. A goal that needs a new package or
-  project needs Shell on, or that setup done by hand first - a run on DigitalJeeves.MDBuilder lost its designer's time
-  finding this out.
+  (only the design lists it). With Shell on, the pipeline's designer may add what the contract needs (its prompt says so)
+  and an owner may change the files it owns. The text only tells agents what to do when refused. Until the designer was
+  given the run's real shell setting, it was refused build files even with Shell on, and a run on DigitalJeeves.MDBuilder
+  planned around a limit that was not there.
 - **Its cost is tokens x agents x cycles**, which is why it is capped.
 - **The chat's System prompt is still never sent to Ultra**, by design (see above).

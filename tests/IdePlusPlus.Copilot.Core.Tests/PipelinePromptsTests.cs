@@ -90,6 +90,19 @@ public sealed class PipelinePromptsTests
         prompt.ShouldContain("Paths are relative to the solution folder");
     }
 
+    /// <summary>A designer that is not told a package or project may be part of the contract concludes, from the first
+    /// refusal it meets, that none can - and plans the whole run without them.</summary>
+    [Fact]
+    public void TheDesignersPrompt_SaysABuildFileMayBePartOfTheContract_AndWhatARefusalMeans()
+    {
+        var prompt = PipelinePrompts.Designer("d1", PipelineRoles.Designer, Limits);
+
+        prompt.ShouldContain("new package or project");
+        prompt.ShouldContain("mark it isStub");
+        prompt.ShouldContain("the user has Shell off for this run");
+        prompt.ShouldContain("packages and projects that already exist");
+    }
+
     [Fact]
     public void TheDesignersOpening_FencesEachSurvey_AndSaysWhatIsMissing()
     {
