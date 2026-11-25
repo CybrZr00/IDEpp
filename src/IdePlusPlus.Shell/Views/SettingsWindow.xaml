@@ -700,6 +700,28 @@
                         <TextBlock Text="Effort 'Ultra' sends a message to a team of copilot agents, each in its own git worktree - workers coordinating through a shared board, or, with the Pipeline strategy, surveyors, a designer, owners and judges working in stages. More agents and more time mean more tokens - roughly one conversation's worth per agent, for as long as the run lasts."
                                    Style="{StaticResource PageSubtitleStyle}" />
 
+                        <!-- Conventions: standing rules for code, added to the end of every Ultra agent's system prompt. Not the Assistant page's
+                             System prompt, which is written for the chat's own tools and is never sent to an Ultra agent. -->
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="Conventions" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="Standing rules for the code (for example: nullable is on, async all the way, new behaviour gets a test in the existing test project, never change a public signature unasked), added to the end of every Ultra agent's prompt - workers, the lead, and each pipeline agent. Separate from the Assistant page's System prompt, which Ultra agents never see. They are sent with every agent on every cycle, so keep them short. Blank sends nothing."
+                                           Style="{StaticResource HintStyle}" />
+                                <TextBox Text="{Binding UltraConventions, UpdateSourceTrigger=PropertyChanged}"
+                                         MaxLength="{Binding UltraConventionsMaxLength, Mode=OneWay}"
+                                         AutomationProperties.Name="Ultra conventions"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         MinHeight="110"
+                                         MaxHeight="280"
+                                         VerticalContentAlignment="Top"
+                                         VerticalScrollBarVisibility="Auto"
+                                         Margin="0,12,0,0" />
+                                <Button Content="Save conventions" Command="{Binding SaveUltraConventionsCommand}"
+                                        Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,16,0,0" />
+                            </StackPanel>
+                        </Border>
+
                         <!-- Strategy: how an Ultra message is carried out. Team, the default, is the team described on the cards below; Pipeline works in
                              phases and judges its own result. The pipeline's limits are only read when Pipeline is chosen. -->
                         <Border Style="{StaticResource CardStyle}">

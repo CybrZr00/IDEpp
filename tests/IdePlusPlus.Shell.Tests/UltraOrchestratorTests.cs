@@ -40,6 +40,7 @@ public sealed class UltraOrchestratorTests : IDisposable
                 WorkerEffort = builder.WorkerEffort,
                 OrchestratorModel = builder.OrchestratorModel,
                 OrchestratorEffort = builder.OrchestratorEffort,
+                Conventions = builder.Conventions,
             },
             _repo.ReadOnlyTools,
             new GitService(),
@@ -55,6 +56,7 @@ public sealed class UltraOrchestratorTests : IDisposable
         public ChatEffort? WorkerEffort { get; set; }
         public string? OrchestratorModel { get; set; }
         public ChatEffort OrchestratorEffort { get; set; } = ChatEffort.High;
+        public string? Conventions { get; set; }
     }
 
     private Task<UltraTeamResult> RunAsync(UltraTeamRun run) => run.RunAsync(
@@ -91,6 +93,44 @@ public sealed class UltraOrchestratorTests : IDisposable
         worker[0].Content.ShouldContain("A lead (\"lead\") has already split the goal");
         worker[1].Content.ShouldContain("Backlog: 2 open or claimed, 0 done");
         run.Bus.ChannelSnapshot().ShouldContain(m => m.From == "lead" && m.Text.Contains("public surface"));
+    }
+
+    /// <summary>The Ultra team's agents have prompts built in code, so the user's conventions reach them only
+    /// by being added there: to each worker's, and to the lead's - whose three conversations share one seam.</summary>
+    [Fact]
+    public async Task TheConventions_ReachTheLeadAndTheWorkers_AtTheEndOfTheirPrompts()
+    {
+        _client
+            .Script("lead",
+                _client.Call(LeadTools.SubmitPlanToolName, new { tasks = new[] { "Make Class1.Value return 2 (Lib/Class1.cs)" }, notes = "" }),
+                Text("Planned."))
+            .Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var run = CreateRun(workers: 1, builder => builder.Conventions = "Nullable is on.");
+
+        await RunAsync(run);
+
+        foreach (var agent in new[] { "lead", "w1" })
+        {
+            var system = _client.Requests.First(r => r.Worker == agent).Messages[0];
+            system.Role.ShouldBe(ChatRole.System);
+            system.Content.ShouldContain("Project conventions");
+            system.Content.ShouldEndWith("\n\nNullable is on.");
+        }
+    }
+
+    [Fact]
+    public async Task WithNoConventions_NeitherTheLeadNorAWorkersPromptMentionsThem()
+    {
+        _client
+            .Script("lead",
+                _client.Call(LeadTools.SubmitPlanToolName, new { tasks = new[] { "Make Class1.Value return 2 (Lib/Class1.cs)" }, notes = "" }),
+                Text("Planned."))
+            .Script("w1", _client.Call(TeamTools.DoneToolName, new { summary = "nothing to do" }));
+        var run = CreateRun(workers: 1);
+
+        await RunAsync(run);
+
+        _client.Requests.Select(r => r.Messages[0].Content).ShouldNotContain(prompt => prompt.Contains("Project conventions"));
     }
 
     [Fact]

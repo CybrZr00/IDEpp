@@ -46,6 +46,10 @@ public sealed class UltraOrchestrator
     private readonly int _maxConsecutiveRejections;
     private readonly LeadReviewMode _reviewMode;
 
+    /// <summary>The user's standing rules for the code, added to the end of each of the lead's three
+    /// system prompts (planning, checking in, reviewing a merge). Null: none.</summary>
+    private readonly string? _conventions;
+
     /// <summary>Where the lead's thoughts and replies go, for every conversation it has (planning,
     /// checking in, reviewing a merge). Null: not recorded.</summary>
     private readonly TranscriptRecorder? _transcript;
@@ -74,9 +78,11 @@ public sealed class UltraOrchestrator
         TimeProvider time,
         int maxConsecutiveRejections = 2,
         LeadReviewMode reviewMode = LeadReviewMode.Blocking,
-        TranscriptRecorder? transcript = null)
+        TranscriptRecorder? transcript = null,
+        string? conventions = null)
     {
         _transcript = transcript;
+        _conventions = conventions;
         _client = client;
         _model = model;
         _effort = effort;
@@ -89,6 +95,8 @@ public sealed class UltraOrchestrator
         _maxConsecutiveRejections = maxConsecutiveRejections;
         _reviewMode = reviewMode;
     }
+
+    private string WithConventions(string systemPrompt) => TeamConventions.AppendTo(systemPrompt, _conventions);
 
     /// <summary>The callback that keeps one of the lead's conversations in the transcript, labelled
     /// with what the lead was doing; null when nothing is being recorded.</summary>
@@ -151,7 +159,7 @@ public sealed class UltraOrchestrator
                 onModelTurn: Recording("ultra lead: planning"));
 
             await loop.RunAsync(
-                TeamPrompts.LeadPlanningPrompt(WorkerNames()),
+                WithConventions(TeamPrompts.LeadPlanningPrompt(WorkerNames())),
                 TeamPrompts.LeadPlanningOpening(goal, _workers.Count),
                 PlanningIterations,
                 cancellationToken);
@@ -334,7 +342,7 @@ public sealed class UltraOrchestrator
                 onModelTurn: Recording("ultra lead: check-in"));
 
             await loop.RunAsync(
-                TeamPrompts.LeadSupervisionPrompt(WorkerNames()),
+                WithConventions(TeamPrompts.LeadSupervisionPrompt(WorkerNames())),
                 TeamPrompts.LeadSupervisionOpening(
                     goal, timeLeft, DescribeWorkers(), _bus.TakeDirect(LeadTools.LeadName), _board.CycleDigest(LeadTools.LeadName),
                     DescribeOpenFindings()),
@@ -594,7 +602,7 @@ public sealed class UltraOrchestrator
                 onModelTurn: Recording($"ultra lead: reviewing {worker}'s merge"));
 
             await loop.RunAsync(
-                TeamPrompts.LeadReviewPrompt(),
+                WithConventions(TeamPrompts.LeadReviewPrompt()),
                 TeamPrompts.LeadReviewOpening(goal, worker, OpenTasks(), diff),
                 ReviewIterations,
                 cancellationToken);

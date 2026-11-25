@@ -47,7 +47,11 @@ public sealed partial class UltraPipelineRun
             _teamGit,
             _buildSlots,
             _options.Configuration,
-            runCommand: null,
+            // The run's own shell setting, not none: it decides whether an agent may change a build file - a package or a
+            // project the contract needs - and with none the designer was told "Shell commands are off for this run" even on a
+            // run with Shell on, and planned around a limit that was not there. It is still never offered run_command:
+            // DesignerToolNames leaves it out, and ExecuteTool below refuses it.
+            runCommand: _runCommand,
             role: agent.Role);
 
         var design = new DesignRun();

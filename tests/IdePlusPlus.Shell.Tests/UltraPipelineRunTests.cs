@@ -632,6 +632,64 @@ public sealed partial class UltraPipelineRunTests : IDisposable
         replies[1].ShouldContain("'team_post' is not one of your tools");
     }
 
+    private const string LibProjectWithLangVersion = """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <Nullable>enable</Nullable>
+            <LangVersion>latest</LangVersion>
+          </PropertyGroup>
+        </Project>
+        """;
+
+    /// <summary>
+    /// The designer is never offered run_command, but whether it may change a build file is the user's Shell setting like
+    /// every agent's: a contract that needs a package or a project reference has to be able to add it. Its dispatcher was
+    /// built with no shell whatever the setting, so on a run with Shell on it was still told "Shell commands are off for this
+    /// run" - and it designed the whole plan around a limit that was not there.
+    /// </summary>
+    [Fact]
+    public async Task OnARunWithShellOn_TheDesigner_MayChangeABuildFileAsPartOfTheContract()
+    {
+        var design = _client.Call(SubmitDesign, new
+        {
+            summary = "Raise the language version, then the value.",
+            owners = new[] { "b1" },
+            files = new object[]
+            {
+                new { path = "Lib/Lib.csproj", owner = "b1", purpose = "The project the contract builds in.", acceptance = new[] { "Builds." }, isStub = true },
+                new { path = "Lib/Class1.cs", owner = "b1", purpose = "Holds the value.", acceptance = new[] { "Value is 2." } },
+            },
+        });
+        _client
+            .Script("lead", NoSurveyors())
+            .Script("d1", EditFile("Lib/Lib.csproj", LibProjectWithLangVersion), Commit("The project"), design);
+        var run = CreateRun(o => o with { ShellCommandsEnabled = true }, runCommand: (_, _, _, _) => Task.FromResult((false, "done")));
+
+        var result = await RunAsync(run);
+
+        DesignerToolReplies().ShouldNotContain(reply => reply.Contains("defines how the solution builds"));
+        result.Changes.ShouldHaveSingleItem().RelativePath.ShouldBe("Lib/Lib.csproj");
+        ShowOnTeamBranch(run, "Lib/Lib.csproj").ShouldContain("<LangVersion>latest</LangVersion>");
+    }
+
+    [Fact]
+    public async Task OnARunWithShellOff_TheDesigner_IsStillRefusedABuildFile_AndToldWhy()
+    {
+        _client
+            .Script("lead", NoSurveyors())
+            .Script("d1", EditFile("Lib/Lib.csproj", LibProjectWithLangVersion), PlainDesign());
+        var run = CreateRun();
+
+        var result = await RunAsync(run);
+
+        var refusal = DesignerToolReplies().ShouldHaveSingleItem();
+        refusal.ShouldContain("defines how the solution builds");
+        refusal.ShouldContain("Shell commands are off for this run");
+        result.EndReason.ShouldBe(UltraTeamEndReason.AllDone);
+        result.Changes.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task ADesignerWhoNeverSubmits_EndsTheRun_AndWhatItCommittedIsKeptOnItsBranch()
     {

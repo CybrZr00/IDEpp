@@ -43,6 +43,14 @@ public sealed partial class CopilotChatPaneViewModel
     public const int DefaultUltraBuildTimeoutMinutes = 20;
     public const int MaxUltraBuildTimeoutMinutes = 240;
 
+    /// <summary>The user's standing rules for code, sent to every Ultra agent (see <see cref="TeamConventions"/>). Not the chat's
+    /// <see cref="SystemPromptSettingKey"/>: that one is written for the chat's own tools, which an Ultra agent does not have.</summary>
+    public const string UltraConventionsSettingKey = "UltraConventions";
+
+    /// <summary>What an Ultra run sends: trimmed and cut to <see cref="TeamConventions.MaxChars"/>; null when none is set.</summary>
+    public static string? ReadUltraConventions(AppSettingsStore settings) =>
+        TeamConventions.Normalize(settings.Get(UltraConventionsSettingKey));
+
     public static int ReadUltraBuildTimeoutMinutes(AppSettingsStore settings) =>
         int.TryParse(settings.Get(UltraBuildTimeoutMinutesSettingKey), out var minutes)
             ? Math.Clamp(minutes, 1, MaxUltraBuildTimeoutMinutes)
@@ -583,6 +591,7 @@ public sealed partial class CopilotChatPaneViewModel
                     PipelineMaxUnderstand = ReadUltraPipelineMaxUnderstand(_appSettingsStore),
                     PipelineMaxOwners = ReadUltraPipelineMaxOwners(_appSettingsStore),
                     PipelineMaxCustomJudges = ReadUltraPipelineMaxCustomJudges(_appSettingsStore),
+                    Conventions = ReadUltraConventions(_appSettingsStore),
                     Transcript = RecorderFor("ultra team"),
                 };
                 IChatClient client = CurrentChatClient;

@@ -128,6 +128,26 @@ public sealed class PipelineAgentHostTests
         _client.Models.Single().ShouldBe(("d1", "design-model", ChatEffort.High));
     }
 
+    /// <summary>One host runs every pipeline agent - the lead included - so this is the one place the user's
+    /// conventions have to be added for all of them. Without any, the test above shows the prompt untouched.</summary>
+    [Fact]
+    public async Task TheConventions_AreAddedAtTheEndOfTheAgentsPrompt_AndNothingElseChanges()
+    {
+        var rig = new Rig();
+        _client.Script("u1", _client.Call(Submit));
+        using var stage = Stage();
+
+        await Host(new PipelineAgentHostOptions { Conventions = "Nullable is on.\r\nNo .Result." })
+            .RunAsync(Agent("u1", rig), stage, CancellationToken.None);
+
+        var request = _client.Requests.Single();
+        request.Worker.ShouldBe("u1");
+        request.Messages[0].Role.ShouldBe(ChatRole.System);
+        request.Messages[0].Content.ShouldStartWith("You are u1, a surveyor. Report what you find.\n\nProject conventions");
+        request.Messages[0].Content.ShouldEndWith("\n\nNullable is on.\nNo .Result.");
+        (request.Messages[1].Role, request.Messages[1].Content).ShouldBe((ChatRole.User, "Survey the Lib folder."));
+    }
+
     [Fact]
     public async Task WithNoModelOfItsOwn_TheAgent_UsesTheHostsDefault()
     {
