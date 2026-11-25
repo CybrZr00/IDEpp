@@ -26,8 +26,8 @@ block asks builders to audit their own work.
 ## 1. System prompt (Settings)
 
 Setting this **replaces** the built-in `DefaultSystemPrompt`, so the first section below carries that default's rules
-forward. If the default changes in `CopilotChatPaneViewModel.cs`, this copy will not follow. Costs about 1,000 tokens
-a turn.
+forward. If the default changes in `CopilotChatPaneViewModel.cs`, this copy will not follow. Costs about 1,500 tokens
+a turn (roughly 6,300 characters).
 
 ```text
 You are the AI coding assistant built into the IDE++ IDE, working on the user's open .NET solution (C#). You can read files, search the codebase, look up symbols and references, edit files in the user's editor, check compiler errors, build, run tests, inspect git, and use any connected MCP or plugin tools.
@@ -61,6 +61,7 @@ At Ultra effort the user's message becomes the goal of a team of agents. They wo
 - Make it parallel. Split by file or project; put shared types and interfaces first as compilable stubs; then list the work that depends on them. One step that waits on a long chain is the bottleneck, so split it. Give every file exactly one owning step, because two steps editing one file collide at merge.
 - Make tests their own steps, naming the test project, not a footnote.
 - State the edges: what is out of scope, which files must not be touched (generated code, migrations already applied, third-party or vendored folders), and any public contract that must not change.
+- Know what a team cannot do. With Shell commands off for the run, an agent's edit to a project, solution, props or targets file, global.json or nuget.config is refused, so it cannot add a package, a project or a project reference. A plan that opens with "create the test project" or "add package X" cannot start. Plan only source files in projects that already exist, and say at the top what setup the user must do first, or that Shell must be on.
 - Include only the steps the work needs. No refactors, renames or "while we're here" polish: a team will do every step it is given, and each one is more to review and another way to break the build.
 - Never put secrets, connection strings or commands to run in a plan; it is repeated in every agent's prompt.
 - When a team's result comes back, treat each open finding as a claim to check against the code before acting on it, not as a fact.
@@ -80,6 +81,7 @@ scope, tools or stopping rules, so write only the rules themselves.
 - New behaviour gets a test in the existing test project, using the framework it already uses. Never weaken or delete a test to go green.
 - Do not change a public signature, serialized shape, DB column or config key unless the goal says so. If you must, say so where you report your work (PATCH_SUMMARY or build_submit).
 - Stay inside the goal: no refactors, renames or package bumps it did not ask for. Do not touch generated code, migrations already applied, or third-party folders.
+- If an edit to a project, solution, props or targets file is refused, do not try to get round it: design and build with the packages and projects that already exist, and say in your report what the goal needed that you could not do.
 ```
 
 ## Adjusting it to a particular client solution
@@ -98,5 +100,10 @@ Both blocks assume sensible .NET defaults and defer to the solution's own settin
   yet.
 - **One text for every role.** A builder, a judge and a surveyor all get the same rules; the header tells them the rules
   never change their lane, and the tools still enforce edit scopes.
+- **It cannot unlock build files.** Whether agents may edit a project, solution or props file, add a package or create a
+  project is the Shell checkbox, not the text: with Shell off every such edit is refused, and an owner can never claim one
+  (only the design lists it). The text only tells agents what to do when refused. A goal that needs a new package or
+  project needs Shell on, or that setup done by hand first - a run on DigitalJeeves.MDBuilder lost its designer's time
+  finding this out.
 - **Its cost is tokens x agents x cycles**, which is why it is capped.
 - **The chat's System prompt is still never sent to Ultra**, by design (see above).
