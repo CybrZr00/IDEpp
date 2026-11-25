@@ -363,9 +363,12 @@ public sealed class UltraTeamCoordinationTests : IDisposable
 
     // ---- The lead's plan ----
 
-    private (UltraOrchestrator Lead, TeamBoard Board) CreateLead()
+    /// <param name="builders">How many workers build. The lead refuses, once, a plan too narrow for two or more of them
+    /// (see UltraOrchestrator.ShapeRefusal); a test about what a plan says rather than how wide it is uses one, which is
+    /// never judged, so its plan is written as it is.</param>
+    private (UltraOrchestrator Lead, TeamBoard Board) CreateLead(int builders = 2)
     {
-        string[] names = ["w1", "w2"];
+        var names = Enumerable.Range(1, builders).Select(n => $"w{n}").ToArray();
         var board = new TeamBoard(TimeProvider.System, TimeSpan.FromMinutes(10));
         var bus = new TeamMessageBus(TimeProvider.System, [.. names, LeadTools.LeadName]);
         var lead = new UltraOrchestrator(
@@ -385,7 +388,7 @@ public sealed class UltraTeamCoordinationTests : IDisposable
                 after = new[] { Array.Empty<int>(), new[] { 1 }, new[] { 1 }, new[] { 1, 2, 3 } },
             }),
             [new TextDelta("Planned.")]);
-        var (lead, board) = CreateLead();
+        var (lead, board) = CreateLead(builders: 1);
 
         (await lead.PlanAsync("goal", CancellationToken.None)).ShouldBe(4);
 
@@ -407,7 +410,7 @@ public sealed class UltraTeamCoordinationTests : IDisposable
                 after = new[] { new[] { 1 }, new[] { 3, 9, 0, -1 }, new[] { 1 } },
             }),
             [new TextDelta("Planned.")]);
-        var (lead, board) = CreateLead();
+        var (lead, board) = CreateLead(builders: 1);
 
         (await lead.PlanAsync("goal", CancellationToken.None)).ShouldBe(3);
 
