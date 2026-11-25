@@ -63,6 +63,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         lmStudioModel = _appSettingsStore.Get(LmStudioEmbeddingClient.ModelSettingName) ?? "";
         useLmStudioEmbeddings = _appSettingsStore.Get(EmbeddingClientSelector.ProviderSettingName) == EmbeddingClientSelector.LmStudioProvider;
         systemPrompt = _appSettingsStore.Get(CopilotChatPaneViewModel.SystemPromptSettingKey) ?? "";
+        ultraConventions = _appSettingsStore.Get(CopilotChatPaneViewModel.UltraConventionsSettingKey) ?? "";
         restoreNuGetOnSolutionLoad = !bool.TryParse(_appSettingsStore.Get(MainWindowViewModel.RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
         // Builders, not every worker: the 'Workers' box this card used to have counted them all
         // because they all were builders, and a settings file from then has no builder key.
@@ -171,6 +172,14 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string systemPrompt;
+
+    /// <summary>The user's standing rules for code, added to every Ultra agent's system prompt. Separate from
+    /// <see cref="SystemPrompt"/>, which is written for the chat's own tools and is never sent to an Ultra agent.</summary>
+    [ObservableProperty]
+    private string ultraConventions;
+
+    /// <summary>The longest text an Ultra run sends; the box stops there rather than letting a longer one be cut silently.</summary>
+    public int UltraConventionsMaxLength => TeamConventions.MaxChars;
 
     [ObservableProperty]
     private string? statusMessage;
@@ -679,6 +688,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _appSettingsStore.Set(CopilotChatPaneViewModel.SystemPromptSettingKey, SystemPrompt);
         StatusMessage = "System prompt saved.";
+    }
+
+    [RelayCommand]
+    private void SaveUltraConventions()
+    {
+        _appSettingsStore.Set(CopilotChatPaneViewModel.UltraConventionsSettingKey, UltraConventions);
+        StatusMessage = string.IsNullOrWhiteSpace(UltraConventions)
+            ? "Ultra conventions cleared - Ultra agents get no extra rules."
+            : "Ultra conventions saved - the next Ultra run uses them.";
     }
 
     partial void OnUseLmStudioEmbeddingsChanged(bool value)

@@ -142,6 +142,10 @@ Settings gain `UltraCompositionPreset`, `UltraBuilders`, `UltraMutationTesters`,
 beside the Auto mode grid: preset, a count per role, a running total and a disk estimate (each
 worker is a git worktree). `EnsureDiskSpace` counts every role.
 
+The Ultra team page's **Conventions** box (`UltraTeamOptions.Conventions`) is the user's standing rules for code, appended to the
+end of every worker's prompt and to each of the lead's three (`TeamConventions.AppendTo`); a specialist gets the same text as a
+builder, and its edit scope still comes from the dispatcher, not the prompt. See [copilot-system-prompt.md](copilot-system-prompt.md).
+
 `UltraTeamResult.QualitySummary` carries mutation killed/total per merge, findings by severity and
 status, conformity fixes, gaps closed and follow-ups; `DescribeTeamResult` renders them as sections,
 lists open high/medium findings with their evidence branch, and prints follow-ups as a copyable

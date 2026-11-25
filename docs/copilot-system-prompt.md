@@ -4,15 +4,20 @@ Two paste-in blocks, because the IDE has two separate places text can enter:
 
 | Block | Paste it into | Who reads it |
 |---|---|---|
-| **1. System prompt** | Settings, System prompt, then "Save system prompt" | The interactive chat only |
-| **2. Ultra goal preamble** | The top of an Ultra request you type in the chat | Every Ultra agent (it is part of the goal) |
+| **1. System prompt** | Settings, Assistant, System prompt, then "Save system prompt" | The interactive chat only |
+| **2. Ultra conventions** | Settings, Ultra team, Conventions, then "Save conventions" | Every Ultra agent: the team's workers and lead, and each pipeline agent |
 
-Why two: the Settings prompt is read in `CopilotChatPaneViewModel.PrependContextAsync` and nowhere else. Ultra
-workers, the pipeline's surveyors, designer, owners and judges, and the lead all get prompts built in code
-(`TeamPrompts`, `PipelinePrompts`, `ConductorPrompts`), and none of them includes it. What an Ultra agent does see is
-the goal (your message plus about 4,000 characters of the chat before it, the assistant's messages included), the
-steps of a Plan Mode plan you approved, and the code. Block 1 therefore shapes the plans the chat writes, and block 2
-carries conventions to the agents directly.
+Why two: the System prompt is read in `CopilotChatPaneViewModel.PrependContextAsync` and nowhere else, and it is
+written for the chat's own tools (`propose_edit`, `fetch_url`), which an Ultra agent does not have - sent to a worker
+it would tell it to use tools it cannot call. Ultra agents' own prompts are built in code (`TeamPrompts`,
+`PipelinePrompts`, `ConductorPrompts`). Block 2 is a setting of its own (`UltraConventions`) that
+`TeamConventions.AppendTo` adds to the end of each of those prompts: every worker, the lead's three conversations, and
+`PipelineAgentHost`, which runs every pipeline agent and so covers surveyors, designer, owners, judges and the lead.
+Empty (the default), every prompt is exactly what it was.
+
+Block 1 also shapes what Ultra gets from the chat: an approved Plan Mode plan reaches the team as its backlog (or the
+pipeline's approved plan), and the goal carries about 4,000 characters of the chat before it, the assistant's messages
+included.
 
 Review, mutation testing and style are the specialists' and judges' jobs (see
 [ultra-roles-design.md](ultra-roles-design.md) and [ultra-pipeline-design.md](ultra-pipeline-design.md)), so neither
@@ -61,22 +66,20 @@ At Ultra effort the user's message becomes the goal of a team of agents. They wo
 - When a team's result comes back, treat each open finding as a claim to check against the code before acting on it, not as a fact.
 ```
 
-## 2. Ultra goal preamble (top of an Ultra request)
+## 2. Ultra conventions (Settings, Ultra team)
 
-The goal is repeated in every agent's opening message, so this is kept short on purpose. Put your actual request
-underneath it.
+Every agent carries this text in every conversation it has, and a worker starts afresh each cycle, so the box stops at
+4,000 characters (about 1,000 tokens) - this one is about a quarter of that. The code adds its own header ("Project
+conventions - the user's standing rules...") saying these add to the agent's rules and never change its role, edit
+scope, tools or stopping rules, so write only the rules themselves.
 
 ```text
-Conventions for this run (apply to everything you write):
 - Follow the solution's own settings (Directory.Build.props, .editorconfig) over your habits, and match the style of the file you are editing.
 - Nullable is on: no `!` to silence a warning. Async all the way: no .Result or .Wait(), Async suffix, pass CancellationToken down.
 - Constructor injection; dispose what you own; parameterised SQL only; no secrets or personal data in logs.
 - New behaviour gets a test in the existing test project, using the framework it already uses. Never weaken or delete a test to go green.
 - Do not change a public signature, serialized shape, DB column or config key unless the goal says so. If you must, say so where you report your work (PATCH_SUMMARY or build_submit).
 - Stay inside the goal: no refactors, renames or package bumps it did not ask for. Do not touch generated code, migrations already applied, or third-party folders.
-
-The request:
-<your request here>
 ```
 
 ## Adjusting it to a particular client solution
@@ -86,10 +89,14 @@ Both blocks assume sensible .NET defaults and defer to the solution's own settin
 - the test framework line, if you want it named (this repo uses xunit and Shouldly);
 - the data-access bullet, if the stack is Dapper or ADO.NET rather than EF Core;
 - the WPF/MVVM bullet, which can go entirely for a web or service solution;
-- the "must not touch" list in the preamble: name the actual generated or vendored folders.
+- the "must not touch" line in block 2: name the actual generated or vendored folders.
 
-## What this does not do
+## Limits
 
-Ultra agents will never read the Settings prompt, and nothing in the IDE loads a project conventions file for them.
-Making the Settings prompt (or a committed conventions file) reach `TeamPrompts` and `PipelinePrompts` would remove the
-need for block 2 and the per-agent token cost of repeating it. That is a code change, not a prompt change.
+- **App-wide, not per solution**, like the System prompt: switching between client solutions means editing the box. A
+  conventions file committed in each repository, read by the agents, would be the per-solution version; nothing does that
+  yet.
+- **One text for every role.** A builder, a judge and a surveyor all get the same rules; the header tells them the rules
+  never change their lane, and the tools still enforce edit scopes.
+- **Its cost is tokens x agents x cycles**, which is why it is capped.
+- **The chat's System prompt is still never sent to Ultra**, by design (see above).

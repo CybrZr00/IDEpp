@@ -160,6 +160,11 @@ public sealed record UltraTeamOptions(
     /// <summary>Where the lead's and every worker's thoughts and replies are kept, each under its own
     /// label. Null: not recorded.</summary>
     public TranscriptRecorder? Transcript { get; init; }
+
+    /// <summary>The user's standing rules for the code (Settings, Ultra team), put at the end of every
+    /// agent's system prompt - workers, the lead, and each of the pipeline's agents. Null or blank:
+    /// none, and every prompt is what it always was. See <see cref="TeamConventions"/>.</summary>
+    public string? Conventions { get; init; }
 }
 
 /// <summary>The run did not start: the solution as it stands does not build, so no worker could
@@ -584,7 +589,8 @@ public sealed class UltraTeamRun : IUltraRun
                 _time,
                 _options.MaxConsecutiveRejections,
                 _options.LeadReviewMode,
-                transcript: _options.Transcript?.WithSource("ultra lead"));
+                transcript: _options.Transcript?.WithSource("ultra lead"),
+                conventions: _options.Conventions);
             _orchestrator.Changed += OnChanged;
         }
 
@@ -1462,14 +1468,16 @@ public sealed class UltraTeamRun : IUltraRun
         state.Phase = TeamWorkerPhase.Working;
         OnChanged();
 
-        var systemPrompt = TeamPrompts.WorkerSystemPrompt(
-            state.Name,
-            Workers.Select(w => w.Name).ToList(),
-            _options.ClaimLifetime,
-            dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName),
-            maxTeamSize: _options.AutoScale ? MaxWorkers : 0,
-            orchestrated: _options.Orchestrated,
-            canWait: dispatcher.Tools.Any(t => t.Name == TeamTools.WaitToolName));
+        var systemPrompt = TeamConventions.AppendTo(
+            TeamPrompts.WorkerSystemPrompt(
+                state.Name,
+                Workers.Select(w => w.Name).ToList(),
+                _options.ClaimLifetime,
+                dispatcher.Tools.Any(t => t.Name == ShellTools.RunCommandToolName),
+                maxTeamSize: _options.AutoScale ? MaxWorkers : 0,
+                orchestrated: _options.Orchestrated,
+                canWait: dispatcher.Tools.Any(t => t.Name == TeamTools.WaitToolName)),
+            _options.Conventions);
         var loop = new HeadlessAgentLoop(
             _workerClient,
             _options.WorkerModel ?? _model,

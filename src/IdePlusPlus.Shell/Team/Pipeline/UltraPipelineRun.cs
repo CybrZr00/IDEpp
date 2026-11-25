@@ -146,8 +146,9 @@ public sealed partial class UltraPipelineRun : IUltraRun
             Math.Max(0, options.PipelineMaxLoops),
             options.HardStopGrace,
             () => (long)PromptTokens + CompletionTokens);
-        _workerHost = new PipelineAgentHost(_workerClient, options.WorkerModel ?? model);
-        _leadHost = new PipelineAgentHost(_leadClient, options.OrchestratorModel ?? model);
+        var hostOptions = new PipelineAgentHostOptions { Conventions = options.Conventions };
+        _workerHost = new PipelineAgentHost(_workerClient, options.WorkerModel ?? model, hostOptions);
+        _leadHost = new PipelineAgentHost(_leadClient, options.OrchestratorModel ?? model, hostOptions);
     }
 
     // ---- Status, as the card reads it ----

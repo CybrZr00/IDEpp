@@ -170,6 +170,10 @@ is bounded by the same caps as a run until done: the run-time cap and the token 
 weight - understand 2, design 2, build 5, then each judge round 2 and each repair round 3 - out of what is *left* when
 a stage starts, so the loop's reserve is kept while the build runs and a stage that finishes early hands its time on.
 
+Settings, Ultra team, Conventions is the user's standing rules for code, appended to **every** agent's system prompt - it is
+added once, in `PipelineAgentHost`, which runs the surveyors, designer, owners, judges and the lead alike. It is not the chat's
+system prompt, which names tools a pipeline agent does not have. See [copilot-system-prompt.md](copilot-system-prompt.md).
+
 ## Cost and limits
 
 It costs more than the team: roughly surveyors, a designer, up to six owners and four to six judges, for every round.

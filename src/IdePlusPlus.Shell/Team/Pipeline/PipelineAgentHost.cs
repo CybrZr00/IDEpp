@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using IdePlusPlus.Copilot.Core;
+using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Core.Team.Pipeline;
 
 namespace IdePlusPlus.Shell.Team.Pipeline;
@@ -104,6 +105,11 @@ internal sealed record PipelineAgentHostOptions
     /// <summary>How many times a run that failed - a dropped connection, a tool that threw - is
     /// resumed where it stood before it is given up on.</summary>
     public int MaxFailureRetries { get; init; } = 1;
+
+    /// <summary>The user's standing rules for the code, added to the end of every agent's system prompt this
+    /// host runs - surveyors, the designer, owners, judges and the lead alike, since all of them are run here.
+    /// Null: none, and the prompt goes as the stage wrote it.</summary>
+    public string? Conventions { get; init; }
 }
 
 /// <summary>
@@ -180,7 +186,7 @@ internal sealed class PipelineAgentHost(IChatClient client, string defaultModel,
             client, agent.Model ?? defaultModel, agent.Effort, agent.Tools, agent.ExecuteTool, agent.DrainNotices);
         var history = new List<ChatMessage>
         {
-            new(ChatRole.System, agent.SystemPrompt),
+            new(ChatRole.System, TeamConventions.AppendTo(agent.SystemPrompt, _options.Conventions)),
             new(ChatRole.User, agent.Opening),
         };
 
