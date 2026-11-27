@@ -593,6 +593,10 @@ public sealed partial class CopilotChatPaneViewModel
                     PipelineMaxCustomJudges = ReadUltraPipelineMaxCustomJudges(_appSettingsStore),
                     Conventions = ReadUltraConventions(_appSettingsStore),
                     Transcript = RecorderFor("ultra team"),
+                    // Carried, not resolved: the run's worktrees each have their own solution path, so
+                    // each worker's own filter is generated there (see UltraTeamRun / RunWorkspace).
+                    // Resolving one here would hand every worker a filter for the user's own tree.
+                    UnloadedProjects = _unloadedProjects,
                 };
                 IChatClient client = CurrentChatClient;
                 var teamApprovals = new TeamShellApprovals();

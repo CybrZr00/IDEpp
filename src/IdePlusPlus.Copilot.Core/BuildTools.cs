@@ -28,7 +28,9 @@ public static class BuildTools
                      "Use it after making changes to check they actually compile - this is the only way to find " +
                      "out whether an edit worked, rather than assuming it did. Files with unsaved changes are " +
                      "written to disk first, so the build always reflects the edits you have made. Builds the " +
-                     "configuration the user has selected in the IDE.",
+                     "configuration the user has selected in the IDE. Projects the user has unloaded in IDE++ are " +
+                     "excluded from a solution build, and the result names them - a passing build therefore says " +
+                     "nothing about an unloaded project, and asking to build one is refused until the user reloads it.",
         ParametersSchema: JsonNode.Parse("""
             {
               "type": "object",

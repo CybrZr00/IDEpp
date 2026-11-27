@@ -20,6 +20,7 @@ using IdePlusPlus.Copilot.OpenRouter;
 using IdePlusPlus.Editor;
 using IdePlusPlus.Infrastructure;
 using IdePlusPlus.Infrastructure.Hooks;
+using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Publish;
 using IdePlusPlus.ReverseEngineering;
 using IdePlusPlus.Roslyn;
@@ -238,6 +239,15 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     private Func<string>? _currentConfiguration;
     private IReadOnlyList<string> _indexableFiles = [];
     private IReadOnlyList<string> _testProjectPaths = [];
+
+    /// <summary>
+    /// The projects the user has unloaded, as paths relative to the solution directory - the form
+    /// UnloadedProjectsStore persists, so the same list means the same projects in a worktree. A
+    /// solution-wide build goes through a generated solution filter that leaves them out (see
+    /// SolutionBuildTarget), and asking to build one by name is refused: the file may not even
+    /// evaluate, which is usually why it was unloaded.
+    /// </summary>
+    private IReadOnlyList<string> _unloadedProjects = [];
 
     /// <summary>Every project in the solution with the framework the solution tree resolved for it,
     /// so publish_project can default to the only project and pass --framework for a multi-targeted
@@ -869,6 +879,14 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
     /// during solution load (see TestProjectDetector); the chat pane never sees the solution tree
     /// itself.</summary>
     public void SetTestProjects(IReadOnlyList<string> projectPaths) => _testProjectPaths = projectPaths;
+
+    /// <summary>
+    /// The projects the user has unloaded, as paths relative to the solution directory - the same
+    /// list, in the same form, that MainWindowViewModel reads from UnloadedProjectsStore. Passed in
+    /// rather than read here for the same reason as the test projects: the chat pane never sees the
+    /// solution tree or its directory, and the store belongs to the open solution.
+    /// </summary>
+    public void SetUnloadedProjects(IReadOnlyList<string> projectPaths) => _unloadedProjects = projectPaths;
 
     /// <summary>The solution's projects, for publish_project (target framework) and add_item (root
     /// namespace).</summary>
@@ -1813,6 +1831,12 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
         public bool Succeeded => ExitCode == 0;
     }
 
+    /// <summary>
+    /// Builds the solution through its solution filter (unloaded projects left out), or one named
+    /// project directly. A project the user has unloaded is refused rather than attempted: it was
+    /// unloaded because it does not evaluate here - a MAUI/Android SDK that is not installed, say -
+    /// and a build of it would only fail, or pull in exactly what unloading avoided.
+    /// </summary>
     private async Task<BuildOutcome> BuildCoreAsync(string? project, CancellationToken cancellationToken)
     {
         if (_solutionDirectory is null || _solutionPath is null)
@@ -1820,7 +1844,10 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return new BuildOutcome(null, "No solution is open, so there is nothing to build.");
         }
 
-        var target = _solutionPath;
+        string target;
+        // Which projects the build leaves out, so the report can name them. Empty for a build of one
+        // named project: that covers that project and says nothing about the rest of the solution.
+        IReadOnlyList<string> skipped = [];
         if (!string.IsNullOrWhiteSpace(project))
         {
             if (WorkspaceFileReader.ResolveWithinRoot(_solutionDirectory, project) is not { } projectPath)
@@ -1833,7 +1860,36 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
                 return new BuildOutcome(null, $"Project not found: {project}");
             }
 
+            if (IsUnloaded(projectPath))
+            {
+                return new BuildOutcome(
+                    null,
+                    $"{Path.GetFileNameWithoutExtension(projectPath)} is unloaded in IDE++ - ask the user to reload it.");
+            }
+
             target = projectPath;
+        }
+        else
+        {
+            try
+            {
+                // With nothing unloaded this hands back solutionPath itself, so an ordinary solution
+                // builds exactly the file it always did.
+                target = SolutionBuildTarget.Resolve(_solutionPath, _unloadedProjects);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                // The filter lives outside the repository and is rewritten on every build, so a
+                // read-only or full %LOCALAPPDATA% can refuse it. That is the user's to fix and must
+                // reach them as a sentence, not as an exception out of a tool call.
+                Log.Warning(ex, "Could not write the solution filter for the loaded projects");
+                return new BuildOutcome(
+                    null,
+                    $"Could not prepare a build of the loaded projects only: {ex.Message} Nothing was built. "
+                    + "Building one project by name still works, and the user can reload the unloaded projects.");
+            }
+
+            skipped = _unloadedProjects;
         }
 
         if (_buildService.IsRunning)
@@ -1868,7 +1924,46 @@ public sealed partial class CopilotChatPaneViewModel : ToolPaneViewModel
             return new BuildOutcome(null, ex.Message);
         }
 
-        return new BuildOutcome(exitCode, ToolReports.FormatBuildReport(exitCode, configuration, saved, outputLines));
+        return new BuildOutcome(exitCode, ToolReports.FormatBuildReport(exitCode, configuration, saved, outputLines, skipped));
+    }
+
+    /// <summary>
+    /// Whether the user has unloaded the project at <paramref name="projectPath"/> (a path already
+    /// resolved inside the solution directory).
+    /// </summary>
+    private bool IsUnloaded(string projectPath) =>
+        _unloadedProjects.Any(unloaded => IsSameProject(unloaded, projectPath));
+
+    /// <summary>
+    /// Compares an entry from the unloaded list with a project path. The list holds paths relative to
+    /// the solution directory (so a worktree reuses it), while a resolved project path is usually
+    /// absolute; both are reduced to a full path before comparing, and separators and case normalised
+    /// because the two arrive from different places. An entry that is not a usable path at all simply
+    /// matches nothing.
+    /// </summary>
+    private bool IsSameProject(string unloaded, string projectPath)
+    {
+        if (string.IsNullOrWhiteSpace(unloaded) || string.IsNullOrWhiteSpace(projectPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var unloadedFull = Path.GetFullPath(
+                Path.IsPathRooted(unloaded) ? unloaded : Path.Combine(_solutionDirectory!, unloaded));
+
+            return string.Equals(
+                Normalise(unloadedFull), Normalise(Path.GetFullPath(projectPath)), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        // A trailing separator is not part of a project's identity, and the store has written both
+        // forms over the years.
+        static string Normalise(string path) => path.Replace('/', '\\').TrimEnd('\\');
     }
 
     /// <summary>

@@ -589,6 +589,207 @@ public sealed class CopilotChatUltraTests : IDisposable
         _http.FirstRequestBody.ShouldBeEmpty("no model should have been called");
     });
 
+    // --- Building a solution that has projects unloaded in IDE++ ---
+
+    /// <summary>
+    /// A solution with two projects, the second of which does not compile - the shape a MAUI/Android
+    /// project has on a machine where its workload is not installed, which is what unloading is for.
+    /// Real projects in a temp directory and built for real, because the only proof that the filter
+    /// reached BuildService (and the plain solution did not) is that a build the plain solution fails
+    /// here succeeds.
+    /// </summary>
+    private sealed class SolutionWithABrokenProject : IDisposable
+    {
+        public const string BrokenProjectRelativePath = @"Broken\Broken.csproj";
+
+        private const string ProjectTypeGuid = "{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}";
+
+        private readonly (string Name, string Id)[] _projects =
+        [
+            ("App", "{11111111-1111-1111-1111-111111111111}"),
+            ("Broken", "{22222222-2222-2222-2222-222222222222}"),
+        ];
+
+        public SolutionWithABrokenProject()
+        {
+            Root = Path.Combine(Path.GetTempPath(), $"ideplusplus-unloaded-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Root);
+            WriteProject("App", "public class App\r\n{\r\n    public static int Ok => 1;\r\n}\r\n");
+            WriteProject("Broken", "public class Broken\r\n{\r\n    public int Value => ;\r\n}\r\n");
+            SolutionPath = Path.Combine(Root, "App.sln");
+            File.WriteAllText(SolutionPath, SolutionText());
+        }
+
+        public string Root { get; }
+
+        public string SolutionPath { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                foreach (var path in Directory.EnumerateFileSystemEntries(Root, "*", SearchOption.AllDirectories))
+                {
+                    File.SetAttributes(path, FileAttributes.Normal);
+                }
+
+                Directory.Delete(Root, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Best effort - a build server still holding obj/ must not fail the test.
+            }
+        }
+
+        private void WriteProject(string name, string code)
+        {
+            var directory = Directory.CreateDirectory(Path.Combine(Root, name)).FullName;
+            File.WriteAllText(Path.Combine(directory, $"{name}.csproj"), $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
+                  </PropertyGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(directory, $"{name}.cs"), code);
+        }
+
+        /// <summary>Visual Studio's own layout, configuration sections included: dotnet build of a
+        /// project listed in the solution but not in the configuration platform map silently skips
+        /// it, which would make the "the plain solution fails" half of these tests prove nothing.</summary>
+        private string SolutionText()
+        {
+            var text = new StringBuilder();
+            text.Append("\r\nMicrosoft Visual Studio Solution File, Format Version 12.00\r\n");
+            text.Append("# Visual Studio Version 17\r\n");
+            text.Append("VisualStudioVersion = 17.0.31903.59\r\n");
+            text.Append("MinimumVisualStudioVersion = 10.0.40219.1\r\n");
+            foreach (var (name, id) in _projects)
+            {
+                text.Append($"Project(\"{ProjectTypeGuid}\") = \"{name}\", \"{name}\\{name}.csproj\", \"{id}\"\r\n");
+                text.Append("EndProject\r\n");
+            }
+
+            text.Append("Global\r\n");
+            text.Append("\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\r\n");
+            foreach (var configuration in new[] { "Debug", "Release" })
+            {
+                text.Append($"\t\t{configuration}|Any CPU = {configuration}|Any CPU\r\n");
+            }
+
+            text.Append("\tEndGlobalSection\r\n");
+            text.Append("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\r\n");
+            foreach (var (_, id) in _projects)
+            {
+                foreach (var configuration in new[] { "Debug", "Release" })
+                {
+                    text.Append($"\t\t{id}.{configuration}|Any CPU.ActiveCfg = {configuration}|Any CPU\r\n");
+                    text.Append($"\t\t{id}.{configuration}|Any CPU.Build.0 = {configuration}|Any CPU\r\n");
+                }
+            }
+
+            text.Append("\tEndGlobalSection\r\n");
+            text.Append("\tGlobalSection(SolutionProperties) = preSolution\r\n");
+            text.Append("\t\tHideSolutionNode = FALSE\r\n");
+            text.Append("\tEndGlobalSection\r\n");
+            text.Append("EndGlobal\r\n");
+            return text.ToString();
+        }
+    }
+
+    [Fact]
+    public void ABuildWithNothingUnloaded_BuildsTheSolutionItself_AndSaysNothingAboutSkipping() => RunOnUiThread(async () =>
+    {
+        using var fixture = new SolutionWithABrokenProject();
+        _http.Script = n => n == 1 ? ToolCall(BuildTools.BuildToolName, new { }) : Text("done");
+        var viewModel = CreateViewModel(workers: 1, fixture.SolutionPath, fixture.Root);
+
+        viewModel.SelectedEffort = ChatEffort.High;
+        viewModel.InputText = "Does it build?";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        // The solution itself, so its broken project fails the build - which is what makes the
+        // filtered build in the next test evidence of anything.
+        var call = viewModel.Messages.OfType<McpToolCallViewModel>().ShouldHaveSingleItem();
+        call.ResultText.ShouldNotBeNull().ShouldContain("Build FAILED");
+        call.ResultText.ShouldNotContain("Skipped");
+        call.ResultText.ShouldContain("Broken");
+    });
+
+    [Fact]
+    public void ABuildWithAProjectUnloaded_GoesThroughTheGeneratedFilter_AndTheReportNamesWhatItSkipped() => RunOnUiThread(async () =>
+    {
+        using var fixture = new SolutionWithABrokenProject();
+        _http.Script = n => n == 1 ? ToolCall(BuildTools.BuildToolName, new { }) : Text("done");
+        var viewModel = CreateViewModel(workers: 1, fixture.SolutionPath, fixture.Root);
+        var unloaded = new[] { SolutionWithABrokenProject.BrokenProjectRelativePath };
+        viewModel.SetUnloadedProjects(unloaded);
+
+        viewModel.SelectedEffort = ChatEffort.High;
+        viewModel.InputText = "Does it build?";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        // Exactly this solution failed the same build one test above, so a pass here can only be a
+        // build of the filter: the .sln still contains Broken.
+        var call = viewModel.Messages.OfType<McpToolCallViewModel>().ShouldHaveSingleItem();
+        call.ResultText.ShouldNotBeNull().ShouldContain("Build succeeded");
+        call.ResultText.ShouldContain("Skipped 1 unloaded project(s): Broken.");
+
+        // And the filter it built is the generated one, listing only the loaded project.
+        var filterPath = SolutionBuildTarget.Resolve(fixture.SolutionPath, unloaded);
+        filterPath.ShouldNotBe(fixture.SolutionPath);
+        File.Exists(filterPath).ShouldBeTrue(filterPath);
+        using var filter = JsonDocument.Parse(File.ReadAllText(filterPath));
+        filter.RootElement.GetProperty("solution").GetProperty("projects")
+            .EnumerateArray()
+            .Select(project => project.GetString()!.Replace('/', '\\'))
+            .ShouldBe([@"App\App.csproj"]);
+    });
+
+    [Fact]
+    public void AskingToBuildAnUnloadedProject_IsRefused_AndNoBuildStarts() => RunOnUiThread(async () =>
+    {
+        using var fixture = new SolutionWithABrokenProject();
+        _http.Script = n => n == 1
+            ? ToolCall(BuildTools.BuildToolName, new { project = "Broken/Broken.csproj" })
+            : Text("done");
+        var viewModel = CreateViewModel(workers: 1, fixture.SolutionPath, fixture.Root);
+
+        // Separators differ from the stored form on purpose: both sides mean the same project.
+        viewModel.SetUnloadedProjects(["Broken/Broken.csproj"]);
+
+        viewModel.InputText = "Build the broken one.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        var call = viewModel.Messages.OfType<McpToolCallViewModel>().ShouldHaveSingleItem();
+        call.IsError.ShouldBeTrue();
+        call.ResultText.ShouldNotBeNull().ShouldContain("Broken is unloaded in IDE++ - ask the user to reload it");
+        // Nothing was built: a build would have left obj/ behind on the loaded project.
+        Directory.Exists(Path.Combine(fixture.Root, "App", "obj")).ShouldBeFalse();
+    });
+
+    [Fact]
+    public void TheBuildReport_AddsOneLineNamingTheSkippedProjects_AndIsOtherwiseUnchanged()
+    {
+        var lines = new List<string> { @"C:\src\App\Bad.cs(3,9): error CS1002: ; expected [C:\src\App\App.csproj]" };
+
+        var plain = ToolReports.FormatBuildReport(1, "Debug", [], lines);
+        var withNull = ToolReports.FormatBuildReport(1, "Debug", [], lines, null);
+        var skipped = new[] { @"src\App.Maui\App.Maui.csproj", @"src\Wasm\Wasm.csproj" };
+        var withSkipped = ToolReports.FormatBuildReport(1, "Debug", [], lines, skipped);
+
+        // No unloaded projects: today's report, byte for byte.
+        withNull.ShouldBe(plain);
+        plain.ShouldNotContain("Skipped");
+
+        withSkipped.ShouldContain("Skipped 2 unloaded project(s): App.Maui, Wasm.");
+        // After the summary, before the diagnostics - not buried under them.
+        withSkipped.IndexOf("Skipped", StringComparison.Ordinal)
+            .ShouldBeLessThan(withSkipped.IndexOf("CS1002", StringComparison.Ordinal));
+        withSkipped.ShouldStartWith(plain[..plain.IndexOf('\n')]);
+    }
+
     private CopilotChatPaneViewModel CreateViewModel(
         int workers, string? solutionPath = null, string? solutionDirectory = null, Action<AppSettingsStore>? configure = null)
     {
