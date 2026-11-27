@@ -205,10 +205,33 @@
                 <!-- Foreground must be set explicitly here, not just on the TreeView - the default
                      themed TreeViewItem template hardcodes its own (light-theme) text color via
                      SystemColors, which otherwise wins over the TreeView's inherited Foreground. -->
-                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource WindowForegroundBrush}">
+                <!-- Tooltip is the load error only; WPF shows nothing while it is null. Text is
+                     DisplayName, which appends "(unloaded)" / "(load failed)" to Name. -->
+                <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding LoadError}">
+                    <!-- Italic + muted marks a node that is not really part of the built solution:
+                         an unloaded project (placeholder, no MSBuild evaluation) or one that failed
+                         to evaluate. Both are "dimmed". The style's own setters are the failed case
+                         and the IsUnloaded/LoadError triggers below carve out the exceptions, because
+                         "LoadError is not null" cannot be expressed as a DataTrigger directly - a
+                         trigger on {x:Null} can, so the default is the failure look and a null
+                         LoadError resets it. Trigger order matters: the IsUnloaded trigger comes
+                         last so it still wins for a node that is both unloaded and failed
+                         (DisplayName says "load failed" there - the more actionable of the two). -->
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                            <Setter Property="FontStyle" Value="Italic" />
                             <Style.Triggers>
+                                <DataTrigger Binding="{Binding LoadError}" Value="{x:Null}">
+                                    <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+                                    <Setter Property="FontStyle" Value="Normal" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsUnloaded}" Value="True">
+                                    <Setter Property="Foreground" Value="{DynamicResource MutedForegroundBrush}" />
+                                    <Setter Property="FontStyle" Value="Italic" />
+                                </DataTrigger>
+                                <!-- Startup project still reads as the bold one, unloaded or not -
+                                     Run/Debug skips it with a message rather than silently. -->
                                 <DataTrigger Binding="{Binding IsStartupProject}" Value="True">
                                     <Setter Property="FontWeight" Value="Bold" />
                                 </DataTrigger>
@@ -219,25 +242,46 @@
             </StackPanel>
         </HierarchicalDataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:SolutionExplorerPaneViewModel}">
-            <TreeView ItemsSource="{Binding RootNodes}"
-                      Background="{DynamicResource PanelBackgroundBrush}"
-                      Foreground="{DynamicResource WindowForegroundBrush}"
-                      BorderThickness="0"
-                      VirtualizingPanel.IsVirtualizing="True"
-                      VirtualizingPanel.VirtualizationMode="Recycling"
-                      VirtualizingPanel.ScrollUnit="Pixel"
-                      MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick"
-                      PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown">
-                <!-- Two-way, so the IDE can reveal a node it just created. Expansion is bound too:
-                     WPF only realizes a container once its parents are expanded, so setting
-                     IsSelected on a collapsed branch would otherwise do nothing. -->
-                <TreeView.ItemContainerStyle>
-                    <Style TargetType="TreeViewItem">
-                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
-                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
-                    </Style>
-                </TreeView.ItemContainerStyle>
-            </TreeView>
+            <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
+                <!-- Slim toolbar for the one view-level switch the pane has. Two-way: the view model
+                     owns the value (it comes back from the unloaded-projects store on every solution
+                     load) and persists a change made here. -->
+                <DockPanel DockPanel.Dock="Top" Margin="4,3,4,0" LastChildFill="False">
+                    <ToggleButton Content="Show unloaded projects"
+                                  IsChecked="{Binding ShowUnloadedProjects, Mode=TwoWay}"
+                                  FontSize="11"
+                                  Padding="6,1"
+                                  VerticalAlignment="Center"
+                                  ToolTip="Unloaded projects stay in the tree, dimmed, as a placeholder. Unticked, they are hidden from the tree entirely." />
+                </DockPanel>
+                <TreeView ItemsSource="{Binding RootNodes}"
+                          Background="{DynamicResource PanelBackgroundBrush}"
+                          Foreground="{DynamicResource WindowForegroundBrush}"
+                          BorderThickness="0"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          VirtualizingPanel.ScrollUnit="Pixel"
+                          MouseDoubleClick="SolutionExplorerTree_OnMouseDoubleClick"
+                          PreviewMouseRightButtonDown="SolutionExplorerTree_OnPreviewMouseRightButtonDown">
+                    <!-- Two-way, so the IDE can reveal a node it just created. Expansion is bound too:
+                         WPF only realizes a container once its parents are expanded, so setting
+                         IsSelected on a collapsed branch would otherwise do nothing. -->
+                    <TreeView.ItemContainerStyle>
+                        <Style TargetType="TreeViewItem">
+                            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                            <Style.Triggers>
+                                <!-- Collapsed rather than removed, so the "Show unloaded projects"
+                                     toggle is a pure visibility change - no reload, and the nodes'
+                                     own state (selection, expansion) survives being hidden. -->
+                                <DataTrigger Binding="{Binding IsHiddenByFilter}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TreeView.ItemContainerStyle>
+                </TreeView>
+            </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="{x:Type toolPanes:OutputPaneViewModel}">
             <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
