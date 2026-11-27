@@ -70,6 +70,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Reset on every solution load - see RegisterNewFilesForAnalysisAsync.</summary>
     private bool _warnedAboutNewFileAnalysis;
 
+    /// <summary>
+    /// The current solution's unloaded projects, as solution-relative, backslash-separated paths
+    /// ('src\App\App.csproj') compared case-insensitively - the form <see cref="UnloadedProjectsStore"/>
+    /// writes and <c>SolutionProjectInSolution.RelativePath</c> produces. While this is non-empty,
+    /// every solution-wide dotnet call runs against <see cref="BuildTargetPath"/> (a generated .slnf
+    /// listing only the loaded projects) instead of <see cref="CurrentSolutionPath"/>, and
+    /// <see cref="SolutionLoader"/> leaves those projects out of MSBuild evaluation entirely - which is
+    /// what makes a MAUI/Android head whose workloads aren't installed harmless.
+    /// </summary>
+    private IReadOnlySet<string> _unloadedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Mirror of the Solution Explorer's Show Unloaded Projects toggle, so the value can be
+    /// persisted per solution without reading WPF-bound state back out of the pane on every change.</summary>
+    private bool _showUnloadedProjects = true;
+
+    /// <summary>True while this view model is itself setting the pane's ShowUnloadedProjects (on a
+    /// solution load), so the property-changed handler that persists the toggle doesn't rewrite the
+    /// store for a value that came out of it.</summary>
+    private bool _applyingUnloadedPreferences;
+
     /// <summary>Bumped by every LoadSolutionAsync, so one overtaken by a later one (Open Solution,
     /// Open Recent and drag-drop are independent, and loading takes a while) gives up instead of
     /// finishing last and winning.</summary>
@@ -196,6 +216,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
             EditorServices.DiffPreview?.Request(document, null);
             CloseDocument(document);
             return true;
+        };
+
+        // The Solution Explorer's "Show unloaded projects" toggle lives on the pane (it is what hides
+        // the nodes), but the value is persisted per solution - which only this view model knows how
+        // to find. Saving here rather than in the pane keeps the pane free of both the store and the
+        // solution path, the same way every other pane gets told what it needs from up here.
+        SolutionExplorer.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(SolutionExplorerPaneViewModel.ShowUnloadedProjects) || _applyingUnloadedPreferences)
+            {
+                return;
+            }
+
+            _showUnloadedProjects = SolutionExplorer.ShowUnloadedProjects;
+            PersistUnloadedProjects();
         };
 
         currentTheme = _themeService.Current;
@@ -943,6 +978,156 @@ public sealed partial class MainWindowViewModel : ObservableObject
         CurrentSolutionPath is { } current
         && string.Equals(Path.GetFullPath(current), Path.GetFullPath(solutionPath), StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// What Build/Clean/Rebuild, the on-load NuGet restore and the Roslyn workspace load actually run
+    /// against: the solution itself while nothing is unloaded, and otherwise a generated .slnf that
+    /// lists only the loaded projects (see <see cref="SolutionBuildTarget"/>).
+    ///
+    /// <para>Deliberately not <see cref="CurrentSolutionPath"/> for everything: the Build pane's log
+    /// line, <see cref="BuildEventContext"/> and plugin handlers are all still told the real solution
+    /// path, because a plugin asked to act on "the solution" must not be handed a file under
+    /// %LOCALAPPDATA% it has never heard of.</para>
+    ///
+    /// <para>Resolved per call rather than cached, so the filter always matches the unloaded list as
+    /// it is now, and so a solution in a git worktree gets a filter of its own. A filter that cannot
+    /// be written is reported and falls back to the whole solution - a build that ignores the
+    /// unloaded list beats a build that refuses to start.</para>
+    /// </summary>
+    private string? BuildTargetPath =>
+        CurrentSolutionPath is { } solutionPath ? ResolveBuildTarget(solutionPath, _unloadedProjects) : null;
+
+    private string ResolveBuildTarget(string solutionPath, IReadOnlySet<string> unloadedProjects)
+    {
+        if (unloadedProjects.Count == 0)
+        {
+            return solutionPath;
+        }
+
+        try
+        {
+            return SolutionBuildTarget.Resolve(solutionPath, unloadedProjects.ToList());
+        }
+        catch (Exception ex)
+        {
+            // Whatever went wrong (read-only %LOCALAPPDATA%, a locked .slnf, a solution MSBuild can't
+            // parse) must not take the IDE down or stop the build: say so and build the whole solution.
+            Output.AppendLine(
+                OutputPaneViewModel.SolutionChannel,
+                $"Couldn't create a solution filter for the loaded projects ({ex.Message}) - using the whole solution instead.");
+            return solutionPath;
+        }
+    }
+
+    /// <summary>Normalises a solution-relative project path to the one form compared throughout this
+    /// class: backslashes, no leading separator. Null for nothing usable.</summary>
+    private static string? NormalizeRelativePath(string? path) =>
+        string.IsNullOrWhiteSpace(path) ? null : path.Replace('/', '\\').TrimStart('\\');
+
+    /// <summary>
+    /// The store's paths as a set, dropping anything that could never be a project of this solution -
+    /// an absolute, UNC or '..'-escaping entry (a hand-edited or corrupted file is the realistic way
+    /// one appears), so it can never match a node or be written back as if it were a project path.
+    /// </summary>
+    private static HashSet<string> ToUnloadedSet(IReadOnlyList<string> projectPaths)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var projectPath in projectPaths)
+        {
+            if (NormalizeRelativePath(projectPath) is not { Length: > 0 } relativePath
+                || Path.IsPathRooted(relativePath)
+                || relativePath.Split('\\').Any(part => part is ".." or "."))
+            {
+                continue;
+            }
+
+            set.Add(relativePath);
+        }
+
+        return set;
+    }
+
+    /// <summary>A project node's solution-relative path - what <see cref="_unloadedProjects"/> is keyed
+    /// by. Null for anything outside the solution directory, including the solution node itself.</summary>
+    private static string? SolutionRelativePathOf(SolutionTreeNode node, string solutionPath) =>
+        SolutionRelativePathOf(node.FullPath, solutionPath, node.SolutionRelativePath);
+
+    private static string? SolutionRelativePathOf(
+        string? projectPath, string solutionPath, string? knownRelativePath = null)
+    {
+        if (NormalizeRelativePath(knownRelativePath) is { Length: > 0 } fromNode)
+        {
+            return fromNode;
+        }
+
+        if (projectPath is null || Path.GetDirectoryName(solutionPath) is not { } solutionDirectory)
+        {
+            return null;
+        }
+
+        var relativePath = Path.GetRelativePath(solutionDirectory, projectPath);
+        return relativePath.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relativePath)
+            ? null
+            : NormalizeRelativePath(relativePath);
+    }
+
+    private bool IsUnloadedProjectPath(string projectPath) =>
+        CurrentSolutionPath is { } solutionPath
+        && SolutionRelativePathOf(projectPath, solutionPath) is { } relativePath
+        && _unloadedProjects.Contains(relativePath);
+
+    /// <summary>True when at least one project of the current solution is unloaded - backs the
+    /// Solution node's "Reload All Projects" enabled state.</summary>
+    public bool HasUnloadedProjects => _unloadedProjects.Count > 0;
+
+    /// <summary>
+    /// Writes the current unloaded list and the Show Unloaded Projects toggle to the current
+    /// solution's .ideplusplus/unloaded-projects.json. A failure is an Output line, never an
+    /// exception: a read-only folder (or a full disk) costs the user the setting surviving a restart,
+    /// not the unload itself.
+    /// </summary>
+    private void PersistUnloadedProjects() =>
+        PersistUnloadedProjects(Path.GetDirectoryName(CurrentSolutionPath));
+
+    private void PersistUnloadedProjects(string? solutionDirectory)
+    {
+        if (solutionDirectory is null)
+        {
+            return;
+        }
+
+        try
+        {
+            UnloadedProjectsStore.Save(
+                solutionDirectory, _unloadedProjects.ToList(), SolutionExplorer.ShowUnloadedProjects);
+        }
+        catch (Exception ex)
+        {
+            Output.AppendLine(
+                OutputPaneViewModel.SolutionChannel,
+                $"Couldn't save unloaded projects (they stay unloaded for this session only): {ex.Message}");
+        }
+    }
+
+    /// <summary>Sets the pane's toggle without persisting it back - used while loading, where the
+    /// value came from the store in the first place.</summary>
+    private void ApplyShowUnloadedProjects(bool showUnloadedProjects)
+    {
+        if (SolutionExplorer.ShowUnloadedProjects == showUnloadedProjects)
+        {
+            return;
+        }
+
+        _applyingUnloadedPreferences = true;
+        try
+        {
+            SolutionExplorer.ShowUnloadedProjects = showUnloadedProjects;
+        }
+        finally
+        {
+            _applyingUnloadedPreferences = false;
+        }
+    }
+
     partial void OnActiveDocumentChanged(DocumentViewModel? value)
     {
         SaveCommand.NotifyCanExecuteChanged();
@@ -991,7 +1176,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Output.AppendLine(OutputPaneViewModel.SolutionChannel, $"Loading {solutionPath}...");
         try
         {
-            var root = await Task.Run(() => SolutionLoader.Load(solutionPath));
+            // Read before anything is evaluated: the loader needs the unloaded list to leave those
+            // projects out of MSBuild entirely (that is what an incompatible MAUI/Android head
+            // needs), and a corrupt or missing file must still open the solution - the store answers
+            // with the empty state and warns instead of throwing.
+            var solutionDirectory = Path.GetDirectoryName(solutionPath);
+            var unloadedState = solutionDirectory is null
+                ? new UnloadedProjectsState([], true)
+                : UnloadedProjectsStore.Load(solutionDirectory);
+            var unloadedProjects = ToUnloadedSet(unloadedState.Projects);
+
+            var root = await Task.Run(() => SolutionLoader.Load(
+                solutionPath, unloadedProjects.Count == 0 ? null : unloadedProjects));
             if (generation != _solutionLoadGeneration)
             {
                 return;
@@ -1021,12 +1217,30 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // the previous solution is cancelled rather than left searching this one's index, and the
             // C# workspace says it is loading - rather than answering from the previous solution -
             // until its restore-delayed load finishes.
-            _scheduledAutomationService.SetSolutionDirectory(Path.GetDirectoryName(solutionPath));
+            _scheduledAutomationService.SetSolutionDirectory(solutionDirectory);
             _roslynWorkspaceService.SetExpectedSolution(solutionPath);
 
+            // The unloaded list is the one the tree was just built from - adopted only once this load
+            // is the current one, so an overtaken load can't leave its list behind.
+            _unloadedProjects = unloadedProjects;
+            _showUnloadedProjects = unloadedState.ShowUnloaded;
+
+            // Before SetSolution, so the pane's filter is already right when the new nodes arrive -
+            // a hidden unloaded project must not flash into view during a reload (M16).
+            ApplyShowUnloadedProjects(unloadedState.ShowUnloaded);
             SolutionExplorer.SetSolution(root);
             CurrentSolutionPath = solutionPath;
             _solutionRoot = root;
+            OnPropertyChanged(nameof(HasUnloadedProjects));
+
+            // One line each rather than a count: which projects are out of the build is exactly what
+            // a build failure or a missing IntelliSense is about to send someone looking for.
+            foreach (var unloadedProjectPath in _unloadedProjects.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                Output.AppendLine(
+                    OutputPaneViewModel.SolutionChannel,
+                    $"{unloadedProjectPath} is unloaded - it is left out of builds, restores and IntelliSense until it is reloaded.");
+            }
 
             _warnedAboutNewFileAnalysis = false;
             NewItemCommand.NotifyCanExecuteChanged();
@@ -1039,15 +1253,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 RecentSolutions.Add(recentSolutionPath);
             }
 
-            var solutionDirectory = Path.GetDirectoryName(solutionPath);
             CopilotChat.SetSolutionContext(solutionPath, solutionDirectory, () => Configuration);
+
             _ = SourceControl.SetRepositoryDirectoryAsync(solutionDirectory);
 
             // Picks up a project-local .ideplusplus/copilot/mcp-servers.json, if the solution has one.
             _mcpServerManager.SetSolutionDirectory(solutionDirectory);
             _ = _mcpServerManager.ReconnectAllAsync();
+
+            // An unloaded project is not a build target, so it is not a test target, an item target or
+            // a connection-scan target either - the copilot's tools are told the same list the build
+            // target is resolved from, so build_solution and run_tests agree with the toolbar.
+            CopilotChat.SetUnloadedProjects(_unloadedProjects.ToList());
             CopilotChat.SetTestProjects(root.Flatten()
-                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, FullPath: not null })
+                .Where(n => n is { Kind: SolutionTreeNodeKind.Project, IsTestProject: true, IsUnloaded: false, FullPath: not null })
                 .Select(n => n.FullPath!)
                 .ToList());
             var solutionFilePaths = root.Flatten()
@@ -1061,6 +1280,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 .ToList());
 
             var projects = root.Flatten().Where(n => n.Kind == SolutionTreeNodeKind.Project).ToList();
+
+            // An unloaded project has no evaluated MSBuild properties (no TargetFramework, no
+            // RootNamespace) and cannot be built, so it takes no part in the defaults below - neither
+            // as the startup project nor as a connection-scan target.
+            var loadedProjects = projects.Where(n => !n.IsUnloaded).ToList();
 
             if (solutionDirectory is not null)
             {
@@ -1079,7 +1303,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // A solution that has never had a startup project set anywhere (no migrated legacy store
             // either) defaults to the first project, the same way Visual Studio defaults an
             // unconfigured multi-project solution's startup project.
-            if (ActiveConfiguration is { Entries.Count: 0 } && projects.FirstOrDefault() is { FullPath: { } firstProjectPath })
+            if (ActiveConfiguration is { Entries.Count: 0 } && loadedProjects.FirstOrDefault() is { FullPath: { } firstProjectPath })
             {
                 ReplaceActiveConfiguration(ActiveConfiguration with
                 {
@@ -1087,7 +1311,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 });
             }
 
-            foreach (var project in projects)
+            foreach (var project in loadedProjects)
             {
                 project.IsStartupProject = project.FullPath is not null
                     && ActiveConfiguration?.Entries.Any(e => e.ProjectPath == project.FullPath && e.Action != StartupAction.None) == true;
@@ -1108,7 +1332,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _ = DiscoverTasksAsync(solutionDirectory, solutionFilePaths);
 
             // Same posture: a plain config-file scan, nothing built or restored first.
-            _ = DiscoverConnectionsAsync(solutionDirectory, solutionFilePaths, projects);
+            _ = DiscoverConnectionsAsync(solutionDirectory, solutionFilePaths, loadedProjects);
 
             // Default-on: only skipped if the user has explicitly turned it off in Settings.
             var restoreOnLoad = !bool.TryParse(_appSettingsStore.Get(RestoreOnSolutionLoadSettingKey), out var savedRestore) || savedRestore;
@@ -1121,11 +1345,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _roslynLoadPendingFor = solutionPath;
             if (restoreOnLoad)
             {
-                _ = NuGetRestoreThenLoadRoslynWorkspaceAsync(solutionPath);
+                _ = NuGetRestoreThenLoadRoslynWorkspaceAsync(solutionPath, _unloadedProjects);
             }
             else
             {
-                _ = LoadRoslynWorkspaceAsync(solutionPath);
+                _ = LoadRoslynWorkspaceAsync(solutionPath, _unloadedProjects);
             }
         }
         catch (Exception ex)
@@ -1136,11 +1360,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>Fire-and-forget from LoadSolutionAsync - a restore failure or exception here must
     /// never break solution loading, just get logged to Output.</summary>
-    private async Task NuGetRestoreOnLoadAsync(string solutionPath)
+    private async Task NuGetRestoreOnLoadAsync(string solutionPath, IReadOnlySet<string> unloadedProjects)
     {
         try
         {
-            var (success, output) = await _nuGetService.RestoreAsync(solutionPath, line => _dispatcher.Invoke(() => Output.AppendLine(OutputPaneViewModel.NuGetChannel, line)));
+            // The restore goes through the build target for the same reason the build does: restoring
+            // an unloaded project would evaluate exactly the SDK/workload that unloading it avoids,
+            // and would fail the whole restore for a project deliberately left out.
+            var (success, output) = await _nuGetService.RestoreAsync(ResolveBuildTarget(solutionPath, unloadedProjects), line => _dispatcher.Invoke(() => Output.AppendLine(OutputPaneViewModel.NuGetChannel, line)));
             Output.AppendLine(OutputPaneViewModel.NuGetChannel, success ? "NuGet restore completed." : "NuGet restore failed.");
         }
         catch (Exception ex)
@@ -1151,10 +1378,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>Awaits the NuGet restore attempt (regardless of its outcome) before starting the
     /// Roslyn workspace load - see the sequencing comment in LoadSolutionAsync for why.</summary>
-    private async Task NuGetRestoreThenLoadRoslynWorkspaceAsync(string solutionPath)
+    private async Task NuGetRestoreThenLoadRoslynWorkspaceAsync(string solutionPath, IReadOnlySet<string> unloadedProjects)
     {
-        await NuGetRestoreOnLoadAsync(solutionPath);
-        await LoadRoslynWorkspaceAsync(solutionPath);
+        await NuGetRestoreOnLoadAsync(solutionPath, unloadedProjects);
+        await LoadRoslynWorkspaceAsync(solutionPath, unloadedProjects);
     }
 
     /// <summary>Fire-and-forget from LoadSolutionAsync (or chained after the restore attempt) - a
@@ -1164,7 +1391,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// path above. WorkspaceFailed (per-project load problems) is intentionally not surfaced here -
     /// it fires far too often for perfectly normal reasons (an unrestored or non-SDK-style project)
     /// to log every occurrence to Output without drowning out everything else.</summary>
-    private async Task LoadRoslynWorkspaceAsync(string solutionPath)
+    private async Task LoadRoslynWorkspaceAsync(string solutionPath, IReadOnlySet<string> unloadedProjects)
     {
         try
         {
@@ -1175,7 +1402,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 return;
             }
 
-            await _roslynWorkspaceService.LoadSolutionAsync(solutionPath);
+            // The build target, not the solution: MSBuildWorkspace evaluates every project it is
+            // given, so an unloaded project (typically a MAUI/Android head with no workload installed)
+            // would produce a wall of load diagnostics for code the user has explicitly set aside.
+            var buildTargetPath = ResolveBuildTarget(solutionPath, unloadedProjects);
+            try
+            {
+                await _roslynWorkspaceService.LoadSolutionAsync(buildTargetPath);
+            }
+            catch (Exception) when (!string.Equals(buildTargetPath, solutionPath, StringComparison.OrdinalIgnoreCase))
+            {
+                // Not worth losing IntelliSense over: if the workspace can't open the generated
+                // filter, load the whole solution instead and say that is what happened.
+                Output.AppendLine(
+                    OutputPaneViewModel.SolutionChannel,
+                    "The C# workspace couldn't open the filtered solution - loading the full solution instead, so unloaded projects will report load errors.");
+                await _roslynWorkspaceService.LoadSolutionAsync(solutionPath);
+            }
+
             if (IsCurrentSolution(solutionPath))
             {
                 Output.AppendLine(OutputPaneViewModel.SolutionChannel, "Roslyn workspace loaded (IntelliSense/diagnostics ready).");
