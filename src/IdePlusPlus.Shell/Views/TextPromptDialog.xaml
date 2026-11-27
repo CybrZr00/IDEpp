@@ -1,0 +1,38 @@
+<Window x:Class="IdePlusPlus.Shell.Views.TextPromptDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="360"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        TextElement.Foreground="{DynamicResource WindowForegroundBrush}">
+
+    <StackPanel Margin="16">
+        <TextBlock x:Name="PromptLabel"
+                   Text="Name:"
+                   Margin="0,0,0,4"
+                   TextWrapping="Wrap" />
+        <TextBox x:Name="NameBox"
+                 TextChanged="NameBox_OnTextChanged"
+                 KeyDown="NameBox_OnKeyDown" />
+        <!-- Collapsed rather than empty: a blank line reserved for an error reads as a layout bug
+             while the text is still valid. -->
+        <TextBlock x:Name="ValidationText"
+                   Margin="0,4,0,0"
+                   FontSize="11"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource MutedForegroundBrush}"
+                   Visibility="Collapsed" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="OkButton"
+                    Content="OK"
+                    IsDefault="True"
+                    Width="70"
+                    Padding="0,4"
+                    Click="OkButton_OnClick" />
+            <Button Content="Cancel" IsCancel="True" Width="70" Padding="0,4" Margin="8,0,0,0" />
+        </StackPanel>
+    </StackPanel>
+</Window>
