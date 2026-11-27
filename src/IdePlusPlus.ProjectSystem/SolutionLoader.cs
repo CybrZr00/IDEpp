@@ -50,15 +50,36 @@ public static class SolutionLoader
     public static SolutionTreeNode Load(string solutionPath)
     {
         EnsureMSBuildRegistered();
-        return LoadCore(solutionPath);
+        return LoadCore(solutionPath, unloadedRelativePaths: null);
+    }
+
+    /// <summary>
+    /// Loads the solution's project/file tree, treating <paramref name="unloadedRelativePaths"/>
+    /// (solution-relative, see <see cref="UnloadedProjectsStore"/>) as placeholders: those projects get
+    /// a Project node with no children and are <b>never evaluated</b>, so nothing their SDK/workload
+    /// would import is touched - a solution with a MAUI Android project whose workload is missing still
+    /// opens, with that project unloaded.
+    ///
+    /// <para>A project that is loaded but fails to evaluate becomes a <see cref="SolutionTreeNode.LoadError"/>
+    /// node rather than failing the whole load.</para>
+    /// </summary>
+    public static SolutionTreeNode Load(string solutionPath, IReadOnlySet<string>? unloadedRelativePaths = null)
+    {
+        EnsureMSBuildRegistered();
+        return LoadCore(solutionPath, unloadedRelativePaths);
     }
 
     // Isolated in its own method (rather than inlined into Load) so its MSBuild type
     // references are only JIT-resolved once EnsureMSBuildRegistered has already run.
-    private static SolutionTreeNode LoadCore(string solutionPath)
+    private static SolutionTreeNode LoadCore(string solutionPath, IReadOnlySet<string>? unloadedRelativePaths)
     {
         var solutionName = Path.GetFileNameWithoutExtension(solutionPath);
         var root = new SolutionTreeNode(solutionName, solutionPath, SolutionTreeNodeKind.Solution);
+
+        // Normalised here rather than trusting the caller's set: the pane may hand over a plain
+        // HashSet<string> built with the default comparer, and matching is case- and
+        // separator-insensitive by contract either way.
+        var unloaded = UnloadedProjectsStore.CreateSet(unloadedRelativePaths);
 
         // Its own collection rather than ProjectCollection.GlobalProjectCollection. The global one
         // is process-wide mutable state: two loads at once, or a load racing anything else that
@@ -74,16 +95,67 @@ public static class SolutionLoader
                 continue;
             }
 
-            root.Children.Add(LoadProject(
-                projectInSolution.ProjectName, projectInSolution.AbsolutePath, projectCollection));
+            var solutionRelativePath = UnloadedProjectsStore.NormalizeRelativePath(projectInSolution.RelativePath);
+
+            if (unloaded.Contains(solutionRelativePath))
+            {
+                // The whole point: no Project.FromFile, so nothing in the project's SDK or workload is
+                // imported and a project this machine cannot evaluate costs the tree nothing.
+                root.Children.Add(new SolutionTreeNode(
+                    projectInSolution.ProjectName, projectInSolution.AbsolutePath, SolutionTreeNodeKind.Project)
+                {
+                    IsUnloaded = true,
+                    SolutionRelativePath = solutionRelativePath,
+                });
+
+                continue;
+            }
+
+            try
+            {
+                var projectNode = LoadProject(
+                    projectInSolution.ProjectName,
+                    projectInSolution.AbsolutePath,
+                    solutionRelativePath,
+                    projectCollection);
+                root.Children.Add(projectNode);
+            }
+            catch (Exception ex) when (IsProjectLoadFailure(ex))
+            {
+                // One broken .csproj (invalid XML, a missing Import, an SDK this machine does not have)
+                // used to fail the entire solution load. It is now a placeholder that says what is wrong.
+                Serilog.Log.Warning(
+                    ex, "Could not load project {Project} - showing it as failed.", projectInSolution.AbsolutePath);
+
+                root.Children.Add(new SolutionTreeNode(
+                    projectInSolution.ProjectName, projectInSolution.AbsolutePath, SolutionTreeNodeKind.Project)
+                {
+                    LoadError = DescribeLoadError(ex),
+                    SolutionRelativePath = solutionRelativePath,
+                });
+            }
         }
 
         root.SortChildrenRecursively();
         return root;
     }
 
+    private static bool IsProjectLoadFailure(Exception ex) =>
+        ex is Microsoft.Build.Exceptions.InvalidProjectFileException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Xml.XmlException
+            or NotSupportedException
+            or ArgumentException;
+
+    private static string DescribeLoadError(Exception ex) =>
+        string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+
     private static SolutionTreeNode LoadProject(
-        string projectName, string projectPath, Microsoft.Build.Evaluation.ProjectCollection projectCollection)
+        string projectName,
+        string projectPath,
+        string solutionRelativePath,
+        Microsoft.Build.Evaluation.ProjectCollection projectCollection)
     {
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
 
@@ -109,6 +181,7 @@ public static class SolutionLoader
         {
             TargetFramework = windowsTargetFramework,
             IsTestProject = isTestProject,
+            SolutionRelativePath = solutionRelativePath,
             RootNamespace = evaluated.GetPropertyValue("RootNamespace") is { Length: > 0 } rootNamespace
                 ? rootNamespace
                 : projectName,
@@ -119,8 +192,30 @@ public static class SolutionLoader
             "Compile", "None", "Content", "Page", "ApplicationDefinition", "EmbeddedResource",
         };
 
-        foreach (var item in evaluated.Items.Where(i => visibleItemTypes.Contains(i.ItemType)))
+        foreach (var item in evaluated.Items)
         {
+            if (item.ItemType.Equals("Folder", StringComparison.OrdinalIgnoreCase))
+            {
+                // An empty folder only exists in the project because ProjectFolderWriter recorded it as
+                // <Folder Include="Assets\Icons\" />. Its include is a directory, not a file: adding it
+                // as one would create a folder chain plus a File node named "".
+                var folderParts = item.EvaluatedInclude
+                    .Replace('/', Path.DirectorySeparatorChar)
+                    .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+
+                if (folderParts.Length > 0)
+                {
+                    projectNode.GetOrCreateFolder(folderParts, projectDirectory);
+                }
+
+                continue;
+            }
+
+            if (!visibleItemTypes.Contains(item.ItemType))
+            {
+                continue;
+            }
+
             var relativePath = item.EvaluatedInclude.Replace('/', Path.DirectorySeparatorChar);
             var parts = relativePath.Split(Path.DirectorySeparatorChar);
             var fileName = parts[^1];

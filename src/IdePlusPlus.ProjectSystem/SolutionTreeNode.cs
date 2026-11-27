@@ -58,6 +58,43 @@ public sealed partial class SolutionTreeNode(string name, string? fullPath, Solu
     /// once and never re-evaluated.</summary>
     public bool IsTestProject { get; init; }
 
+    /// <summary>
+    /// True when the user unloaded this project (see <see cref="UnloadedProjectsStore"/>). The node
+    /// still exists in the tree so it can be reloaded, but it has no evaluated children and every
+    /// solution-wide build is aimed at a filter that leaves it out.
+    /// </summary>
+    public bool IsUnloaded { get; init; }
+
+    /// <summary>
+    /// Why this project could not be evaluated (a broken .csproj, a missing import, a project whose SDK
+    /// is not installed), or null when it loaded. Such a node is a placeholder with no children - one
+    /// bad project no longer fails the whole solution load.
+    /// </summary>
+    public string? LoadError { get; init; }
+
+    /// <summary>
+    /// The project's path relative to the solution directory ('src\App\App.csproj'), which is how
+    /// <see cref="UnloadedProjectsStore"/> and <see cref="SolutionBuildTarget"/> identify it - relative
+    /// so the same entry works inside an Ultra worktree. Set for Project nodes, null for everything else.
+    /// </summary>
+    public string? SolutionRelativePath { get; init; }
+
+    /// <summary>How the tree renders this node: the plain name, or the name with the unload/failure
+    /// reason appended so the two placeholder kinds are legible without a tooltip.</summary>
+    public string DisplayName => LoadError is not null
+        ? $"{Name} (load failed)"
+        : IsUnloaded
+            ? $"{Name} (unloaded)"
+            : Name;
+
+    /// <summary>
+    /// True when the Solution Explorer's "show unloaded projects" toggle is currently hiding this node.
+    /// Set by the pane's filter pass, never by the loader, and observable so a DataTrigger can collapse
+    /// the container without reloading the tree.
+    /// </summary>
+    [ObservableProperty]
+    private bool isHiddenByFilter;
+
     /// <summary>Finds or creates the folder chain for a relative path's directory parts, returning the leaf folder to add files under.</summary>
     /// <param name="directory">The directory <paramref name="pathParts"/> is relative to - the
     /// project's own directory when called on a Project node. Given one, each folder created here
