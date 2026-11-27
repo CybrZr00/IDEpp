@@ -862,6 +862,54 @@ public sealed class TeamGitWorkspaceTests : IDisposable
         deleted.Success.ShouldBeFalse();
     }
 
+    /// <summary>The card's "Delete this run's branches" once took kept worker branches - work that
+    /// never reached the team branch - down to unreferenced commits in one click. Discarding keeps a
+    /// ref to each, so the work survives gc and can be brought back.</summary>
+    [Fact]
+    public async Task DiscardBranchAsync_DeletesTheBranch_ButKeepsACopyThatBringsItBack()
+    {
+        CommitFile("hello.txt", "base");
+        var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, 1);
+        var worktree = await AddWorkerAsync(1);
+        File.WriteAllText(Path.Combine(worktree, "hello.txt"), "unmerged work");
+        (await _workspace.CommitAllAsync(worktree, "unmerged", "Ultra w1")).Status.ShouldBe(TeamCommitStatus.Committed);
+        var tip = await _workspace.GetHeadAsync(worktree);
+        (await _workspace.RemoveWorktreeAsync(_repositoryDirectory, worktree)).Success.ShouldBeTrue();
+
+        var discarded = await _workspace.DiscardBranchAsync(_repositoryDirectory, branch);
+
+        discarded.Success.ShouldBeTrue(discarded.Output);
+        discarded.Output.ShouldBe(tip);
+        (await _workspace.ResolveRefAsync(_repositoryDirectory, $"refs/heads/{branch}")).ShouldBeNull();
+        (await _workspace.ResolveRefAsync(_repositoryDirectory, TeamGitWorkspace.DiscardedRefPrefix + branch)).ShouldBe(tip);
+        RunGit("branch", branch, TeamGitWorkspace.DiscardedRefPrefix + branch);
+        (await _workspace.ResolveRefAsync(_repositoryDirectory, $"refs/heads/{branch}")).ShouldBe(tip);
+    }
+
+    [Fact]
+    public async Task DiscardBranchAsync_OnABranchThatIsAlreadyGone_Succeeds()
+    {
+        CommitFile("hello.txt", "base");
+
+        var discarded = await _workspace.DiscardBranchAsync(_repositoryDirectory, TeamGitWorkspace.GetWorkerBranchName(RunId, 9));
+
+        discarded.Success.ShouldBeTrue(discarded.Output);
+        discarded.Output.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscardBranchAsync_WhileAWorktreeHasItCheckedOut_FailsAndLeavesTheBranch()
+    {
+        CommitFile("hello.txt", "base");
+        var branch = TeamGitWorkspace.GetWorkerBranchName(RunId, 1);
+        await AddWorkerAsync(1);
+
+        var discarded = await _workspace.DiscardBranchAsync(_repositoryDirectory, branch);
+
+        discarded.Success.ShouldBeFalse();
+        (await _workspace.ResolveRefAsync(_repositoryDirectory, $"refs/heads/{branch}")).ShouldNotBeNull();
+    }
+
     /// <summary>A snapshot of a three-line hello.txt, the team branch at it, and two worker worktrees
     /// - the state an Ultra run is in right after setup.</summary>
     private async Task<(string Snapshot, string W1, string W2)> SetUpTeamAsync()

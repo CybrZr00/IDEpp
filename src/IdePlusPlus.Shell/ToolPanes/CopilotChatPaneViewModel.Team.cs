@@ -642,11 +642,14 @@ public sealed partial class CopilotChatPaneViewModel
                 TotalPromptTokens += result.PromptTokens;
                 TotalCompletionTokens += result.CompletionTokens;
 
-                // Until done, the team's work is merged into the user's branch - there was nobody to
-                // review it file by file. Anything that stops a clean merge (a conflict with commits
-                // made since, local edits that differ, unsaved tabs) falls back to that review.
+                // Until done, a finished run's work is merged into the user's branch - there was nobody
+                // to review it file by file. A run that stopped early, or left work on worker branches,
+                // is not landed: that would put part of a change on the user's branch under "nothing is
+                // left to review". It falls back to review, as does anything that stops a clean merge
+                // (a conflict with commits made since, local edits that differ, unsaved tabs).
                 TeamLandResult? landing = null;
-                if (runUntilDone && result.TeamBranchKept)
+                var notLandedBecause = runUntilDone && result.TeamBranchKept ? WhyNotLandedUnattended(result) : null;
+                if (runUntilDone && result.TeamBranchKept && notLandedBecause is null)
                 {
                     CurrentActivity = "Merging the team's work into your branch...";
                     var unsaved = _editApplicationService.GetUnsavedPaths();
@@ -671,7 +674,11 @@ public sealed partial class CopilotChatPaneViewModel
                     CurrentActivity = "Preparing the team's changes for review...";
                     await ProposeTeamResultAsync(
                         run, result, assistantMessage, turn.Token,
-                        landing is null ? null : $"Couldn't merge into your branch: {landing.Message}. Offered for review instead.");
+                        landing is not null
+                            ? $"Couldn't merge into your branch: {landing.Message}. Offered for review instead."
+                            : notLandedBecause is not null
+                                ? $"Not merged into your branch: {notLandedBecause}. Offered for review instead."
+                                : null);
                 }
 
                 await RefreshUltraStartOptionsAsync();
@@ -858,6 +865,25 @@ public sealed partial class CopilotChatPaneViewModel
         }
     }
 
+    /// <summary>
+    /// Why a run-until-done result must not be merged into the user's branch unattended, or null when
+    /// it may be. Landing is for a run that got all the way through: every worker reported done (the
+    /// team) or the gate and every judge passed (the pipeline), with nothing stranded on a worker
+    /// branch. Anything less goes to review, where the user sees it is partial before it is committed.
+    /// </summary>
+    internal static string? WhyNotLandedUnattended(UltraTeamResult result)
+    {
+        if (result.KeptWorkerBranches.Count is > 0 and var stranded)
+        {
+            return $"{stranded} worker branch{(stranded == 1 ? "" : "es")} still hold{(stranded == 1 ? "s" : "")} work that never "
+                   + "reached the team branch, so merging would land only part of the change";
+        }
+
+        return result.EndReason == UltraTeamEndReason.AllDone
+            ? null
+            : "the run stopped before it finished, so what it merged may be only part of the change";
+    }
+
     /// <param name="landing">Set when the result was merged into the user's branch (or already in
     /// it) instead of offered for review.</param>
     internal static string DescribeTeamResult(
@@ -1033,14 +1059,19 @@ public sealed partial class CopilotChatPaneViewModel
         var failed = new List<string>();
         foreach (var branch in branches)
         {
-            if (!(await _teamGit.DeleteBranchAsync(repositoryRoot, branch)).Success)
+            // Discard, not delete: a kept worker branch holds work that never reached the team branch,
+            // and one click on the card must not be the only copy of it going away for good.
+            var discarded = await _teamGit.DiscardBranchAsync(repositoryRoot, branch);
+            if (!discarded.Success)
             {
+                Log.Warning("Couldn't discard Ultra branch {Branch}: {Output}", branch, discarded.Output);
                 failed.Add(branch);
             }
         }
 
         StatusMessage = failed.Count == 0
-            ? $"Deleted {branches.Count} branch{(branches.Count == 1 ? "" : "es")} from the Ultra run."
+            ? $"Deleted {branches.Count} branch{(branches.Count == 1 ? "" : "es")} from the Ultra run. A copy of each is kept under "
+              + $"{TeamGitWorkspace.DiscardedRefPrefix} - git branch <name> {TeamGitWorkspace.DiscardedRefPrefix}<name> brings one back."
             : $"Could not delete: {string.Join(", ", failed)}.";
         await RefreshUltraStartOptionsAsync();
     }

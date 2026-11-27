@@ -424,6 +424,67 @@ public sealed class CopilotChatUltraTests : IDisposable
         CreateViewModel(workers: 1).IsUltraRunUntilDone.ShouldBeTrue();
     });
 
+    /// <summary>
+    /// The run that put a quarter of a feature onto master: until done, it merged the team branch into
+    /// the checked-out branch and said "nothing is left to review" while three worker branches still
+    /// held the rest. Work stranded on a worker branch now sends the result to review instead.
+    /// </summary>
+    [Fact]
+    public void RunUntilDone_WithWorkLeftOnAWorkerBranch_DoesNotMergeIntoTheCheckedOutBranch_AndOffersItForReview() => RunOnUiThread(async () =>
+    {
+        string[] script =
+        [
+            ToolCall(TeamTools.EditFileToolName, new
+            {
+                file = "Lib/Class1.cs", mode = "replace_text",
+                old_text = "public int Value => 1;", new_text = "public int Value => 2;",
+            }),
+            ToolCall(TeamTools.CommitToolName, new { message = "Value is 2" }),
+            ToolCall(TeamTools.MergeToolName, new { }),
+            ToolCall(TeamTools.EditFileToolName, new
+            {
+                file = "Lib/Class1.cs", mode = "replace_text",
+                old_text = "public int Value => 2;", new_text = "public int Value => 3;",
+            }),
+            ToolCall(TeamTools.CommitToolName, new { message = "Value is 3, never merged" }),
+            ToolCall(TeamTools.DoneToolName, new { summary = "Value returns 3" }),
+            ToolCall(TeamTools.DoneToolName, new { summary = "Value returns 3" }),
+        ];
+        _http.Script = n => n <= script.Length ? script[n - 1] : Text("done");
+        var viewModel = CreateViewModel(workers: 1);
+        viewModel.SelectedEffort = ChatEffort.Ultra;
+        viewModel.IsUltraRunUntilDone = true;
+        var before = TeamRepositoryFixture.Git(_repo.RepositoryRoot, "rev-parse", "HEAD").Trim();
+
+        viewModel.InputText = "Make Class1.Value return 3.";
+        await viewModel.SendCommand.ExecuteAsync(null);
+
+        TeamRepositoryFixture.Git(_repo.RepositoryRoot, "rev-parse", "HEAD").Trim().ShouldBe(before, "nothing may be committed to the user's branch");
+        File.ReadAllText(Path.Combine(_repo.RepositoryRoot, "Lib", "Class1.cs")).ShouldContain("Value => 1;");
+        var report = viewModel.Messages.OfType<ChatMessageViewModel>().Last().Text;
+        report.ShouldContain("Not merged into your branch: 1 worker branch still holds work that never reached the team branch");
+        report.ShouldNotContain("nothing is left to review");
+        viewModel.Messages.OfType<EditProposalViewModel>().ShouldNotBeEmpty();
+    });
+
+    [Fact]
+    public void WhyNotLandedUnattended_OnlyAFinishedRunWithNothingStranded_MayLand()
+    {
+        static UltraTeamResult Result(UltraTeamEndReason reason, params string[] keptWorkerBranches) => new(
+            "run", "repo", "snapshot", "team", TeamBranchKept: true, [], reason, [], [], 0, 0, keptWorkerBranches);
+
+        CopilotChatPaneViewModel.WhyNotLandedUnattended(Result(UltraTeamEndReason.AllDone)).ShouldBeNull();
+        CopilotChatPaneViewModel.WhyNotLandedUnattended(Result(UltraTeamEndReason.AllDone, "b1"))
+            .ShouldNotBeNull().ShouldContain("1 worker branch still holds work");
+        CopilotChatPaneViewModel.WhyNotLandedUnattended(Result(UltraTeamEndReason.NoProgress, "b1", "b2", "b4"))
+            .ShouldNotBeNull().ShouldContain("3 worker branches still hold work");
+        foreach (var reason in Enum.GetValues<UltraTeamEndReason>().Where(r => r != UltraTeamEndReason.AllDone))
+        {
+            CopilotChatPaneViewModel.WhyNotLandedUnattended(Result(reason))
+                .ShouldNotBeNull($"{reason} is not a finished run").ShouldContain("stopped before it finished");
+        }
+    }
+
     [Fact]
     public void ComposeTeamGoal_CarriesTheRecentConversation_CappedAndLabelled()
     {
