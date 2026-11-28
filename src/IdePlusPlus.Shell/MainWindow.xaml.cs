@@ -359,9 +359,8 @@ public partial class MainWindow : Window
 
     // Built and shown in code-behind rather than as a XAML ContextMenu: a ContextMenu's popup isn't
     // part of the visual tree its PlacementTarget lives in, so a RelativeSource binding from inside
-    // it can't reach the window's MainWindowViewModel to invoke SetStartupProject. Handles any node
-    // kind now (previously only Project) so a plugin's context-menu command can appear on
-    // File/Folder/Solution nodes too - the three core items above stay Project-only exactly as before.
+    // it can't reach the window's MainWindowViewModel. Every node kind gets one, so a plugin's
+    // context-menu command can appear on File/Folder/Solution nodes too.
     private void SolutionExplorerTree_OnPreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource is not FrameworkElement { DataContext: SolutionTreeNode node } element)
@@ -372,73 +371,36 @@ public partial class MainWindow : Window
         var viewModel = (MainWindowViewModel)DataContext;
         var contextMenu = new ContextMenu { PlacementTarget = element };
 
-        if (node.Kind == SolutionTreeNodeKind.Solution)
+        switch (node.Kind)
         {
-            var newProjectMenuItem = new MenuItem { Header = "Add New Project..." };
-            newProjectMenuItem.Click += (_, _) => viewModel.NewProjectCommand.Execute(null);
-            contextMenu.Items.Add(newProjectMenuItem);
+            case SolutionTreeNodeKind.Solution:
+                AddSolutionItems(contextMenu, viewModel);
+                break;
+
+            case SolutionTreeNodeKind.Project when viewModel.IsProjectUnloaded(node):
+                // Never evaluated, so nothing that needs MSBuild - adding items, NuGet, publishing,
+                // running it - can work on it. Reloading is the one thing to do.
+                contextMenu.Items.Add(MenuItemFor("Reload Project", () => _ = RunMenuActionAsync(viewModel, () => viewModel.ReloadProjectAsync(node))));
+                break;
+
+            case SolutionTreeNodeKind.Project when node.LoadError is not null:
+                // Failed to evaluate, which is usually why someone unloads a project.
+                contextMenu.Items.Add(MenuItemFor("Unload Project", () => _ = RunMenuActionAsync(viewModel, () => viewModel.UnloadProjectAsync(node))));
+                break;
+
+            case SolutionTreeNodeKind.Project:
+                AddAddSubmenu(contextMenu, viewModel, node);
+                contextMenu.Items.Add(new Separator());
+                AddProjectItems(contextMenu, viewModel, node);
+                break;
+
+            case SolutionTreeNodeKind.Folder or SolutionTreeNodeKind.File:
+                AddAddSubmenu(contextMenu, viewModel, node);
+                break;
         }
 
-        // Project, folder and file nodes all stand for a directory an item can go in - see
-        // MainWindowViewModel.DirectoryForNode. The node is selected first so the command's own
-        // target resolution picks it up, which is also what a right-click implies visually.
-        if (node.Kind is SolutionTreeNodeKind.Project or SolutionTreeNodeKind.Folder or SolutionTreeNodeKind.File)
-        {
-            var newItemMenuItem = new MenuItem { Header = "Add New Item..." };
-            newItemMenuItem.Click += (_, _) =>
-            {
-                node.IsSelected = true;
-                viewModel.NewItemCommand.Execute(null);
-            };
-            contextMenu.Items.Add(newItemMenuItem);
-        }
-
-        if (node.Kind == SolutionTreeNodeKind.Project)
-        {
-            var menuItem = new MenuItem { Header = "Set as Startup Project" };
-            menuItem.Click += (_, _) => viewModel.SetStartupProject(node);
-            contextMenu.Items.Add(menuItem);
-
-            var startupProjectsMenuItem = new MenuItem
-            {
-                Header = "Include in Startup Projects",
-                IsCheckable = true,
-                IsChecked = viewModel.IsStartupProject(node),
-            };
-            startupProjectsMenuItem.Click += (_, _) => viewModel.ToggleStartupProject(node);
-            contextMenu.Items.Add(startupProjectsMenuItem);
-
-            var nuGetMenuItem = new MenuItem { Header = "Manage NuGet Packages..." };
-            nuGetMenuItem.Click += (_, _) => viewModel.OpenNuGetPane(node);
-            contextMenu.Items.Add(nuGetMenuItem);
-
-            var publishMenuItem = new MenuItem { Header = "Publish..." };
-            publishMenuItem.Click += (_, _) => viewModel.OpenPublishDialog(node);
-            contextMenu.Items.Add(publishMenuItem);
-        }
-
-        // Folder nodes carry a real path now (see SolutionTreeNode.GetOrCreateFolder), so plugin
-        // commands are offered on them too rather than being silently skipped for want of one.
-        if (node.FullPath is { } fullPath)
-        {
-            var context = new SolutionExplorerContextMenuContext(fullPath, node.Kind == SolutionTreeNodeKind.Folder);
-            var pluginItems = _pluginHost.SolutionExplorerContextMenuCommands.Where(c => c.CanExecute(context)).ToList();
-
-            if (pluginItems.Count > 0)
-            {
-                if (contextMenu.Items.Count > 0)
-                {
-                    contextMenu.Items.Add(new Separator());
-                }
-
-                foreach (var command in pluginItems)
-                {
-                    var pluginMenuItem = new MenuItem { Header = command.Header };
-                    pluginMenuItem.Click += (_, _) => command.Execute(context);
-                    contextMenu.Items.Add(pluginMenuItem);
-                }
-            }
-        }
+        AddPathItems(contextMenu, viewModel, node);
+        AddPluginItems(contextMenu, node);
 
         if (contextMenu.Items.Count == 0)
         {
@@ -446,6 +408,182 @@ public partial class MainWindow : Window
         }
 
         contextMenu.IsOpen = true;
+    }
+
+    private static MenuItem MenuItemFor(string header, Action onClick, bool isEnabled = true)
+    {
+        var menuItem = new MenuItem { Header = header, IsEnabled = isEnabled };
+        menuItem.Click += (_, _) => onClick();
+        return menuItem;
+    }
+
+    private static void AddSeparatorIfNeeded(ContextMenu contextMenu)
+    {
+        if (contextMenu.Items.Count > 0 && contextMenu.Items[^1] is not Separator)
+        {
+            contextMenu.Items.Add(new Separator());
+        }
+    }
+
+    /// <summary>A click handler cannot await, and an exception escaping an async void would take the
+    /// IDE down - so an action's failure is logged and reported in Output instead.</summary>
+    private static async Task RunMenuActionAsync(MainWindowViewModel viewModel, Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Error(ex, "A Solution Explorer action failed");
+            viewModel.Output.AppendLine($"That didn't work: {ex.Message}");
+        }
+    }
+
+    private void AddSolutionItems(ContextMenu contextMenu, MainWindowViewModel viewModel)
+    {
+        contextMenu.Items.Add(MenuItemFor("Add New Project...", () => viewModel.NewProjectCommand.Execute(null)));
+
+        if (viewModel.HasUnloadedProjects)
+        {
+            contextMenu.Items.Add(new Separator());
+            contextMenu.Items.Add(MenuItemFor("Reload All Projects", () => _ = RunMenuActionAsync(viewModel, viewModel.ReloadAllProjectsAsync)));
+
+            var showUnloaded = new MenuItem
+            {
+                Header = "Show Unloaded Projects",
+                IsCheckable = true,
+                IsChecked = viewModel.SolutionExplorer.ShowUnloadedProjects,
+            };
+            showUnloaded.Click += (_, _) => viewModel.SolutionExplorer.ShowUnloadedProjects = showUnloaded.IsChecked;
+            contextMenu.Items.Add(showUnloaded);
+        }
+    }
+
+    /// <summary>
+    /// Add ▸ New Item, New Folder, then the same item-template shortlist as File &gt; New (Class,
+    /// Interface, Enum, Record, API Controller - whichever are installed). Project, folder and file
+    /// nodes all stand for a directory an item can go in (see MainWindowViewModel.DirectoryForNode);
+    /// the node is selected first so the New Item command's own target resolution picks it up, which
+    /// is also what a right-click implies visually.
+    /// </summary>
+    private void AddAddSubmenu(ContextMenu contextMenu, MainWindowViewModel viewModel, SolutionTreeNode node)
+    {
+        var add = new MenuItem { Header = "Add" };
+
+        add.Items.Add(MenuItemFor("New Item...", () =>
+        {
+            node.IsSelected = true;
+            viewModel.NewItemCommand.Execute(null);
+        }));
+
+        var folderParent = viewModel.NewFolderParentDirectory(node);
+        add.Items.Add(MenuItemFor("New Folder...", () => PromptForNewFolder(viewModel, node, folderParent!), isEnabled: folderParent is not null));
+
+        if (viewModel.NewItemShortcuts.Count > 0)
+        {
+            add.Items.Add(new Separator());
+            foreach (var shortcut in viewModel.NewItemShortcuts)
+            {
+                add.Items.Add(MenuItemFor($"{shortcut.Header}...", () =>
+                {
+                    node.IsSelected = true;
+                    viewModel.NewItemCommand.Execute(shortcut.ShortName);
+                }));
+            }
+        }
+
+        contextMenu.Items.Add(add);
+    }
+
+    private void PromptForNewFolder(MainWindowViewModel viewModel, SolutionTreeNode node, string parentDirectory)
+    {
+        var dialog = new TextPromptDialog(
+            "New Folder",
+            $"Folder name (in {parentDirectory}):",
+            name => MainWindowViewModel.ValidateNewFolderName(parentDirectory, name))
+        {
+            Owner = this,
+        };
+
+        if (dialog.ShowDialog() == true && dialog.Result is { } name)
+        {
+            viewModel.AddNewFolder(node, name);
+        }
+    }
+
+    private static void AddProjectItems(ContextMenu contextMenu, MainWindowViewModel viewModel, SolutionTreeNode node)
+    {
+        contextMenu.Items.Add(MenuItemFor("Set as Startup Project", () => viewModel.SetStartupProject(node)));
+
+        var startupProjectsMenuItem = new MenuItem
+        {
+            Header = "Include in Startup Projects",
+            IsCheckable = true,
+            IsChecked = viewModel.IsStartupProject(node),
+        };
+        startupProjectsMenuItem.Click += (_, _) => viewModel.ToggleStartupProject(node);
+        contextMenu.Items.Add(startupProjectsMenuItem);
+
+        contextMenu.Items.Add(MenuItemFor("Manage NuGet Packages...", () => viewModel.OpenNuGetPane(node)));
+        contextMenu.Items.Add(MenuItemFor("Publish...", () => viewModel.OpenPublishDialog(node)));
+        contextMenu.Items.Add(new Separator());
+        contextMenu.Items.Add(MenuItemFor("Unload Project", () => _ = RunMenuActionAsync(viewModel, () => viewModel.UnloadProjectAsync(node))));
+    }
+
+    /// <summary>Copy Full Path and Open in File Explorer, for every node with a path. A project or the
+    /// solution opens its folder, as Visual Studio does; a file is shown selected in its folder.</summary>
+    private static void AddPathItems(ContextMenu contextMenu, MainWindowViewModel viewModel, SolutionTreeNode node)
+    {
+        if (node.FullPath is not { } fullPath)
+        {
+            return;
+        }
+
+        AddSeparatorIfNeeded(contextMenu);
+        contextMenu.Items.Add(MenuItemFor("Copy Full Path", () =>
+        {
+            if (!ShellIntegration.TryCopyToClipboard(fullPath))
+            {
+                viewModel.Output.AppendLine("Couldn't copy the path - another program is holding the clipboard. Try again.");
+            }
+        }));
+
+        var revealPath = node.Kind is SolutionTreeNodeKind.Solution or SolutionTreeNodeKind.Project
+            ? Path.GetDirectoryName(fullPath) ?? fullPath
+            : fullPath;
+        contextMenu.Items.Add(MenuItemFor(
+            node.Kind == SolutionTreeNodeKind.File ? "Open Containing Folder" : "Open Folder in File Explorer",
+            () =>
+            {
+                if (!ShellIntegration.TryRevealInExplorer(revealPath))
+                {
+                    viewModel.Output.AppendLine($"Couldn't open {revealPath} in File Explorer - it may have been moved or deleted.");
+                }
+            }));
+    }
+
+    /// <summary>Folder nodes carry a real path (see SolutionTreeNode.GetOrCreateFolder), so plugin
+    /// commands are offered on them too rather than being silently skipped for want of one.</summary>
+    private void AddPluginItems(ContextMenu contextMenu, SolutionTreeNode node)
+    {
+        if (node.FullPath is not { } fullPath)
+        {
+            return;
+        }
+
+        var context = new SolutionExplorerContextMenuContext(fullPath, node.Kind == SolutionTreeNodeKind.Folder);
+        var pluginItems = _pluginHost.SolutionExplorerContextMenuCommands.Where(c => c.CanExecute(context)).ToList();
+        if (pluginItems.Count == 0)
+        {
+            return;
+        }
+
+        AddSeparatorIfNeeded(contextMenu);
+        foreach (var command in pluginItems)
+        {
+            contextMenu.Items.Add(MenuItemFor(command.Header, () => command.Execute(context)));
+        }
     }
 
     /// <summary>

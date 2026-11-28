@@ -670,7 +670,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         foreach (var directory in candidates.OfType<string>())
         {
-            if (FindProjectContaining(directory) is { FullPath: { } projectPath } project &&
+            // An unloaded or failed project was never evaluated: no item template can be run against it.
+            if (FindProjectContaining(directory) is { FullPath: { } projectPath, IsUnloaded: false, LoadError: null } project &&
                 Path.GetDirectoryName(projectPath) is { } projectDirectory)
             {
                 return new NewItemTarget(
@@ -693,6 +694,93 @@ public sealed partial class MainWindowViewModel : ObservableObject
         { Kind: SolutionTreeNodeKind.File, FullPath: { } path } => Path.GetDirectoryName(path),
         _ => null,
     };
+
+    /// <summary>The directory "New Folder" on <paramref name="node"/> creates its folder in, or null when
+    /// the node is not inside a loaded project - an unloaded one is never evaluated, so there is no
+    /// project file it is safe to record the folder in.</summary>
+    public string? NewFolderParentDirectory(SolutionTreeNode node) =>
+        DirectoryForNode(node) is { } directory && FindProjectContaining(directory) is { IsUnloaded: false, LoadError: null }
+            ? directory
+            : null;
+
+    /// <summary>Null when <paramref name="name"/> can be a new folder in <paramref name="parentDirectory"/>,
+    /// otherwise what is wrong - shown under the name box as it is typed.</summary>
+    public static string? ValidateNewFolderName(string parentDirectory, string name)
+    {
+        if (TemplateNameValidator.ValidateFileName(name) is { } error)
+        {
+            return error;
+        }
+
+        if (name is "." or "..")
+        {
+            return "Choose a folder name.";
+        }
+
+        var path = Path.Combine(parentDirectory, name);
+        return Directory.Exists(path) || File.Exists(path) ? $"'{name}' already exists here." : null;
+    }
+
+    /// <summary>
+    /// Creates <paramref name="name"/> under the directory <paramref name="node"/> stands for, records it
+    /// in the owning project as a Folder item (an SDK project's globs match files, so an empty folder
+    /// would otherwise vanish on the next reload), and reveals it in the tree. A project file that
+    /// cannot be updated still leaves the folder created, and says so.
+    /// </summary>
+    public void AddNewFolder(SolutionTreeNode node, string name)
+    {
+        if (NewFolderParentDirectory(node) is not { } parentDirectory
+            || FindProjectContaining(parentDirectory) is not { FullPath: { } projectPath } project
+            || Path.GetDirectoryName(projectPath) is not { } projectDirectory)
+        {
+            Output.AppendLine("A new folder has to go inside a loaded project.");
+            return;
+        }
+
+        if (ValidateNewFolderName(parentDirectory, name) is { } problem)
+        {
+            Output.AppendLine($"Folder not created: {problem}");
+            return;
+        }
+
+        var folderPath = Path.Combine(parentDirectory, name);
+        try
+        {
+            Directory.CreateDirectory(folderPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            Log.Warning(ex, "Couldn't create folder {Folder}", folderPath);
+            Output.AppendLine($"Couldn't create {folderPath}: {ex.Message}");
+            return;
+        }
+
+        var relativePath = Path.GetRelativePath(projectDirectory, folderPath);
+        if (!ProjectFolderWriter.TryAddFolder(projectPath, relativePath))
+        {
+            Output.AppendLine(
+                $"Created {relativePath}, but couldn't record it in {Path.GetFileName(projectPath)} - while it is empty it may not "
+                + "show after the solution is reloaded.");
+        }
+
+        // The whole chain is expanded, not just the leaf: WPF only realizes a container once its parents
+        // are expanded, so selecting a folder under a collapsed one would do nothing visible.
+        if (_solutionRoot is not null)
+        {
+            _solutionRoot.IsExpanded = true;
+        }
+
+        var current = project;
+        var currentDirectory = projectDirectory;
+        foreach (var segment in relativePath.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current.IsExpanded = true;
+            current = current.GetOrCreateFolder([segment], currentDirectory);
+            currentDirectory = Path.Combine(currentDirectory, segment);
+        }
+
+        current.IsSelected = true;
+    }
 
     /// <summary>The project owning a directory - longest matching project directory wins, so a
     /// project nested inside another beats its parent.</summary>
@@ -1079,6 +1167,84 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// Solution node's "Reload All Projects" enabled state.</summary>
     public bool HasUnloadedProjects => _unloadedProjects.Count > 0;
 
+    /// <summary>Whether <paramref name="node"/> is a project the user has unloaded.</summary>
+    public bool IsProjectUnloaded(SolutionTreeNode node) =>
+        node is { Kind: SolutionTreeNodeKind.Project, FullPath: { } path } && (node.IsUnloaded || IsUnloadedProjectPath(path));
+
+    /// <summary>
+    /// Unloads a project: it stays in the tree as a placeholder, is never evaluated by MSBuild, and is
+    /// left out of every solution-wide build, restore and IntelliSense load (through a solution
+    /// filter) - and out of the copilot's and Ultra's builds, which use the same list. The way to
+    /// keep working in a solution whose MAUI Android head this machine cannot build.
+    /// </summary>
+    public Task UnloadProjectAsync(SolutionTreeNode project) =>
+        ChangeUnloadedProjectsAsync(project, unload: true);
+
+    public Task ReloadProjectAsync(SolutionTreeNode project) =>
+        ChangeUnloadedProjectsAsync(project, unload: false);
+
+    public Task ReloadAllProjectsAsync() =>
+        ApplyUnloadedProjectsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase), "Reloading every unloaded project...");
+
+    private Task ChangeUnloadedProjectsAsync(SolutionTreeNode project, bool unload)
+    {
+        if (project.Kind != SolutionTreeNodeKind.Project
+            || CurrentSolutionPath is not { } solutionPath
+            || SolutionRelativePathOf(project, solutionPath) is not { } relativePath)
+        {
+            Output.AppendLine(
+                OutputPaneViewModel.SolutionChannel,
+                $"{project.Name} can't be {(unload ? "unloaded" : "reloaded")}: it is not a project inside the solution's folder.");
+            return Task.CompletedTask;
+        }
+
+        var updated = new HashSet<string>(_unloadedProjects, StringComparer.OrdinalIgnoreCase);
+        if (unload ? !updated.Add(relativePath) : !updated.Remove(relativePath))
+        {
+            return Task.CompletedTask;
+        }
+
+        return ApplyUnloadedProjectsAsync(updated, unload ? $"Unloading {relativePath}..." : $"Reloading {relativePath}...");
+    }
+
+    /// <summary>
+    /// Saves the new unloaded list and reloads the solution with it. Refused while a build runs: the
+    /// build was started against the old list, and a reload swaps the filter and the C# workspace out
+    /// from under it. A save that fails still applies the change, for this session only.
+    /// </summary>
+    private async Task ApplyUnloadedProjectsAsync(HashSet<string> unloadedProjects, string description)
+    {
+        if (CurrentSolutionPath is not { } solutionPath || Path.GetDirectoryName(solutionPath) is not { } solutionDirectory)
+        {
+            return;
+        }
+
+        if (_buildService.IsRunning)
+        {
+            Output.AppendLine(
+                OutputPaneViewModel.SolutionChannel,
+                "A build is running - wait for it to finish before unloading or reloading projects.");
+            return;
+        }
+
+        var state = new UnloadedProjectsState(
+            [.. unloadedProjects.Order(StringComparer.OrdinalIgnoreCase)], SolutionExplorer.ShowUnloadedProjects);
+        try
+        {
+            UnloadedProjectsStore.Save(solutionDirectory, state);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            Log.Warning(ex, "Couldn't save the unloaded projects for {Solution}", solutionPath);
+            Output.AppendLine(
+                OutputPaneViewModel.SolutionChannel,
+                $"Couldn't save unloaded projects (the change lasts for this session only): {ex.Message}");
+        }
+
+        Output.AppendLine(OutputPaneViewModel.SolutionChannel, description);
+        await LoadSolutionCoreAsync(solutionPath, clearOutput: false, unloadedOverride: state);
+    }
+
     /// <summary>
     /// Writes the current unloaded list and the Show Unloaded Projects toggle to the current
     /// solution's .ideplusplus/unloaded-projects.json. A failure is an Output line, never an
@@ -1164,7 +1330,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <param name="clearOutput">False for a reload triggered from inside the IDE - creating a
     /// project streams its own output here, and clearing it would throw away the log of what just
     /// happened before anyone could read it.</param>
-    public async Task LoadSolutionAsync(string solutionPath, bool clearOutput = true)
+    public Task LoadSolutionAsync(string solutionPath, bool clearOutput = true) =>
+        LoadSolutionCoreAsync(solutionPath, clearOutput, unloadedOverride: null);
+
+    /// <param name="unloadedOverride">The unloaded list to load with instead of the one on disk - what
+    /// Unload/Reload Project passes, so the change takes effect even when the store could not be
+    /// written (it then lasts for this session only).</param>
+    private async Task LoadSolutionCoreAsync(string solutionPath, bool clearOutput, UnloadedProjectsState? unloadedOverride)
     {
         var generation = ++_solutionLoadGeneration;
 
@@ -1181,9 +1353,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // needs), and a corrupt or missing file must still open the solution - the store answers
             // with the empty state and warns instead of throwing.
             var solutionDirectory = Path.GetDirectoryName(solutionPath);
-            var unloadedState = solutionDirectory is null
-                ? new UnloadedProjectsState([], true)
-                : UnloadedProjectsStore.Load(solutionDirectory);
+            var unloadedState = unloadedOverride
+                ?? (solutionDirectory is null
+                    ? new UnloadedProjectsState([], true)
+                    : UnloadedProjectsStore.Load(solutionDirectory));
             var unloadedProjects = ToUnloadedSet(unloadedState.Projects);
 
             var root = await Task.Run(() => SolutionLoader.Load(
@@ -1908,6 +2081,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _ => TaskBindingKind.AfterClean,
     };
 
+    // All three go through BuildTargetPath: with projects unloaded that is a solution filter leaving
+    // them out, so a project this machine cannot build no longer fails the whole solution's build.
     [RelayCommand(CanExecute = nameof(HasSolution))]
     private async Task BuildAsync()
     {
@@ -1916,7 +2091,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             () => WithBuildEventsAsync(
                 BuildEventKind.BeforeBuild,
                 BuildEventKind.AfterBuild,
-                () => _buildService.BuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
+                () => _buildService.BuildAsync(BuildTargetPath!, OnBuildOutputLine, configuration: Configuration)));
 
         if (exitCode == 0)
         {
@@ -1933,7 +2108,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             () => WithBuildEventsAsync(
                 BuildEventKind.BeforeClean,
                 BuildEventKind.AfterClean,
-                () => _buildService.CleanAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
+                () => _buildService.CleanAsync(BuildTargetPath!, OnBuildOutputLine, configuration: Configuration)));
 
     /// <summary>Fires the build events, not the clean ones, even though BuildService.RebuildAsync is
     /// a clean followed by a build: the clean is an implementation detail of rebuilding here, and
@@ -1945,7 +2120,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             () => WithBuildEventsAsync(
                 BuildEventKind.BeforeBuild,
                 BuildEventKind.AfterBuild,
-                () => _buildService.RebuildAsync(CurrentSolutionPath!, OnBuildOutputLine, configuration: Configuration)));
+                () => _buildService.RebuildAsync(BuildTargetPath!, OnBuildOutputLine, configuration: Configuration)));
 
     /// <summary>The quick-Run/Stop toolbar button targets the first non-None entry in the active
     /// configuration (Start or StartWithoutDebugging - Run never attaches a debugger regardless of

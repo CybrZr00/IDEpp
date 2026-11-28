@@ -3,6 +3,7 @@ using IdePlusPlus.Copilot.Core;
 using IdePlusPlus.Copilot.Core.Team;
 using IdePlusPlus.Copilot.Core.Team.Pipeline;
 using IdePlusPlus.Copilot.Embeddings;
+using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.SourceControl;
 
 namespace IdePlusPlus.Shell.Team;
@@ -72,6 +73,15 @@ public sealed record UltraTeamOptions(
     public int MaxCycleHistoryChars { get; init; } = 300_000;
 
     public int MaxConcurrentBuilds { get; init; } = 2;
+
+    /// <summary>
+    /// The projects the user has unloaded, relative to the solution directory (the form
+    /// UnloadedProjectsStore keeps). Every build in a worktree - the preflight, each worker's, each
+    /// merge's, the pipeline's gate and the conformity check - goes through a solution filter that
+    /// leaves them out, so a project this machine cannot build (a MAUI Android head without its
+    /// workload) does not fail the whole run. Empty builds the solution itself, as before.
+    /// </summary>
+    public IReadOnlyList<string> UnloadedProjects { get; init; } = [];
 
     /// <summary>A peer that has taken a step within this long is still at its task: its claim cannot be
     /// taken over, even after the claim itself has lapsed. Longer than a build and a test run, so a worker
@@ -749,7 +759,7 @@ public sealed class UltraTeamRun : IUltraRun
             repositoryRoot,
             worktree,
             solutionDirectory,
-            Path.Combine(solutionDirectory, Path.GetFileName(_solutionPath)),
+            SolutionBuildTarget.Resolve(Path.Combine(solutionDirectory, Path.GetFileName(_solutionPath)), _options.UnloadedProjects),
             _testProjectPaths.Select(p => Path.Combine(worktree, Path.GetRelativePath(repositoryRoot, p))).ToList(),
             _teamBranch!,
             author);

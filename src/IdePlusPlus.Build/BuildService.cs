@@ -194,13 +194,16 @@ public sealed class BuildService
         }
     }
 
-    private static async Task<int> RunProcessAsync(
+    /// <param name="fileName">What to run - always dotnet, except in the test that needs a process
+    /// which exits while something it started keeps its output pipes open.</param>
+    internal static async Task<int> RunProcessAsync(
         IReadOnlyList<string> arguments,
         string workingDirectory,
         Action<string> onOutputLine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string fileName = "dotnet")
     {
-        var startInfo = new ProcessStartInfo("dotnet")
+        var startInfo = new ProcessStartInfo(fileName)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -245,7 +248,7 @@ public sealed class BuildService
 
         try
         {
-            await process.WaitForExitAsync(cancellationToken);
+            await WaitForDotnetToExitAsync(process, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -257,7 +260,58 @@ public sealed class BuildService
             throw;
         }
 
+        await DrainOutputAsync(process);
         return process.ExitCode;
+    }
+
+    /// <summary>How long, once dotnet itself has exited, the rest of its output is waited for.</summary>
+    internal static TimeSpan OutputDrainGrace { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Waits for the dotnet process itself, not for its output pipes to close. Process.WaitForExitAsync
+    /// waits for both, and a process the build started (an MSBuild worker node, a build server)
+    /// inherits those pipes and outlives the build. It is in this build's job, which is only closed
+    /// when this method returns, so waiting for the pipes waited forever: a finished build hung the
+    /// Build command, the copilot's build_solution and every Ultra build.
+    /// </summary>
+    private static async Task WaitForDotnetToExitAsync(Process process, CancellationToken cancellationToken)
+    {
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += (_, _) => exited.TrySetResult();
+
+        // Exited may already have fired (or never will, for a process that ended before the handler
+        // was attached), so check after subscribing.
+        if (process.HasExited)
+        {
+            exited.TrySetResult();
+        }
+
+        await exited.Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Lets the readers deliver what dotnet wrote before it exited, then stops reading if something
+    /// it started is still holding the pipes - any output after that is not the build's.
+    /// </summary>
+    private static async Task DrainOutputAsync(Process process)
+    {
+        using var grace = new CancellationTokenSource(OutputDrainGrace);
+        try
+        {
+            await process.WaitForExitAsync(grace.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.CancelOutputRead();
+                process.CancelErrorRead();
+            }
+            catch (InvalidOperationException)
+            {
+                // The readers finished in the meantime - nothing left to stop.
+            }
+        }
     }
 
     private static void KillBestEffort(Process process, ProcessJob? job)

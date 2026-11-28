@@ -106,8 +106,9 @@ public sealed class TempSolutionFixture : IDisposable
         {
             // Same project-type GUID `dotnet new sln` uses for a C# project.
             var projectGuid = ProjectGuid(project.Name);
+            // A plain interpolated string: "{{" is one literal brace, so "{{{projectGuid}}}" is the GUID in braces.
             builder.AppendLine(
-                $"""Project("{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}") = "{project.Name}", "{project.SolutionRelativePath}", "{{{projectGuid}}}" """);
+                $"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"{project.Name}\", \"{project.SolutionRelativePath}\", \"{{{projectGuid}}}\"");
             builder.AppendLine("EndProject");
         }
 
