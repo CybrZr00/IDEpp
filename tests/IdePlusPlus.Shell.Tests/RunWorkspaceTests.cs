@@ -1,3 +1,5 @@
+using System.Text.Json;
+using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.Shell.Team;
 using IdePlusPlus.Shell.Team.Pipeline;
 using IdePlusPlus.SourceControl;
@@ -280,6 +282,51 @@ public sealed class RunWorkspaceTests : IDisposable
         context.TestProjectPaths.ShouldBe([Path.Combine(d1.Path, "Lib.Tests", "Lib.Tests.csproj")]);
         context.TeamBranch.ShouldBe(workspace.TeamBranch);
         context.AuthorName.ShouldBe("IDE++ Ultra d1");
+    }
+
+    /// <summary>
+    /// What Ultra kept failing on: a solution with a project this machine cannot build (a MAUI
+    /// Android head). With it unloaded, every build an agent makes - its own, each merge's, the gate's -
+    /// goes through a filter of that worktree's solution which leaves the project out.
+    /// </summary>
+    [Fact]
+    public async Task WithAProjectUnloaded_EachAgentBuildsAFilterOfItsOwnWorktreesSolution()
+    {
+        Directory.CreateDirectory(Path.Combine(_repo.RepositoryRoot, "Mobile"));
+        File.WriteAllText(Path.Combine(_repo.RepositoryRoot, "Mobile", "Mobile.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(
+            Path.Combine(_repo.RepositoryRoot, "Scratch.slnx"),
+            """<Solution><Project Path="Lib/Lib.csproj" /><Project Path="Mobile/Mobile.csproj" /></Solution>""");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "a project this machine cannot build");
+        var workspace = new RunWorkspace(_repo.TeamGit, Ultra, "unloaded", _repo.RepositoryRoot, SolutionPath, _ => _freeBytes)
+        {
+            UnloadedProjects = [@"Mobile\Mobile.csproj"],
+        };
+        _opened.Add(workspace);
+        await workspace.OpenAsync(null, 0, CancellationToken.None);
+        var b1 = await workspace.AddWorktreeAsync("b1", workspace.Start, CancellationToken.None);
+        var worktreeSolution = Path.Combine(b1.Path, "Scratch.slnx");
+
+        try
+        {
+            var context = workspace.ContextFor(b1, []);
+
+            context.SolutionPath.ShouldEndWith(".slnf");
+            context.SolutionPath.ShouldNotStartWith(b1.Path, Case.Insensitive, "the filter must never be committed by an agent");
+            var filter = File.ReadAllText(context.SolutionPath);
+            filter.ShouldContain(JsonEncodedText.Encode(worktreeSolution).ToString());
+            filter.ShouldContain(@"Lib\\Lib.csproj");
+            filter.ShouldNotContain("Mobile");
+        }
+        finally
+        {
+            var filterDirectory = SolutionBuildTarget.FilterDirectoryFor(worktreeSolution);
+            if (Directory.Exists(filterDirectory))
+            {
+                Directory.Delete(filterDirectory, recursive: true);
+            }
+        }
     }
 
     [Fact]

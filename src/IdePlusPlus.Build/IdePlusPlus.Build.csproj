@@ -4,4 +4,8 @@
     <ProjectReference Include="..\IdePlusPlus.Infrastructure\IdePlusPlus.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="IdePlusPlus.Build.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -236,7 +236,10 @@ public sealed partial class UltraPipelineRun : IUltraRun
         _goal = goal;
         _testProjectPaths = testProjectPaths;
         var workspace = _workspace = new RunWorkspace(
-            _teamGit, _ultraRootDirectory, RunId, repositoryRoot, solutionPath, _options.FreeDiskSpace, SetSetup);
+            _teamGit, _ultraRootDirectory, RunId, repositoryRoot, solutionPath, _options.FreeDiskSpace, SetSetup)
+        {
+            UnloadedProjects = _options.UnloadedProjects,
+        };
 
         // Refused here - before there is anything to clean up - if the starting branch conflicts with the
         // working tree or the disk is short.

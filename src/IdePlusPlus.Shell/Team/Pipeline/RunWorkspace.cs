@@ -1,4 +1,5 @@
 using System.IO;
+using IdePlusPlus.ProjectSystem;
 using IdePlusPlus.SourceControl;
 
 namespace IdePlusPlus.Shell.Team.Pipeline;
@@ -95,6 +96,11 @@ public sealed class RunWorkspace
     public string RepositoryRoot { get; }
 
     public string SolutionPath { get; }
+
+    /// <summary>The user's unloaded projects, relative to the solution directory. Each worktree's
+    /// context builds through a solution filter that leaves them out - see
+    /// <see cref="UltraTeamOptions.UnloadedProjects"/>.</summary>
+    public IReadOnlyList<string> UnloadedProjects { get; init; } = [];
 
     public string TeamBranch { get; }
 
@@ -353,7 +359,7 @@ public sealed class RunWorkspace
             RepositoryRoot,
             worktree.Path,
             solutionDirectory,
-            Path.Combine(solutionDirectory, Path.GetFileName(SolutionPath)),
+            SolutionBuildTarget.Resolve(Path.Combine(solutionDirectory, Path.GetFileName(SolutionPath)), UnloadedProjects),
             [.. testProjectPaths.Select(p => Path.Combine(worktree.Path, Path.GetRelativePath(RepositoryRoot, p)))],
             TeamBranch,
             worktree.Author);

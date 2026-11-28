@@ -513,6 +513,42 @@ public sealed partial class TeamGitWorkspace
         string repoRoot, string branchName, CancellationToken cancellationToken = default) =>
         RunAsync(repoRoot, ["branch", "-D", branchName], cancellationToken);
 
+    /// <summary>Where <see cref="DiscardBranchAsync"/> keeps a copy of each branch it deletes. Outside
+    /// refs/heads, so the branch list and the Ultra start picker no longer show it, but still a ref, so
+    /// git gc never collects the commits.</summary>
+    public const string DiscardedRefPrefix = "refs/ideplusplus/discarded/";
+
+    /// <summary>
+    /// Deletes <paramref name="branchName"/> after recording where it pointed under
+    /// <see cref="DiscardedRefPrefix"/>, so the user can still get it back. A plain
+    /// <c>branch -D</c> leaves the commits with nothing pointing at them, and a worker branch holding
+    /// work that never reached the team branch then exists only until the next gc. Refuses to
+    /// delete when the copy cannot be made. A branch that is already gone counts as discarded.
+    /// On success Output is the commit the branch pointed at, or empty when it was already gone.
+    /// </summary>
+    public async Task<GitCommandResult> DiscardBranchAsync(
+        string repoRoot, string branchName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(branchName);
+
+        if (await ResolveRefAsync(repoRoot, $"refs/heads/{branchName}", cancellationToken) is not { } sha)
+        {
+            return new GitCommandResult(true, "");
+        }
+
+        var archive = await RunAsync(
+            repoRoot,
+            ["update-ref", "-m", "IDE++: discarded Ultra run branch", DiscardedRefPrefix + branchName, sha],
+            cancellationToken);
+        if (!archive.Success)
+        {
+            return new GitCommandResult(false, $"not deleted - could not keep a copy of it first: {archive.Output}");
+        }
+
+        var delete = await DeleteBranchAsync(repoRoot, branchName, cancellationToken);
+        return delete.Success ? new GitCommandResult(true, sha) : delete;
+    }
+
     private static async Task<IReadOnlyList<string>> GetConflictedPathsAsync(
         string worktreeDirectory, CancellationToken cancellationToken)
     {

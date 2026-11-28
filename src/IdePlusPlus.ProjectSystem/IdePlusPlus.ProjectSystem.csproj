@@ -4,6 +4,10 @@
     <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
+    <!-- UnloadedProjectsStore and ProjectFolderWriter/Domain warnings: a corrupt unloaded-projects.json
+         or an unwritable .csproj must be logged from here, not silently swallowed, and the version is
+         already centrally pinned. -->
+    <PackageReference Include="Serilog" />
   </ItemGroup>
 
 </Project>

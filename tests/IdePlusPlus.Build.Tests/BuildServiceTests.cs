@@ -91,6 +91,37 @@ public sealed class BuildServiceTests : IDisposable
         await first;
     }
 
+    /// <summary>
+    /// A build that finished but never returned: dotnet had exited, and a process it started (an
+    /// MSBuild worker node) still held the redirected output pipes. Waiting for those to close waited
+    /// forever - it hung the copilot's build_solution on a solution with a compile error. cmd's
+    /// `start /b` reproduces it without depending on when MSBuild happens to start a node: cmd exits
+    /// at once, and the ping it started inherits the pipes and keeps them for half a minute.
+    /// </summary>
+    [Fact]
+    public async Task AProcessThatExits_WhileSomethingItStartedHoldsItsOutput_StillReturnsPromptly()
+    {
+        var lines = new List<string>();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var exitCode = await BuildService.RunProcessAsync(
+            // No quotes inside: ArgumentList would escape them as \", and cmd's parsing of that is not
+            // something the test should depend on.
+            ["/c", "start /b ping -n 30 127.0.0.1 >NUL & echo parent done & exit /b 3"],
+            _directory,
+            line => { lock (lines) { lines.Add(line); } },
+            CancellationToken.None,
+            fileName: "cmd.exe");
+
+        stopwatch.Stop();
+        exitCode.ShouldBe(3);
+        stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(20), "it waited for the child's pipe instead of for the process");
+        lock (lines)
+        {
+            lines.ShouldContain(line => line.Contains("parent done"), "output written before the exit must still be delivered");
+        }
+    }
+
     [Fact]
     public async Task BuildAsync_WhenCancelled_ThrowsAndReleasesTheGuard()
     {

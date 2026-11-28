@@ -13,8 +13,21 @@ namespace IdePlusPlus.Shell;
 /// </summary>
 internal static class ToolReports
 {
+    /// <summary>
+    /// Builds the report for one solution or project build.
+    ///
+    /// <paramref name="skippedProjects"/> names the projects the build did not cover because the user
+    /// has them unloaded in IDE++ (see SolutionBuildTarget). It is reported as its own line right after
+    /// the summary: a passing build that quietly left a project out would otherwise read as proof that
+    /// the whole solution compiles. Null or empty appends nothing, so a build with nothing unloaded
+    /// reports exactly what it always did.
+    /// </summary>
     public static string FormatBuildReport(
-        int exitCode, string configuration, IReadOnlyList<string> saved, List<string> outputLines)
+        int exitCode,
+        string configuration,
+        IReadOnlyList<string> saved,
+        List<string> outputLines,
+        IReadOnlyList<string>? skippedProjects = null)
     {
         var diagnostics = outputLines
             .Select(BuildDiagnosticParser.TryParse)
@@ -31,6 +44,14 @@ internal static class ToolReports
         if (saved.Count > 0)
         {
             report.Append($" Saved {saved.Count} file(s) with unsaved changes first.");
+        }
+
+        if (skippedProjects is { Count: > 0 })
+        {
+            // Project names, not paths: this is read by a model that has to match the sentence
+            // against the project it was asked to build.
+            var names = string.Join(", ", skippedProjects.Select(p => Path.GetFileNameWithoutExtension(p)));
+            report.Append($"\nSkipped {skippedProjects.Count} unloaded project(s): {names}.");
         }
 
         // Errors first and in full; warnings only fill whatever room is left, since a build that
